@@ -1,10 +1,10 @@
 # ============================================================
 # Nova Platform .zshrc v3.1 (Performance Optimized)
-# Source of Truth: ~/fleet/dotfiles/zsh/.zshrc
+# Source of Truth: ~/nova/dotfiles/zsh/.zshrc
 # ============================================================
 
 # ---------- Fast Exit für non-interactive Shells ----------
-# Beschleunigt ssh <host> <cmd>, rsync, fleetctl doctor/status.
+# Beschleunigt ssh <host> <cmd>, rsync, cluster_status.sh.
 [[ $- != *i* ]] && return
 
 # ---------- Powerlevel10k Instant Prompt ----------
@@ -94,8 +94,7 @@ load_if_exists /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme
 
 # ---------- Aliases ----------
 alias python='python3'
-alias nf='~/fleet/scripts/fleetctl'  # nova fleet
-alias fl='cd ~/fleet'
+alias nv='cd ~/nova'
 alias nd='ssh nova-dev'
 alias nu='ssh nova-uat'
 alias np='ssh nova-prod'
@@ -106,7 +105,6 @@ alias gc='git commit -m'
 alias gp='git push'
 alias ll='ls -lah'
 alias la='ls -la'
-alias fl='cd ~/fleet'
 alias cls='clear'
 
 # ---------- Prompt Zusatzinfo ----------

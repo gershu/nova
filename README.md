@@ -55,7 +55,7 @@ Remote Login (SSH) aktiv, im LAN erreichbar.
 
 # 2) Per SSH zum neuen Node:
 ssh novaadm@new-mac.local
-git clone git@github.com:<user>/nova.git ~/nova
+git clone git@github.com:gershu/nova.git ~/nova
 ~/nova/scripts/node_set_name.sh UAT
 ~/nova/scripts/node_bootstrap.sh
 ```
