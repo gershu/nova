@@ -1,0 +1,7 @@
+# nova Worker Hostliste
+# Verwendet von cluster_status.sh.
+# Ein Hostname pro Zeile. Kommentare mit '#'.
+# nova-dev gehört NICHT in diese Liste — es ist die Control Plane.
+
+nova-uat
+nova-prod
