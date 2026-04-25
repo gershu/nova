@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-REPO_DIR="$HOME/nova"
+REPO_DIR="${NOVA_REPO_DIR:-$HOME/nova}"
 
 if [[ ! -d "${REPO_DIR}/.git" ]]; then
   echo "Fehler: ${REPO_DIR} ist kein Git-Repo. Erst node_bootstrap.sh ausführen." >&2
