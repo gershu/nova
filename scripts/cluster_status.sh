@@ -25,15 +25,22 @@ while IFS= read -r host; do
   # Kommentare und Leerzeilen überspringen
   [[ -z "${host}" || "${host}" =~ ^# ]] && continue
 
-  # Quick Reachability Check
-  if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "${host}" 'true' >/dev/null 2>&1; then
+  # Quick Reachability Check.
+  # ssh -n redirects stdin from /dev/null. Ohne -n erbt ssh stdin der Loop
+  # (= ${HOSTS_FILE}) und liest die restlichen Zeilen — die naechsten Hosts
+  # gehen verloren, read -r host trifft EOF, Loop endet vorzeitig.
+  if ! ssh -n -o ConnectTimeout=5 -o BatchMode=yes "${host}" 'true' >/dev/null 2>&1; then
     printf '%-12s | %-8s | %-22s | %-12s | %s\n' "${host}" "DOWN" "-" "-" "-"
     continue
   fi
 
-  # Daten parallel im selben SSH-Aufruf holen
-  remote_output="$(ssh -o ConnectTimeout=5 "${host}" '
+  # Daten parallel im selben SSH-Aufruf holen (auch hier -n, gleicher Grund).
+  # brew shellenv vor command -v brew, da non-interactive SSH-Sessions
+  # weder .zprofile noch .zshrc laden und Homebrew sonst nicht im PATH ist.
+  remote_output="$(ssh -n -o ConnectTimeout=5 "${host}" '
     set +e
+    [[ -x /opt/homebrew/bin/brew ]] && eval "$(/opt/homebrew/bin/brew shellenv)"
+    [[ -x /usr/local/bin/brew    ]] && eval "$(/usr/local/bin/brew shellenv)"
     UP=$(uptime | sed -E "s/^.*up *//; s/, *load.*$//; s/, *[0-9]+ users?.*$//")
     if [[ -d "$HOME/nova/.git" ]]; then
       COMMIT=$(git -C "$HOME/nova" log -1 --format="%h %s" 2>/dev/null)
