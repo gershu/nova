@@ -1,0 +1,20 @@
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_ed25519
+  AddKeysToAgent yes
+  
+Host nova-dev
+  HostName nova-dev.local
+  User novaadm
+  IdentityFile ~/.ssh/id_ed25519
+
+Host nova-uat
+  HostName nova-uat.local
+  User novaadm
+  IdentityFile ~/.ssh/id_ed25519
+
+Host nova-prod
+  HostName nova-prod.local
+  User novaadm
+  IdentityFile ~/.ssh/id_ed25519

@@ -1,0 +1,7 @@
+.DS_Store
+*.log
+backups/
+secrets/
+*.pem
+*.key
+~$*
