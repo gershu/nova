@@ -46,21 +46,42 @@ nova/
 
 ### Neuen Node hinzufügen
 
-Voraussetzungen am neuen Mac: macOS installiert, User `novaadm` angelegt,
-Remote Login (SSH) aktiv, im LAN erreichbar.
+**Voraussetzungen am neuen Mac (manuell vorab):**
+
+- macOS installiert, User `novaadm` angelegt
+- Remote Login (SSH) aktiv: System Settings → General → Sharing
+- Hostname auf `nova-<env>` gesetzt:
+  ```bash
+  sudo scutil --set HostName      nova-uat
+  sudo scutil --set LocalHostName nova-uat
+  sudo scutil --set ComputerName  nova-uat
+  sudo killall -HUP mDNSResponder
+  ```
+  (Alternativ über System Settings UI. Wer das überspringt, muss
+  `node_set_name.sh` später manuell auf dem Node nachholen.)
+- Mac im LAN erreichbar (mDNS via `<host>.local`)
+
+**Auf nova-dev als `novaadm`:**
 
 ```bash
-# 1) Auf nova-dev:
-./scripts/provision_node.sh new-mac.local UAT
+~/nova/scripts/provision_node.sh nova-uat UAT
+```
 
-# 2) Per SSH zum neuen Node:
-ssh novaadm@new-mac.local
+Kopiert das SSH-Material (id_ed25519, authorized_keys, ssh/config) auf
+den neuen Node. Beim ersten Connect einmalig das `novaadm`-Passwort
+auf dem Ziel-Mac eingeben.
+
+**Auf dem neuen Node als `novaadm`:**
+
+```bash
+ssh novaadm@nova-uat
 git clone git@github.com:gershu/nova.git ~/nova
-~/nova/scripts/node_set_name.sh UAT
 ~/nova/scripts/node_bootstrap.sh
 ```
 
-Danach ist der Node als `nova-uat` erreichbar.
+`node_bootstrap.sh` installiert Homebrew, überspringt den bereits
+durchgeführten Clone und ruft `node_deploy.sh` auf — am Ende ist der
+Node deploy-fertig.
 
 ### Routine-Deployment
 

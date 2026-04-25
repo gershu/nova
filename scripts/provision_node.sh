@@ -1,16 +1,27 @@
 #!/usr/bin/env bash
-# provision_node.sh — auf nova-dev ausführen.
+# provision_node.sh — auf nova-dev als novaadm ausführen.
 #
-# Kopiert das SSH-Material (id_ed25519, id_ed25519.pub, authorized_keys, config)
-# vom novaadm-Home auf einen neuen Mac. Voraussetzung: novaadm existiert auf
-# dem Ziel-Mac, Remote Login ist aktiv, und der Ziel-Hostname ist im LAN
-# erreichbar (anfangs noch nicht nova-<env>, sondern z.B. der per macOS-Setup
-# vergebene Default-Name).
+# Kopiert SSH-Material (id_ed25519, id_ed25519.pub, authorized_keys, config)
+# vom novaadm-Home auf einen neuen Mac, damit der Node anschließend
+# key-basiert erreichbar ist und vom GitHub-Repo per Deploy Key pullen kann.
+#
+# Voraussetzungen am Ziel-Mac (manuell vorher erledigen):
+#   - macOS frisch aufgesetzt
+#   - User `novaadm` existiert (Standard-Account)
+#   - Remote Login (SSH) aktiv (System Settings → General → Sharing)
+#   - Hostname per `sudo scutil --set {Host,LocalHost,Computer}Name nova-<env>`
+#     bereits auf nova-<env> gesetzt (sonst Workflow umständlich, siehe README)
+#   - Ziel-Mac im LAN erreichbar (mDNS oder DNS)
+#
+# Was dieses Script NICHT macht (kommt im node_bootstrap.sh-Schritt am Node):
+#   - Homebrew installieren
+#   - Repo nach ~/nova klonen
+#   - Dotfiles linken / brew bundle
 #
 # Usage:
 #   ./provision_node.sh <ziel-hostname-oder-ip> <env>
 # Example:
-#   ./provision_node.sh new-mac.local UAT
+#   ./provision_node.sh nova-uat UAT
 
 set -euo pipefail
 
@@ -58,13 +69,17 @@ ssh "${USER_ON_TARGET}@${TARGET}" '
 
 cat <<EOF
 
-==> Provisioning erfolgreich.
-    Nächste Schritte auf dem neuen Node (per SSH einloggen):
+==> Provisioning erfolgreich. SSH-Keys liegen jetzt auf ${TARGET}.
+
+    Nächste Schritte am neuen Node (per SSH einloggen):
 
       ssh ${USER_ON_TARGET}@${TARGET}
-      git clone git@github.com:<user>/nova.git ~/nova
-      ~/nova/scripts/node_set_name.sh ${ENV_NAME}
+      git clone git@github.com:gershu/nova.git ~/nova
       ~/nova/scripts/node_bootstrap.sh
 
-    Danach ist der Node als nova-$(echo "${ENV_NAME}" | tr '[:upper:]' '[:lower:]') erreichbar.
+    node_bootstrap.sh installiert brew, überspringt den Clone (existiert nun)
+    und ruft node_deploy.sh auf — am Ende ist der Node deploy-fertig.
+
+    Falls der Hostname noch NICHT nova-$(echo "${ENV_NAME}" | tr '[:upper:]' '[:lower:]') ist, vorher zusätzlich:
+      ~/nova/scripts/node_set_name.sh ${ENV_NAME}
 EOF

@@ -69,6 +69,10 @@ case "$NOVA_NODE" in
   *)          export NOVA_ROLE="$NOVA_NODE" ;;
 esac
 
+# Optional override: ~/.nova_role kann den hostname-basierten Default
+# ueberschreiben, z.B. fuer Nodes deren Hostname nicht dem nova-<env>-Schema folgt.
+[[ -r "$HOME/.nova_role" ]] && source "$HOME/.nova_role"
+
 # Fallback Prompt falls p10k nicht aktiv ist
 if [[ -z "$POWERLEVEL9K_LEFT_PROMPT_ELEMENTS" ]]; then
   PROMPT='%F{cyan}[%n@${NOVA_ROLE}]%f %1~ %# '

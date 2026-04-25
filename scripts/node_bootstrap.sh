@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-REPO_URL="${NOVA_REPO_URL:-git@github.com:CHANGEME/nova.git}"
+REPO_URL="${NOVA_REPO_URL:-git@github.com:gershu/nova.git}"
 REPO_DIR="$HOME/nova"
 
 echo "==> Schritt 1/3: Homebrew prüfen..."
