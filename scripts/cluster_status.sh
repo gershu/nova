@@ -9,7 +9,7 @@
 
 set -uo pipefail   # -e nicht: ein einzelner Worker-Fehler soll den Rest nicht abbrechen
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HOSTS_FILE="${SCRIPT_DIR}/../config/hosts"
 
 if [[ ! -f "${HOSTS_FILE}" ]]; then
