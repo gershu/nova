@@ -5,3 +5,8 @@ secrets/
 *.pem
 *.key
 ~$*
+
+# Python
+.venv/
+__pycache__/
+*.pyc

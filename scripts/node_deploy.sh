@@ -5,6 +5,9 @@
 #   1. git pull (Repo aktualisieren)
 #   2. Dotfiles symlinken (zsh/.zshrc, zsh/.p10k.zsh)
 #   3. brew bundle (Software installieren/aktualisieren)
+#   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
+#      pip install -r requirements.txt — sorgt fuer byte-identische
+#      Workload-Laufzeitumgebung auf allen Nodes.
 
 set -euo pipefail
 
@@ -16,7 +19,7 @@ if [[ ! -d "${REPO_DIR}/.git" ]]; then
 fi
 
 # --- 1) Sourcen aktualisieren -----------------------------------------------
-echo "==> [1/3] git pull in ${REPO_DIR}..."
+echo "==> [1/4] git pull in ${REPO_DIR}..."
 git -C "${REPO_DIR}" pull --ff-only
 
 # --- 2) Dotfiles symlinken --------------------------------------------------
@@ -48,12 +51,12 @@ link_file() {
   echo "    LINK:   ${dst} -> ${src}"
 }
 
-echo "==> [2/3] Dotfiles linken..."
+echo "==> [2/4] Dotfiles linken..."
 link_file "${REPO_DIR}/dotfiles/zsh/.zshrc"   "$HOME/.zshrc"
 link_file "${REPO_DIR}/dotfiles/zsh/.p10k.zsh" "$HOME/.p10k.zsh"
 
 # --- 3) brew bundle ---------------------------------------------------------
-echo "==> [3/3] brew bundle ..."
+echo "==> [3/4] brew bundle ..."
 
 # Falls brew nicht im PATH ist (z.B. erste Shell nach Installation), shellenv laden.
 if ! command -v brew >/dev/null 2>&1; then
@@ -70,6 +73,48 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 brew bundle --file="${REPO_DIR}/Brewfile"
+
+# --- 4) Python venv + requirements ------------------------------------------
+echo "==> [4/4] Python-Umgebung..."
+
+VENV_DIR="${REPO_DIR}/.venv"
+REQ_FILE="${REPO_DIR}/requirements.txt"
+PY_VERSION_FILE="${REPO_DIR}/.python-version"
+
+# pyenv-Setup (init laden, falls vorhanden — node_bootstrap installiert pyenv via brew).
+if command -v pyenv >/dev/null 2>&1; then
+  eval "$(pyenv init -)"
+
+  # Pinned Python-Version installieren, falls .python-version vorhanden und
+  # die Version noch nicht installiert ist. Erster Lauf kann mehrere Minuten
+  # dauern (Source-Build).
+  if [[ -f "${PY_VERSION_FILE}" ]]; then
+    PY_VERSION="$(tr -d '[:space:]' < "${PY_VERSION_FILE}")"
+    if [[ -n "${PY_VERSION}" ]] && ! pyenv versions --bare | grep -qx "${PY_VERSION}"; then
+      echo "    pyenv install ${PY_VERSION} (kann mehrere Minuten dauern)..."
+      pyenv install "${PY_VERSION}"
+    fi
+  fi
+else
+  echo "    WARN: pyenv nicht im PATH — verwende System-python3."
+fi
+
+# venv anlegen, falls nicht vorhanden. cd ins Repo, damit pyenv die
+# .python-version aus dem CWD aufgreift und python3 die richtige Version ist.
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "    Lege venv unter ${VENV_DIR} an..."
+  ( cd "${REPO_DIR}" && python3 -m venv "${VENV_DIR}" )
+fi
+
+# pip + requirements (idempotent — bereits installierte Pakete in passender
+# Version werden uebersprungen).
+if [[ -f "${REQ_FILE}" ]]; then
+  echo "    pip install -r requirements.txt (in ${VENV_DIR})..."
+  "${VENV_DIR}/bin/pip" install --quiet --upgrade pip setuptools wheel
+  "${VENV_DIR}/bin/pip" install --quiet -r "${REQ_FILE}"
+else
+  echo "    WARN: ${REQ_FILE} nicht gefunden — ueberspringe pip install."
+fi
 
 echo
 echo "==> Deploy fertig auf $(hostname) (NOVA_ROLE=${NOVA_ROLE:-unset})."

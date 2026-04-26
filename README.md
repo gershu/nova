@@ -29,14 +29,20 @@ Job Development & Execution Plattform für einen macOS-Cluster.
 nova/
 ├── README.md
 ├── Brewfile                    # identisch fuer alle Environments
+├── requirements.txt            # Python-Pakete fuer den Cluster-venv
+├── .python-version             # pyenv-Pin (z.B. 3.11.9)
 ├── dotfiles/zsh/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
 │   └── .p10k.zsh               # Prompt mit NOVA_ROLE-Farben
+├── workloads/                  # Job-Code (siehe Konvention unten)
+│   └── hello_world/
+│       ├── run.sh              # Entry-Point Wrapper (aktiviert venv)
+│       └── hello_world.py      # Python-Logik
 ├── scripts/
 │   ├── provision_node.sh       # auf nova-dev: SSH-Material auf neuen Node kopieren
 │   ├── node_set_name.sh        # auf neuem Node: Hostname + NOVA_ROLE setzen
 │   ├── node_bootstrap.sh       # auf neuem Node: brew + Repo-Clone + erstes Deploy
-│   ├── node_deploy.sh          # auf jedem Node: git pull + Dotfiles + brew bundle
+│   ├── node_deploy.sh          # auf jedem Node: git pull + Dotfiles + brew bundle + Python venv
 │   └── cluster_status.sh       # auf nova-dev: SSH-Status-Check ueber UAT/PROD
 └── config/
     └── hosts                   # Hostliste fuer cluster_status.sh
@@ -93,7 +99,9 @@ Auf einem Node lokal oder remote von nova-dev:
 ssh nova-uat '~/nova/scripts/node_deploy.sh'
 ```
 
-Idempotent: `git pull` → Dotfiles (re-)linken → `brew bundle`.
+Idempotent: `git pull` → Dotfiles (re-)linken → `brew bundle` → Python-venv
+synchronisieren (`pyenv install` falls nötig, `~/nova/.venv` anlegen,
+`pip install -r requirements.txt`).
 
 ### Status-Übersicht
 
@@ -104,6 +112,65 @@ Auf nova-dev:
 ```
 
 Zeigt pro Worker: Reachability, Uptime, letzter Commit-SHA, Brewfile-Drift.
+
+## Workloads
+
+### Konvention
+
+Jeder Job liegt unter `workloads/<job_name>/` und besteht aus mindestens:
+
+```
+workloads/<job_name>/
+├── run.sh           # Entry-Point: aktiviert ${REPO_DIR}/.venv, ruft Logik
+└── <job_name>.py    # Python-Logik
+```
+
+`run.sh` ist der einzige unterstützte Aufruf-Pfad. Direkt `python <job>.py`
+zu rufen funktioniert auch, lädt aber den Cluster-venv nicht — Pakete aus
+`requirements.txt` sind dann nur verfügbar, wenn der venv schon im Shell-PATH
+aktiviert ist.
+
+### Python-Laufzeitumgebung
+
+- `requirements.txt` am Repo-Root listet alle Pakete (mit Versionsbereichen).
+- `.python-version` am Repo-Root pinnt die Python-Version für pyenv.
+- `~/nova/.venv` wird von `node_deploy.sh` pro Node lokal aufgebaut/aktualisiert.
+  Der Ordner ist gitignored — er ist kein Repo-Inhalt, sondern abgeleiteter
+  Build-Output.
+- Garantie: nach erfolgreichem `node_deploy.sh` haben alle Nodes byte-identische
+  Python-Version + identische Pakete in identischen Versionen.
+
+### Job ausführen
+
+Manuell auf einem Node lokal:
+
+```bash
+~/nova/workloads/hello_world/run.sh
+```
+
+Oder remote von einem beliebigen Node aus (typischerweise nova-dev):
+
+```bash
+ssh nova-uat  '~/nova/workloads/hello_world/run.sh'
+ssh nova-prod '~/nova/workloads/hello_world/run.sh'
+```
+
+Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein Scheduler,
+keine Lastverteilung, keine Job-Queue. Output landet auf stdout/stderr des
+Aufrufers (kein zentrales Logging im Scope).
+
+### Neuen Workload anlegen
+
+```bash
+mkdir -p ~/Documents/Claude/Projects/nova/workloads/<name>
+# <name>.py + run.sh erstellen (run.sh als Kopie von hello_world/run.sh)
+git add workloads/<name>
+git commit && git push
+# auf den Worker-Nodes (als novaadm): node_deploy.sh fuer git pull
+```
+
+Falls der Job neue Python-Pakete braucht: vorher `requirements.txt` ergänzen.
+`node_deploy.sh` installiert sie beim nächsten Lauf in den Cluster-venv.
 
 ## Security
 
