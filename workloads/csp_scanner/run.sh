@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# run.sh — Entry-Point fuer den csp_scanner-Workload.
+#
+# Aufruf:
+#   ~/nova/workloads/csp_scanner/run.sh
+#   ssh nova-prod '~/nova/workloads/csp_scanner/run.sh'
+#
+# Optional Args werden nach python -m src.main durchgereicht (zusaetzlich
+# zu den festverdrahteten --watchlist und --settings):
+#   ~/nova/workloads/csp_scanner/run.sh --extra-flag wert
+
+set -euo pipefail
+
+REPO_DIR="${NOVA_REPO_DIR:-$HOME/nova}"
+VENV_DIR="${REPO_DIR}/.venv"
+JOB_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUTPUT_DIR="${HOME}/nova_output/csp_scanner"
+
+# venv-Pruefung
+if [[ ! -d "${VENV_DIR}" ]]; then
+  echo "Fehler: venv ${VENV_DIR} nicht gefunden — erst node_deploy.sh ausfuehren." >&2
+  exit 1
+fi
+
+# Output-Verzeichnis pro Node anlegen (idempotent)
+mkdir -p "${OUTPUT_DIR}"
+
+# output/ im Workload-Dir auf das Per-Node-Output-Verzeichnis symlinken.
+# csp_scanner schreibt relativ nach output/, wir biegen das auf ~/nova_output/csp_scanner/ um.
+LINK="${JOB_DIR}/output"
+if [[ -L "${LINK}" ]]; then
+  # Existierender Symlink — pruefen ob Ziel korrekt
+  if [[ "$(readlink "${LINK}")" != "${OUTPUT_DIR}" ]]; then
+    rm -f "${LINK}"
+    ln -s "${OUTPUT_DIR}" "${LINK}"
+  fi
+elif [[ -e "${LINK}" ]]; then
+  # Echter Ordner / Datei statt Symlink — Backup, dann Symlink anlegen
+  mv "${LINK}" "${LINK}.bak.$(date +%Y%m%d%H%M%S)"
+  ln -s "${OUTPUT_DIR}" "${LINK}"
+else
+  ln -s "${OUTPUT_DIR}" "${LINK}"
+fi
+
+# venv aktivieren
+# shellcheck disable=SC1091
+source "${VENV_DIR}/bin/activate"
+
+# CWD muss Workload-Dir sein, damit `python -m src.main` das src-Package findet
+# und die relativen --watchlist / --settings Pfade aufloest.
+cd "${JOB_DIR}"
+
+exec python -m src.main \
+    --watchlist config/watchlist.yaml \
+    --settings config/settings.yaml \
+    "$@"

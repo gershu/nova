@@ -173,12 +173,22 @@ ssh nova-prod '~/nova/scripts/node_deploy.sh'
 Bis dieser Drei-Schritt-Flow durchlaufen ist, behalten alle Nodes die
 bisherigen gepinnten Versionen.
 
+### Output-Konvention
+
+Jobs schreiben Output in `~/nova_output/<job_name>/` (per Node lokal,
+nicht versioniert). Innerhalb des Workload-Ordners legt `run.sh` einen
+Symlink `output → ~/nova_output/<job_name>/` an, damit Code, der
+relativ nach `output/` schreibt, automatisch im richtigen Ziel landet
+ohne Code-Änderung. Der Symlink ist via `.gitignore` (workloads/*/output)
+ausgeschlossen.
+
 ### Job ausführen
 
 Manuell auf einem Node lokal:
 
 ```bash
 ~/nova/workloads/hello_world/run.sh
+~/nova/workloads/csp_scanner/run.sh
 ```
 
 Oder remote von einem beliebigen Node aus (typischerweise nova-dev):
