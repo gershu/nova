@@ -79,6 +79,7 @@ echo "==> [4/4] Python-Umgebung..."
 
 VENV_DIR="${REPO_DIR}/.venv"
 REQ_FILE="${REPO_DIR}/requirements.txt"
+LOCK_FILE="${REPO_DIR}/requirements-lock.txt"
 PY_VERSION_FILE="${REPO_DIR}/.python-version"
 
 # pyenv-Setup (init laden, falls vorhanden — node_bootstrap installiert pyenv via brew).
@@ -108,12 +109,21 @@ fi
 
 # pip + requirements (idempotent — bereits installierte Pakete in passender
 # Version werden uebersprungen).
-if [[ -f "${REQ_FILE}" ]]; then
-  echo "    pip install -r requirements.txt (in ${VENV_DIR})..."
-  "${VENV_DIR}/bin/pip" install --quiet --upgrade pip setuptools wheel
+#
+# Bevorzuge requirements-lock.txt (deterministisch, == gepinnte Versionen
+# inklusive transitiver Deps). Fallback auf requirements.txt (Versions-Bereiche),
+# falls Lock-File fehlt — z.B. waehrend Initial-Setup oder bewusster Regen.
+"${VENV_DIR}/bin/pip" install --quiet --upgrade pip setuptools wheel
+
+if [[ -f "${LOCK_FILE}" ]]; then
+  echo "    pip install -r requirements-lock.txt (deterministic)..."
+  "${VENV_DIR}/bin/pip" install --quiet -r "${LOCK_FILE}"
+elif [[ -f "${REQ_FILE}" ]]; then
+  echo "    WARN: requirements-lock.txt fehlt — Fallback auf requirements.txt."
+  echo "    pip install -r requirements.txt (Bereiche, NICHT byte-identisch)..."
   "${VENV_DIR}/bin/pip" install --quiet -r "${REQ_FILE}"
 else
-  echo "    WARN: ${REQ_FILE} nicht gefunden — ueberspringe pip install."
+  echo "    WARN: weder requirements-lock.txt noch requirements.txt gefunden."
 fi
 
 echo

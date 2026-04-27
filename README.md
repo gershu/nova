@@ -29,7 +29,8 @@ Job Development & Execution Plattform für einen macOS-Cluster.
 nova/
 ├── README.md
 ├── Brewfile                    # identisch fuer alle Environments
-├── requirements.txt            # Python-Pakete fuer den Cluster-venv
+├── requirements.txt            # Python-Pakete fuer den Cluster-venv (Bereiche)
+├── requirements-lock.txt       # deterministische Pin (== Versionen, transitiv)
 ├── .python-version             # pyenv-Pin (z.B. 3.11.9)
 ├── dotfiles/zsh/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
@@ -132,13 +133,45 @@ aktiviert ist.
 
 ### Python-Laufzeitumgebung
 
-- `requirements.txt` am Repo-Root listet alle Pakete (mit Versionsbereichen).
-- `.python-version` am Repo-Root pinnt die Python-Version für pyenv.
-- `~/nova/.venv` wird von `node_deploy.sh` pro Node lokal aufgebaut/aktualisiert.
-  Der Ordner ist gitignored — er ist kein Repo-Inhalt, sondern abgeleiteter
-  Build-Output.
-- Garantie: nach erfolgreichem `node_deploy.sh` haben alle Nodes byte-identische
-  Python-Version + identische Pakete in identischen Versionen.
+- `requirements.txt` definiert die *Intent* — welche Pakete der Cluster-venv
+  haben soll, mit Versionsbereichen (z.B. `pandas>=2.2,<3`).
+- `requirements-lock.txt` ist das *Ergebnis* — alle Pakete (inkl. transitiver
+  Deps) als exakt gepinnte `==`-Versionen, generiert per `pip freeze`.
+  Dies ist die Quelle der Wahrheit beim Deploy.
+- `.python-version` pinnt die Python-Version für pyenv.
+- `~/nova/.venv` wird von `node_deploy.sh` pro Node lokal aufgebaut. Gitignored,
+  abgeleiteter Build-Output.
+
+`node_deploy.sh` installiert bevorzugt aus der Lock-Datei → byte-identische
+Pakete auf allen Nodes. Fehlt die Lock-Datei, wird auf `requirements.txt`
+zurückgefallen (mit WARN, weil dann nicht-deterministisch).
+
+### Python-Pakete updaten / Lock-Datei regenerieren
+
+Updates sind explizit, nicht implizit beim Deploy. Wenn du eine Version
+hochziehen oder ein neues Paket aufnehmen willst:
+
+```bash
+# 1) Auf nova-dev als novaadm: Bereich in requirements.txt anpassen
+#    (oder neues Paket dazu), dann frisch auflösen + freezen:
+~/nova/.venv/bin/pip install -U -r ~/nova/requirements.txt
+~/nova/.venv/bin/pip freeze --exclude-editable > /tmp/requirements-lock.txt
+
+# 2) Als stefan_pro: Lock-Datei ins Editor-Repo übernehmen + committen
+cp /tmp/requirements-lock.txt ~/Documents/Claude/Projects/nova/requirements-lock.txt
+cd ~/Documents/Claude/Projects/nova
+git diff requirements-lock.txt    # zur Kontrolle
+git add requirements.txt requirements-lock.txt
+git commit -m "Update Python deps lock"
+git push origin main
+
+# 3) Auf nova-uat / nova-prod (als novaadm): rüberziehen
+ssh nova-uat  '~/nova/scripts/node_deploy.sh'
+ssh nova-prod '~/nova/scripts/node_deploy.sh'
+```
+
+Bis dieser Drei-Schritt-Flow durchlaufen ist, behalten alle Nodes die
+bisherigen gepinnten Versionen.
 
 ### Job ausführen
 
@@ -169,8 +202,9 @@ git commit && git push
 # auf den Worker-Nodes (als novaadm): node_deploy.sh fuer git pull
 ```
 
-Falls der Job neue Python-Pakete braucht: vorher `requirements.txt` ergänzen.
-`node_deploy.sh` installiert sie beim nächsten Lauf in den Cluster-venv.
+Falls der Job neue Python-Pakete braucht: erst `requirements.txt` ergänzen,
+dann `requirements-lock.txt` regenerieren (siehe oben). `node_deploy.sh`
+zieht die neue Version beim nächsten Lauf.
 
 ## Security
 
