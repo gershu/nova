@@ -1,0 +1,13 @@
+# nova Workload-Repos
+# Verwendet von node_deploy.sh Schritt 5: jedes Repo wird unter ~/<lokales-verzeichnis>
+# auf jedem Node geklont (falls nicht vorhanden) bzw. fast-forward gepullt.
+#
+# Format: <lokales-verzeichnis> <git-url>
+# - lokales-verzeichnis ist relativ zu $HOME des ausfuehrenden Users (novaadm)
+# - git-url muss per SSH-Deploy-Key (id_ed25519, identisch auf allen Nodes)
+#   erreichbar sein. Selber Key, der bei gershu/nova als Deploy Key haengt,
+#   muss bei jedem hier gelisteten Repo zusaetzlich als Deploy Key eingetragen sein.
+#
+# Kommentare mit '#'. Leerzeilen ignoriert.
+
+csp_scanner git@github.com:gershu/csp_scanner.git

@@ -2,12 +2,14 @@
 # node_deploy.sh — auf jedem Node lokal oder remote ausführbar.
 #
 # Idempotent:
-#   1. git pull (Repo aktualisieren)
+#   1. git pull (nova-Repo aktualisieren)
 #   2. Dotfiles symlinken (zsh/.zshrc, zsh/.p10k.zsh)
 #   3. brew bundle (Software installieren/aktualisieren)
 #   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
-#      pip install -r requirements.txt — sorgt fuer byte-identische
-#      Workload-Laufzeitumgebung auf allen Nodes.
+#      pip install -r requirements-lock.txt
+#   5. Workload-Repos (config/workload_repos.txt): Sibling-Repos klonen/pullen,
+#      damit Workload-Code unabhaengig von nova versioniert bleibt aber auf
+#      jedem Node konsistent ist.
 
 set -euo pipefail
 
@@ -19,7 +21,7 @@ if [[ ! -d "${REPO_DIR}/.git" ]]; then
 fi
 
 # --- 1) Sourcen aktualisieren -----------------------------------------------
-echo "==> [1/4] git pull in ${REPO_DIR}..."
+echo "==> [1/5] git pull in ${REPO_DIR}..."
 git -C "${REPO_DIR}" pull --ff-only
 
 # --- 2) Dotfiles symlinken --------------------------------------------------
@@ -51,12 +53,12 @@ link_file() {
   echo "    LINK:   ${dst} -> ${src}"
 }
 
-echo "==> [2/4] Dotfiles linken..."
+echo "==> [2/5] Dotfiles linken..."
 link_file "${REPO_DIR}/dotfiles/zsh/.zshrc"   "$HOME/.zshrc"
 link_file "${REPO_DIR}/dotfiles/zsh/.p10k.zsh" "$HOME/.p10k.zsh"
 
 # --- 3) brew bundle ---------------------------------------------------------
-echo "==> [3/4] brew bundle ..."
+echo "==> [3/5] brew bundle ..."
 
 # Falls brew nicht im PATH ist (z.B. erste Shell nach Installation), shellenv laden.
 if ! command -v brew >/dev/null 2>&1; then
@@ -75,7 +77,7 @@ fi
 brew bundle --file="${REPO_DIR}/Brewfile"
 
 # --- 4) Python venv + requirements ------------------------------------------
-echo "==> [4/4] Python-Umgebung..."
+echo "==> [4/5] Python-Umgebung..."
 
 VENV_DIR="${REPO_DIR}/.venv"
 REQ_FILE="${REPO_DIR}/requirements.txt"
@@ -124,6 +126,35 @@ elif [[ -f "${REQ_FILE}" ]]; then
   "${VENV_DIR}/bin/pip" install --quiet -r "${REQ_FILE}"
 else
   echo "    WARN: weder requirements-lock.txt noch requirements.txt gefunden."
+fi
+
+# --- 5) Workload-Repos (Sibling-Repos) --------------------------------------
+echo "==> [5/5] Workload-Repos synchronisieren..."
+
+WORKLOAD_REPOS_FILE="${REPO_DIR}/config/workload_repos.txt"
+if [[ -f "${WORKLOAD_REPOS_FILE}" ]]; then
+  while IFS= read -r line; do
+    # Kommentare + Leerzeilen ueberspringen
+    [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
+
+    # Format: <lokales-verzeichnis> <git-url>
+    local_dir="$(echo "${line}" | awk '{print $1}')"
+    git_url="$(echo "${line}" | awk '{print $2}')"
+
+    [[ -z "${local_dir}" || -z "${git_url}" ]] && continue
+
+    target="${HOME}/${local_dir}"
+
+    if [[ -d "${target}/.git" ]]; then
+      echo "    git pull in ${target}..."
+      git -C "${target}" pull --ff-only
+    else
+      echo "    git clone ${git_url} -> ${target}..."
+      git clone "${git_url}" "${target}"
+    fi
+  done < "${WORKLOAD_REPOS_FILE}"
+else
+  echo "    (keine config/workload_repos.txt — uebersprungen)"
 fi
 
 echo

@@ -35,18 +35,21 @@ nova/
 ├── dotfiles/zsh/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
 │   └── .p10k.zsh               # Prompt mit NOVA_ROLE-Farben
-├── workloads/                  # Job-Code (siehe Konvention unten)
-│   └── hello_world/
-│       ├── run.sh              # Entry-Point Wrapper (aktiviert venv)
-│       └── hello_world.py      # Python-Logik
+├── workloads/                  # Job-Wrapper (siehe Konvention unten)
+│   ├── hello_world/            # Embedded-Workload (Code im nova-Repo)
+│   │   ├── run.sh
+│   │   └── hello_world.py
+│   └── csp_scanner/            # Sibling-Repo-Workload: Code lebt anderswo
+│       └── run.sh              # Wrapper, ruft ~/csp_scanner/src/main.py
 ├── scripts/
 │   ├── provision_node.sh       # auf nova-dev: SSH-Material auf neuen Node kopieren
 │   ├── node_set_name.sh        # auf neuem Node: Hostname + NOVA_ROLE setzen
 │   ├── node_bootstrap.sh       # auf neuem Node: brew + Repo-Clone + erstes Deploy
-│   ├── node_deploy.sh          # auf jedem Node: git pull + Dotfiles + brew bundle + Python venv
+│   ├── node_deploy.sh          # auf jedem Node: pull + dotfiles + brew + venv + workload-repos
 │   └── cluster_status.sh       # auf nova-dev: SSH-Status-Check ueber UAT/PROD
 └── config/
-    └── hosts                   # Hostliste fuer cluster_status.sh
+    ├── hosts                   # Hostliste fuer cluster_status.sh
+    └── workload_repos.txt      # externe Repos, die node_deploy.sh nach ~/<dir> klont/pullt
 ```
 
 ## Workflows
@@ -118,18 +121,43 @@ Zeigt pro Worker: Reachability, Uptime, letzter Commit-SHA, Brewfile-Drift.
 
 ### Konvention
 
-Jeder Job liegt unter `workloads/<job_name>/` und besteht aus mindestens:
+Jeder Job liegt unter `workloads/<job_name>/` und hat mindestens ein
+`run.sh` als Entry-Point. Der eigentliche Code kann auf zwei Arten
+verortet sein:
+
+**(a) Embedded** — Code lebt im nova-Repo unter `workloads/<job_name>/`.
+Beispiel `hello_world`:
 
 ```
-workloads/<job_name>/
-├── run.sh           # Entry-Point: aktiviert ${REPO_DIR}/.venv, ruft Logik
-└── <job_name>.py    # Python-Logik
+workloads/hello_world/
+├── run.sh
+└── hello_world.py
 ```
 
-`run.sh` ist der einzige unterstützte Aufruf-Pfad. Direkt `python <job>.py`
-zu rufen funktioniert auch, lädt aber den Cluster-venv nicht — Pakete aus
-`requirements.txt` sind dann nur verfügbar, wenn der venv schon im Shell-PATH
-aktiviert ist.
+Sinnvoll für kleine, nova-spezifische Skripte mit wenigen Files. Code-Änderungen
+werden direkt im nova-Repo committet, sind nach `node_deploy.sh` auf allen Nodes.
+
+**(b) Sibling-Repo** — Code lebt in einem eigenen GitHub-Repo, das auf
+jedem Node unter `~/<repo_name>` lokal geklont wird. nova/workloads/<job_name>/
+enthält nur den `run.sh`-Wrapper, der ins Sibling-Repo `cd`'t. Beispiel
+`csp_scanner`:
+
+```
+workloads/csp_scanner/
+└── run.sh                  # cd ~/csp_scanner && python -m src.main ...
+
+~/csp_scanner/              # eigenes git-Repo, gepullt durch node_deploy.sh
+├── src/
+├── config/
+└── ...
+```
+
+Sinnvoll für Projekte, die eine eigene Identität haben (eigenes README,
+eigene Issue-/PR-History, eigenständige Releases). Sibling-Repos werden
+in `config/workload_repos.txt` registriert und von `node_deploy.sh`
+Schritt 5 mitsynchronisiert.
+
+`run.sh` ist in beiden Varianten der einzige unterstützte Aufruf-Pfad.
 
 ### Python-Laufzeitumgebung
 
@@ -215,6 +243,25 @@ git commit && git push
 Falls der Job neue Python-Pakete braucht: erst `requirements.txt` ergänzen,
 dann `requirements-lock.txt` regenerieren (siehe oben). `node_deploy.sh`
 zieht die neue Version beim nächsten Lauf.
+
+### Sibling-Repo-Workload anlegen
+
+Wenn der Workload ein eigenes Repo bekommen soll (z.B. weil er groß genug
+ist um eigene History zu rechtfertigen):
+
+1. Repo bei GitHub anlegen, z.B. `gershu/<workload_name>`.
+2. Den nova-Deploy-Key (`~/.ssh/id_ed25519.pub` von novaadm) zusätzlich als
+   Deploy Key (read-only) auf diesem Repo registrieren — selber Key wie bei
+   `gershu/nova`. GitHub warnt „This key is already in use" beim Hinzufügen,
+   das ist erwartet und zu bestätigen.
+3. In `config/workload_repos.txt` eine Zeile ergänzen:
+   ```
+   <lokales-verzeichnis> git@github.com:gershu/<workload_name>.git
+   ```
+4. `workloads/<workload_name>/run.sh` anlegen (als Kopie + Anpassung von
+   `csp_scanner/run.sh`), das `~/<lokales-verzeichnis>` als CWD nutzt.
+5. nova committen + pushen, dann `node_deploy.sh` auf jedem Node — Schritt 5
+   klont das neue Sibling-Repo.
 
 ## Security
 
