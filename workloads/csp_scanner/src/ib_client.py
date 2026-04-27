@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import math
+import socket
 from datetime import datetime
 from typing import TYPE_CHECKING, Iterable
 
@@ -105,6 +106,16 @@ class IBClient:
         market_data_type: int = 3,
         request_timeout_s: int = 15,
     ) -> None:
+        # Python 3.12+ raises RuntimeError when get_event_loop() is called without
+        # a running loop (e.g. in the main thread before any async code). eventkit
+        # (pulled in by ib_async) calls get_event_loop() at import time, so we
+        # ensure a loop exists before the import happens.
+        import asyncio
+        try:
+            asyncio.get_event_loop()
+        except RuntimeError:
+            asyncio.set_event_loop(asyncio.new_event_loop())
+
         from ib_async import IB  # local import: keeps module importable without ib_async installed
 
         self.host = host
@@ -121,8 +132,22 @@ class IBClient:
         # bulk option qualification before we start talking to IB.
         install_ib_error_filter()
 
-        log.info("Connecting to IB at %s:%s (clientId=%s)", self.host, self.port, self.client_id)
-        self.ib.connect(self.host, self.port, clientId=self.client_id, timeout=self.timeout)
+        # Hostname zu IP auflösen — IB Gateway akzeptiert Verbindungen nur von
+        # bekannten IPs (Trusted IPs). Hostnamen wie nova-dev.local werden intern
+        # als LAN-IP empfangen; durch explizite Auflösung wird die korrekte IP
+        # übergeben und der Verbindungsaufbau ist deterministisch.
+        try:
+            resolved = socket.gethostbyname(self.host)
+        except socket.gaierror as exc:
+            log.warning("Hostname '%s' konnte nicht aufgelöst werden (%s) — verwende Original.", self.host, exc)
+            resolved = self.host
+
+        if resolved != self.host:
+            log.info("Connecting to IB at %s → %s:%s (clientId=%s)", self.host, resolved, self.port, self.client_id)
+        else:
+            log.info("Connecting to IB at %s:%s (clientId=%s)", self.host, self.port, self.client_id)
+
+        self.ib.connect(resolved, self.port, clientId=self.client_id, timeout=self.timeout)
         # 1=live, 2=frozen, 3=delayed, 4=delayed-frozen
         self.ib.reqMarketDataType(self.market_data_type)
 
