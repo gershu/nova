@@ -210,6 +210,47 @@ relativ nach `output/` schreibt, automatisch im richtigen Ziel landet
 ohne Code-Änderung. Der Symlink ist via `.gitignore` (workloads/*/output)
 ausgeschlossen.
 
+### Konfigurations-Hierarchie (3 Tiers)
+
+Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz
+(später überschreibt früher):
+
+1. **Tier 1 — Repo-Defaults** (in git, identisch über alle Nodes).
+   Z.B. `workloads/csp_scanner/config/settings.yaml` (embedded) oder
+   `~/csp_scanner/config/*.yaml` (sibling-repo). Änderung: git commit
+   + push + `node_deploy.sh`.
+2. **Tier 2 — Per-Node `~/.nova_env`** (gitignored, manuell pro Node).
+   Shell-File mit `export VAR=value`-Zeilen. Wird von jedem `run.sh`
+   automatisch sourced. Die Variablen sind danach als `os.environ.*`
+   in Python sichtbar. Änderung: Datei direkt editieren, sofort
+   wirksam. Kein Deploy nötig.
+3. **Tier 3 — Per-Invocation Args** (Command-Line). `run.sh "$@"`
+   reicht alles weitere an Python durch. Für one-off Overrides.
+
+`run.sh`-Files exposen Tier-2-Hooks für die wichtigsten Werte. Beispiel
+csp_scanner:
+
+```bash
+WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST:-config/watchlist.yaml}"
+SETTINGS_PATH="${CSP_SCANNER_SETTINGS:-config/settings.yaml}"
+```
+
+Setze `CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml` in `~/.nova_env`
+auf nova-prod, und der Default ist überschrieben — ohne dass du die
+`run.sh` oder die Repo-yaml-Files anrührst.
+
+**Setup pro Node (einmalig, als novaadm):**
+
+```bash
+cp ~/nova/nova_env.example ~/.nova_env
+chmod 600 ~/.nova_env
+vi ~/.nova_env     # Werte fuer DIESEN Node ausfuellen
+```
+
+`nova_env.example` im Repo dokumentiert die verfügbaren Variablen.
+Die echte `~/.nova_env` ist niemals versioniert — sie kann pro Node
+divergieren (das ist der Sinn).
+
 ### Job ausführen
 
 Manuell auf einem Node lokal:

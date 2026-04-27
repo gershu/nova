@@ -1,0 +1,34 @@
+# nova_env.example — Vorlage fuer ~/.nova_env (Per-Node-Overrides, Tier 2)
+#
+# Setup pro Node (manuell, einmalig, als novaadm):
+#   cp ~/nova/nova_env.example ~/.nova_env
+#   chmod 600 ~/.nova_env
+#   vi ~/.nova_env       # Werte fuer DIESEN Node anpassen
+#
+# Wird von jedem Workload-run.sh per `source ~/.nova_env` geladen
+# (idempotent — fehlt die Datei, passiert nichts). Variablen sind
+# danach als os.environ.* in den Python-Workloads sichtbar.
+#
+# Diese Vorlage (~/nova/nova_env.example) ist in git, dient als
+# Dokumentation und wird mit deployed.
+# Die echte ~/.nova_env ist gitignored, lebt nur lokal pro Node,
+# kann jederzeit ohne Deploy/Push geaendert werden.
+
+# ============================================================
+# Beispiele — alles auskommentieren bis tatsaechlich gebraucht
+# ============================================================
+
+# ---- IB Gateway / TWS Connection ----
+# export IB_GATEWAY_HOST=127.0.0.1     # auf jedem Node lokal, oder LAN-IP
+# export IB_GATEWAY_PORT=4001          # 4001 = Live Gateway, 7497 = TWS Paper
+# export IB_ACCOUNT_ID=DUxxxxxxx       # Paper-Account beginnt mit DU
+
+# ---- csp_scanner Tier-2 Overrides ----
+# export CSP_SCANNER_WATCHLIST=config/watchlist.yaml      # default: config/watchlist.yaml
+# export CSP_SCANNER_SETTINGS=config/settings.yaml        # default: config/settings.yaml
+# Beispiel: auf nova-prod nur eine konservative Watchlist scannen
+# export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml
+
+# ---- API Keys / Secrets (vorerst nur als Beispiel; Keychain ist sauberer) ----
+# export ALPHA_VANTAGE_API_KEY=xxx
+# export OPENAI_API_KEY=sk-...

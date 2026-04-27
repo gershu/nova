@@ -11,10 +11,19 @@
 
 set -euo pipefail
 
+# Per-Node Overrides laden (Tier 2: ~/.nova_env, gitignored, nicht auto-deployed).
+# Idempotent: macht nichts, falls die Datei fehlt.
+# shellcheck disable=SC1091
+[[ -f "$HOME/.nova_env" ]] && source "$HOME/.nova_env"
+
 REPO_DIR="${NOVA_REPO_DIR:-$HOME/nova}"
 VENV_DIR="${REPO_DIR}/.venv"
 JOB_SRC_DIR="${NOVA_CSP_SCANNER_DIR:-$HOME/csp_scanner}"
 OUTPUT_DIR="${HOME}/nova_output/csp_scanner"
+
+# Tier 2 Overrides fuer die Configs (defaults bleiben repo-tracked):
+WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST:-config/watchlist.yaml}"
+SETTINGS_PATH="${CSP_SCANNER_SETTINGS:-config/settings.yaml}"
 
 if [[ ! -d "${VENV_DIR}" ]]; then
   echo "Fehler: venv ${VENV_DIR} nicht gefunden — erst node_deploy.sh ausfuehren." >&2
@@ -50,6 +59,6 @@ source "${VENV_DIR}/bin/activate"
 cd "${JOB_SRC_DIR}"
 
 exec python -m src.main \
-    --watchlist config/watchlist.yaml \
-    --settings config/settings.yaml \
+    --watchlist "${WATCHLIST_PATH}" \
+    --settings "${SETTINGS_PATH}" \
     "$@"

@@ -13,3 +13,7 @@ __pycache__/
 
 # Workload-Runtime-Artefakte (per-node lokal, nicht versioniert)
 workloads/*/output
+
+# Per-Node Tier-2 Overrides (sollten unter ~/.nova_env liegen, nie im Repo).
+# Defensive: falls jemand versehentlich .nova_env im Repo anlegt.
+.nova_env
