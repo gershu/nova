@@ -3,7 +3,7 @@
 #
 # Idempotent:
 #   1. git pull (nova-Repo aktualisieren)
-#   2. Dotfiles symlinken (zsh/.zshrc, zsh/.p10k.zsh)
+#   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/)
 #   3. brew bundle (Software installieren/aktualisieren)
 #   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
 #      pip install -r requirements-lock.txt
@@ -54,8 +54,15 @@ link_file() {
 }
 
 echo "==> [2/5] Dotfiles linken..."
-link_file "${REPO_DIR}/dotfiles/zsh/.zshrc"   "$HOME/.zshrc"
-link_file "${REPO_DIR}/dotfiles/zsh/.p10k.zsh" "$HOME/.p10k.zsh"
+# ~/.ssh/ braucht 700 — wenn der Ordner noch nicht existiert (sehr seltener
+# Edge Case auf hub), defensiv anlegen.
+[[ -d "$HOME/.ssh" ]] || { mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; }
+
+link_file "${REPO_DIR}/dotfiles/zsh/.zshrc"     "$HOME/.zshrc"
+link_file "${REPO_DIR}/dotfiles/zsh/.p10k.zsh"  "$HOME/.p10k.zsh"
+link_file "${REPO_DIR}/dotfiles/ssh/config"     "$HOME/.ssh/config"
+link_file "${REPO_DIR}/dotfiles/git/.gitconfig" "$HOME/.gitconfig"
+link_file "${REPO_DIR}/dotfiles/vim/.vimrc"     "$HOME/.vimrc"
 
 # --- 3) brew bundle ---------------------------------------------------------
 echo "==> [3/5] brew bundle ..."
