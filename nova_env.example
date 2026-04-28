@@ -26,7 +26,7 @@
 # ---- csp_scanner Tier-2 Overrides ----
 # export CSP_SCANNER_WATCHLIST=config/watchlist.yaml      # default: config/watchlist.yaml
 # export CSP_SCANNER_SETTINGS=config/settings.yaml        # default: config/settings.yaml
-# Beispiel: auf nova-prod nur eine konservative Watchlist scannen
+# Beispiel: auf nova-w2 nur eine konservative Watchlist scannen
 # export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml
 
 # ---- API Keys / Secrets (vorerst nur als Beispiel; Keychain ist sauberer) ----

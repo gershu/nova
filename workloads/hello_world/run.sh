@@ -7,7 +7,7 @@
 #
 # Aufruf:
 #   ~/nova/workloads/hello_world/run.sh
-#   ssh nova-prod '~/nova/workloads/hello_world/run.sh'
+#   ssh nova-w1 '~/nova/workloads/hello_world/run.sh'
 
 set -euo pipefail
 

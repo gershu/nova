@@ -7,7 +7,7 @@
 #
 # Aufruf:
 #   ~/nova/workloads/csp_scanner/run.sh
-#   ssh nova-prod '~/nova/workloads/csp_scanner/run.sh'
+#   ssh nova-w2 '~/nova/workloads/csp_scanner/run.sh'
 
 set -euo pipefail
 

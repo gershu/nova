@@ -3,18 +3,28 @@ Host github.com
   User git
   IdentityFile ~/.ssh/id_ed25519
   AddKeysToAgent yes
-  
-Host nova-dev
-  HostName nova-dev.local
+
+Host nova-hub
+  HostName nova-hub.local
   User novaadm
   IdentityFile ~/.ssh/id_ed25519
 
-Host nova-uat
-  HostName nova-uat.local
+Host nova-w1
+  HostName nova-w1.local
   User novaadm
   IdentityFile ~/.ssh/id_ed25519
 
-Host nova-prod
-  HostName nova-prod.local
+Host nova-w2
+  HostName nova-w2.local
+  User novaadm
+  IdentityFile ~/.ssh/id_ed25519
+
+Host nova-w3
+  HostName nova-w3.local
+  User novaadm
+  IdentityFile ~/.ssh/id_ed25519
+
+Host nova-w4
+  HostName nova-w4.local
   User novaadm
   IdentityFile ~/.ssh/id_ed25519

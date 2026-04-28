@@ -11,14 +11,12 @@
 
 # Farben nach Rolle
 case "$NOVA_ROLE" in
-  DEV)
-    ROLE_COLOR=70   ;;   # grün
-  UAT)
-    ROLE_COLOR=220  ;;   # klares gelb
-  PROD)
-    ROLE_COLOR=124  ;;   # weicheres PROD rot
+  HUB)
+    ROLE_COLOR=124  ;;   # rot — Hub ist sensibel (git push, dispatch)
+  WORKER)
+    ROLE_COLOR=70   ;;   # gruen — Worker, freundlich
   *)
-    ROLE_COLOR=39   ;;
+    ROLE_COLOR=39   ;;   # blau — fallback fuer unklassifizierte Nodes
 esac
 
 # Linke Seite: Rolle + Pfad + Git
@@ -51,12 +49,9 @@ typeset -g POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD=2
 typeset -g POWERLEVEL9K_COMMAND_EXECUTION_TIME_PRECISION=0
 
 # Prompt Charakter je Rolle
-if [[ "$NOVA_ROLE" == "PROD" ]]; then
+if [[ "$NOVA_ROLE" == "HUB" ]]; then
   typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_CONTENT_EXPANSION='❯❯'
   typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_FOREGROUND=124
-elif [[ "$NOVA_ROLE" == "UAT" ]]; then
-  typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_CONTENT_EXPANSION='❯'
-  typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_FOREGROUND=220
 else
   typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_CONTENT_EXPANSION='❯'
   typeset -g POWERLEVEL9K_PROMPT_CHAR_OK_VIINS_FOREGROUND=70

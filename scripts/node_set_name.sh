@@ -1,49 +1,57 @@
 #!/usr/bin/env bash
 # node_set_name.sh — auf dem Ziel-Node ausführen.
 #
-# Setzt Hostname/Alias auf nova-<env> und persistiert NOVA_ROLE in ~/.nova_role,
-# damit die zsh-/p10k-Konfiguration die korrekte Rollenfarbe wählt.
+# Setzt Hostname/Alias auf den uebergebenen nova-Namen und persistiert NOVA_ROLE
+# in ~/.nova_role, damit zsh + p10k die korrekte Rollenfarbe waehlen.
+#
+# Naming-Konvention:
+#   nova-hub        Control Plane (Hub)
+#   nova-w<N>       Worker, durchnumeriert ab 1
+#
+# Rolle wird automatisch aus dem Namen abgeleitet:
+#   nova-hub        -> NOVA_ROLE=HUB
+#   nova-w<N>       -> NOVA_ROLE=WORKER
 #
 # Usage:
-#   ./node_set_name.sh <env>
-# Example:
-#   ./node_set_name.sh UAT
+#   ./node_set_name.sh <hostname>
+# Examples:
+#   ./node_set_name.sh nova-hub
+#   ./node_set_name.sh nova-w3
 
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <env>" >&2
-  echo "  <env> ist eines von: DEV UAT PROD" >&2
+  echo "Usage: $0 <hostname>" >&2
+  echo "  Erlaubt: nova-hub | nova-w<N>" >&2
   exit 64
 fi
 
-ENV_NAME="$1"
+NEW_HOSTNAME="$1"
 
-case "$ENV_NAME" in
-  DEV|UAT|PROD) ;;
-  *)
-    echo "Ungültiges Environment '$ENV_NAME'. Erlaubt: DEV UAT PROD" >&2
-    exit 64
-    ;;
-esac
-
-ENV_LOWER="$(echo "$ENV_NAME" | tr '[:upper:]' '[:lower:]')"
-NEW_HOSTNAME="nova-${ENV_LOWER}"
+# Rolle ableiten + Namensformat validieren
+if [[ "${NEW_HOSTNAME}" == "nova-hub" ]]; then
+  ROLE="HUB"
+elif [[ "${NEW_HOSTNAME}" =~ ^nova-w[0-9]+$ ]]; then
+  ROLE="WORKER"
+else
+  echo "Ungueltiger Hostname '${NEW_HOSTNAME}'. Erlaubt: nova-hub | nova-w<N>" >&2
+  exit 64
+fi
 
 echo "==> Setze HostName / LocalHostName / ComputerName auf '${NEW_HOSTNAME}'..."
 sudo scutil --set HostName      "${NEW_HOSTNAME}"
 sudo scutil --set LocalHostName "${NEW_HOSTNAME}"
 sudo scutil --set ComputerName  "${NEW_HOSTNAME}"
 
-# DNS-Cache leeren, damit Änderungen sofort greifen.
+# DNS-Cache leeren, damit Aenderungen sofort greifen.
 sudo dscacheutil -flushcache 2>/dev/null || true
 sudo killall -HUP mDNSResponder 2>/dev/null || true
 
-echo "==> Schreibe NOVA_ROLE=${ENV_NAME} nach ~/.nova_role..."
+echo "==> Schreibe NOVA_ROLE=${ROLE} nach ~/.nova_role..."
 cat > "$HOME/.nova_role" <<EOF
 # Wird von ~/.zshrc geladen — definiert die Rolle dieses Nodes.
 # Erzeugt durch node_set_name.sh am $(date -u +"%Y-%m-%dT%H:%M:%SZ").
-export NOVA_ROLE=${ENV_NAME}
+export NOVA_ROLE=${ROLE}
 EOF
 chmod 644 "$HOME/.nova_role"
 
@@ -51,10 +59,10 @@ echo "==> Fertig. Aktuelle Werte:"
 echo "    HostName:      $(scutil --get HostName 2>/dev/null || echo '(nicht gesetzt)')"
 echo "    LocalHostName: $(scutil --get LocalHostName 2>/dev/null || echo '(nicht gesetzt)')"
 echo "    ComputerName:  $(scutil --get ComputerName 2>/dev/null || echo '(nicht gesetzt)')"
-echo "    NOVA_ROLE:     ${ENV_NAME}"
+echo "    NOVA_ROLE:     ${ROLE}"
 
 cat <<EOF
 
-Hinweis: Eine neue zsh-Session öffnen, damit NOVA_ROLE geladen ist und der
+Hinweis: Eine neue zsh-Session oeffnen, damit NOVA_ROLE geladen ist und der
 Prompt die richtige Farbe zeigt.
 EOF

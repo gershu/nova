@@ -63,10 +63,9 @@ setopt EXTENDED_HISTORY
 # Node-Erkennung für Prompt
 export NOVA_NODE="$(hostname -s 2>/dev/null || hostname)"
 case "$NOVA_NODE" in
-  nova-dev*)  export NOVA_ROLE="DEV" ;;
-  nova-uat*)  export NOVA_ROLE="UAT" ;;
-  nova-prod*) export NOVA_ROLE="PROD" ;;
-  *)          export NOVA_ROLE="$NOVA_NODE" ;;
+  nova-hub)             export NOVA_ROLE="HUB" ;;
+  nova-w[0-9]*)        export NOVA_ROLE="WORKER" ;;
+  *)                    export NOVA_ROLE="$NOVA_NODE" ;;
 esac
 
 # Optional override: ~/.nova_role kann den hostname-basierten Default
@@ -99,9 +98,11 @@ load_if_exists /usr/local/share/powerlevel10k/powerlevel10k.zsh-theme
 # ---------- Aliases ----------
 alias python='python3'
 alias nv='cd ~/nova'
-alias nd='ssh nova-dev'
-alias nu='ssh nova-uat'
-alias np='ssh nova-prod'
+alias nh='ssh nova-hub'
+alias nw1='ssh nova-w1'
+alias nw2='ssh nova-w2'
+alias nw3='ssh nova-w3'
+alias nw4='ssh nova-w4'
 alias pip='pip3'
 alias gs='git status'
 alias ga='git add .'

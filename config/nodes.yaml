@@ -1,0 +1,55 @@
+# nova Node-Inventar
+# ============================================================
+# Quelle der Wahrheit fuer:
+#   - cluster_status.sh (welche Worker pollen)
+#   - cluster-Dokumentation (welcher Mac, welche Capability)
+#   - kuenftige Dispatch-Logik (welcher Node fuer welchen Workload)
+#
+# Naming-Schema:
+#   nova-hub       Control Plane (zentrales Hub, NICHT-Worker)
+#   nova-w<N>      Worker, durchnumeriert ab 1, beliebig viele
+#
+# Capability-Tags sind frei waehlbar, dokumentiert in README.
+# Aenderungen via git commit + push + node_deploy.sh.
+# ============================================================
+
+nodes:
+  nova-hub:
+    role: hub
+    chip: arm64
+    ram_gb: 32
+    os: macos-15
+    notes: "Apple Silicon, Stefans Haupt-Mac, Editor + Control Plane"
+
+  nova-w1:
+    role: worker
+    chip: arm64
+    ram_gb: 16
+    os: macos-15
+    tags: [compute-heavy, ib-capable]
+    notes: "frueher nova-uat"
+
+  nova-w2:
+    role: worker
+    chip: x86_64
+    ram_gb: 8
+    os: macos-15
+    tags: [general, ib-capable]
+    notes: "frueher nova-prod, Intel Mac"
+
+  # Neu zu provisionieren — Eintraege spaeter mit echten Werten ueberschreiben:
+  nova-w3:
+    role: worker
+    chip: TBD
+    ram_gb: 0
+    os: TBD
+    tags: []
+    notes: "noch nicht provisioniert"
+
+  nova-w4:
+    role: worker
+    chip: TBD
+    ram_gb: 0
+    os: TBD
+    tags: []
+    notes: "noch nicht provisioniert"

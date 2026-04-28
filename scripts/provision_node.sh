@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# provision_node.sh — auf nova-dev als novaadm ausführen.
+# provision_node.sh — auf nova-hub als novaadm ausführen.
 #
 # Kopiert SSH-Material (id_ed25519, id_ed25519.pub, authorized_keys, config)
-# vom novaadm-Home auf einen neuen Mac, damit der Node anschließend
+# vom novaadm-Home auf einen neuen Worker-Mac, damit der Node anschließend
 # key-basiert erreichbar ist und vom GitHub-Repo per Deploy Key pullen kann.
 #
 # Voraussetzungen am Ziel-Mac (manuell vorher erledigen):
 #   - macOS frisch aufgesetzt
 #   - User `novaadm` existiert (Standard-Account)
 #   - Remote Login (SSH) aktiv (System Settings → General → Sharing)
-#   - Hostname per `sudo scutil --set {Host,LocalHost,Computer}Name nova-<env>`
-#     bereits auf nova-<env> gesetzt (sonst Workflow umständlich, siehe README)
+#   - Hostname per `sudo scutil --set {Host,LocalHost,Computer}Name nova-w<N>`
+#     bereits auf nova-w<N> gesetzt (sonst Workflow umständlich, siehe README)
 #   - Ziel-Mac im LAN erreichbar (mDNS oder DNS)
 #
 # Was dieses Script NICHT macht (kommt im node_bootstrap.sh-Schritt am Node):
@@ -19,28 +19,27 @@
 #   - Dotfiles linken / brew bundle
 #
 # Usage:
-#   ./provision_node.sh <ziel-hostname-oder-ip> <env>
+#   ./provision_node.sh <hostname>
 # Example:
-#   ./provision_node.sh nova-uat UAT
+#   ./provision_node.sh nova-w3
 
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 <ziel-hostname-oder-ip> <env>" >&2
-  echo "  <env> ist eines von: DEV UAT PROD" >&2
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <hostname>" >&2
+  echo "  <hostname> z.B. nova-w3 (muss bereits am Ziel-Mac als HostName gesetzt sein)" >&2
   exit 64
 fi
 
 TARGET="$1"
-ENV_NAME="$2"
 
-case "$ENV_NAME" in
-  DEV|UAT|PROD) ;;
-  *)
-    echo "Ungültiges Environment '$ENV_NAME'. Erlaubt: DEV UAT PROD" >&2
-    exit 64
-    ;;
-esac
+# Naming validieren: nur Worker werden ueber dieses Script provisioniert.
+# nova-hub wird manuell aufgesetzt (siehe README — nova-hub ist die einzige
+# Maschine die dieses Script ausfuehrt; sich selbst kann sie nicht provisionieren).
+if [[ ! "${TARGET}" =~ ^nova-w[0-9]+$ ]]; then
+  echo "Ungueltiger Hostname '${TARGET}'. Erwartet: nova-w<N> (z.B. nova-w3)." >&2
+  exit 64
+fi
 
 # Annahme: novaadm ist der lokale User.
 USER_ON_TARGET="novaadm"
@@ -80,6 +79,9 @@ cat <<EOF
     node_bootstrap.sh installiert brew, überspringt den Clone (existiert nun)
     und ruft node_deploy.sh auf — am Ende ist der Node deploy-fertig.
 
-    Falls der Hostname noch NICHT nova-$(echo "${ENV_NAME}" | tr '[:upper:]' '[:lower:]') ist, vorher zusätzlich:
-      ~/nova/scripts/node_set_name.sh ${ENV_NAME}
+    Falls der Hostname noch NICHT ${TARGET} ist, vorher zusätzlich:
+      ~/nova/scripts/node_set_name.sh ${TARGET}
+
+    Danach: ${TARGET} im config/nodes.yaml mit echten chip/ram_gb/tags Werten
+    aktualisieren, committen, pushen — damit cluster_status.sh den Node sieht.
 EOF

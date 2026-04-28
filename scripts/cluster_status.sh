@@ -1,40 +1,57 @@
 #!/usr/bin/env bash
-# cluster_status.sh — auf nova-dev ausführen.
+# cluster_status.sh — auf nova-hub ausführen.
 #
-# Iteriert über Hosts in config/hosts und liefert je Worker:
+# Liest config/nodes.yaml und liefert je Worker (role=worker):
 #   - Hostname
+#   - Tags aus nodes.yaml (z.B. compute-heavy, ib-capable)
+#   - Reachability
 #   - Uptime
-#   - Letzter Commit-SHA + Subject in ~/nova
-#   - brew bundle check (in sync? out of sync?)
+#   - Letzter Commit-SHA in ~/nova
+#   - brew bundle check (in sync / drift)
+#
+# Der Hub selbst wird nicht gepollt (er ist ja der Pollende).
 
 set -uo pipefail   # -e nicht: ein einzelner Worker-Fehler soll den Rest nicht abbrechen
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-HOSTS_FILE="${SCRIPT_DIR}/../config/hosts"
+NODES_FILE="${SCRIPT_DIR}/../config/nodes.yaml"
 
-if [[ ! -f "${HOSTS_FILE}" ]]; then
-  echo "Fehler: Hostliste nicht gefunden: ${HOSTS_FILE}" >&2
+if [[ ! -f "${NODES_FILE}" ]]; then
+  echo "Fehler: ${NODES_FILE} nicht gefunden." >&2
   exit 1
 fi
 
-# Tabellen-Header
-printf '%-12s | %-8s | %-22s | %-12s | %s\n' "HOST" "STATUS" "UPTIME" "COMMIT" "BREW BUNDLE"
-printf -- '-------------+----------+------------------------+--------------+-----------\n'
+if ! command -v yq >/dev/null 2>&1; then
+  echo "Fehler: yq nicht im PATH. brew bundle (Brewfile listet yq) ausfuehren." >&2
+  exit 1
+fi
 
-while IFS= read -r host; do
-  # Kommentare und Leerzeilen überspringen
-  [[ -z "${host}" || "${host}" =~ ^# ]] && continue
+# Liste aller Worker-Namen (role: worker) aus nodes.yaml extrahieren.
+mapfile -t WORKERS < <(yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}")
+
+if [[ ${#WORKERS[@]} -eq 0 ]]; then
+  echo "Hinweis: keine Worker in ${NODES_FILE} (role=worker) gefunden." >&2
+  exit 0
+fi
+
+# Tabellen-Header
+printf '%-12s | %-8s | %-22s | %-12s | %-12s | %s\n' "HOST" "STATUS" "UPTIME" "COMMIT" "BREW" "TAGS"
+printf -- '-------------+----------+------------------------+--------------+--------------+----------------\n'
+
+for host in "${WORKERS[@]}"; do
+  # Tags aus nodes.yaml als kommagetrennte Liste (oder "-" wenn leer)
+  tags="$(yq -r ".nodes.\"${host}\".tags // [] | join(\",\")" "${NODES_FILE}")"
+  [[ -z "${tags}" ]] && tags="-"
 
   # Quick Reachability Check.
-  # ssh -n redirects stdin from /dev/null. Ohne -n erbt ssh stdin der Loop
-  # (= ${HOSTS_FILE}) und liest die restlichen Zeilen — die naechsten Hosts
-  # gehen verloren, read -r host trifft EOF, Loop endet vorzeitig.
+  # ssh -n redirects stdin from /dev/null (sonst klauten ssh-Aufrufe stdin
+  # einer fruehen while-read-Schleife — ehemals Bug, jetzt for-Loop).
   if ! ssh -n -o ConnectTimeout=5 -o BatchMode=yes "${host}" 'true' >/dev/null 2>&1; then
-    printf '%-12s | %-8s | %-22s | %-12s | %s\n' "${host}" "DOWN" "-" "-" "-"
+    printf '%-12s | %-8s | %-22s | %-12s | %-12s | %s\n' "${host}" "DOWN" "-" "-" "-" "${tags}"
     continue
   fi
 
-  # Daten parallel im selben SSH-Aufruf holen (auch hier -n, gleicher Grund).
+  # Daten im selben SSH-Aufruf holen.
   # brew shellenv vor command -v brew, da non-interactive SSH-Sessions
   # weder .zprofile noch .zshrc laden und Homebrew sonst nicht im PATH ist.
   remote_output="$(ssh -n -o ConnectTimeout=5 "${host}" '
@@ -60,7 +77,7 @@ while IFS= read -r host; do
   ' 2>/dev/null)"
 
   if [[ -z "${remote_output}" ]]; then
-    printf '%-12s | %-8s | %-22s | %-12s | %s\n' "${host}" "ERR" "-" "-" "-"
+    printf '%-12s | %-8s | %-22s | %-12s | %-12s | %s\n' "${host}" "ERR" "-" "-" "-" "${tags}"
     continue
   fi
 
@@ -68,9 +85,8 @@ while IFS= read -r host; do
   commit_field="$(echo "${remote_output}" | cut -d'|' -f2)"
   brew_field="$(echo "${remote_output}" | cut -d'|' -f3)"
 
-  # Commit auf 12 Zeichen kürzen für die Tabelle
   short_commit="$(echo "${commit_field}" | awk '{print $1}')"
 
-  printf '%-12s | %-8s | %-22s | %-12s | %s\n' \
-    "${host}" "UP" "${uptime_field:0:22}" "${short_commit:0:12}" "${brew_field}"
-done < "${HOSTS_FILE}"
+  printf '%-12s | %-8s | %-22s | %-12s | %-12s | %s\n' \
+    "${host}" "UP" "${uptime_field:0:22}" "${short_commit:0:12}" "${brew_field}" "${tags}"
+done
