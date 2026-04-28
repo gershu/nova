@@ -8,11 +8,27 @@ Zeigt:
 
 from __future__ import annotations
 
+import json
 import os
+import pathlib
 import platform
 import socket
 import sys
 from datetime import datetime, timezone
+
+
+def load_params() -> dict:
+    """Liest die Parameter-Datei, falls von nova_run.sh bereitgestellt."""
+    pf = os.environ.get("NOVA_PARAMS_FILE")
+    if not pf:
+        return {}
+    p = pathlib.Path(pf)
+    if not p.is_file():
+        return {"_warn": f"NOVA_PARAMS_FILE gesetzt ({pf}), aber Datei existiert nicht"}
+    try:
+        return json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        return {"_warn": f"params file ist kein gueltiges JSON: {e}"}
 
 
 def stack_check() -> str:
@@ -29,12 +45,14 @@ def stack_check() -> str:
 
 
 def main() -> int:
+    params = load_params()
     print("==> nova workload: hello_world")
     print(f"    timestamp UTC : {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
     print(f"    hostname      : {socket.gethostname()}")
     print(f"    NOVA_ROLE     : {os.environ.get('NOVA_ROLE', '(unset)')}")
     print(f"    python        : {platform.python_version()} ({sys.executable})")
     print(f"    stack         : {stack_check()}")
+    print(f"    params        : {params if params else '(none)'}")
     print("==> done.")
     return 0
 

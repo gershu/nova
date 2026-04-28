@@ -52,7 +52,8 @@ nova/
 │   ├── node_set_name.sh        # auf neuem Node: Hostname + NOVA_ROLE setzen
 │   ├── node_bootstrap.sh       # auf neuem Node: brew + Repo-Clone + erstes Deploy
 │   ├── node_deploy.sh          # auf jedem Node: pull + dotfiles + brew + venv + workload-repos
-│   └── cluster_status.sh       # auf nova-hub: liest nodes.yaml, polled Worker via SSH
+│   ├── cluster_status.sh       # auf nova-hub: liest nodes.yaml, polled Worker via SSH
+│   └── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (mit Params)
 └── config/
     ├── nodes.yaml              # Node-Inventar (Worker + Capability-Metadaten)
     └── workload_repos.txt      # externe Repos, die node_deploy.sh nach ~/<dir> klont/pullt
@@ -276,23 +277,51 @@ divergieren (das ist der Sinn).
 
 ### Job ausführen
 
-Manuell auf einem Node lokal:
+**Lokal auf einem Node** (Smoke-Test, manuelle Runs):
 
 ```bash
 ~/nova/workloads/hello_world/run.sh
 ~/nova/workloads/csp_scanner/run.sh
 ```
 
-Oder remote von einem beliebigen Node aus (typischerweise nova-hub):
+**Remote vom Hub via Dispatcher** (Standard-Pfad):
 
 ```bash
-ssh nova-w1 '~/nova/workloads/hello_world/run.sh'
-ssh nova-w2 '~/nova/workloads/hello_world/run.sh'
+~/nova/scripts/nova_run.sh hello_world nova-w1
+~/nova/scripts/nova_run.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json
+~/nova/scripts/nova_run.sh csp_scanner nova-w2 -- --extra-flag wert
 ```
+
+`nova_run.sh`:
+- validiert dass der Workload existiert und der Worker in `nodes.yaml` (role=worker) steht
+- shipt optional eine Params-Datei via scp auf den Worker und exportiert
+  `NOVA_PARAMS_FILE` mit dem Remote-Pfad (Workload kann's per
+  `os.environ.get('NOVA_PARAMS_FILE')` lesen + JSON parsen)
+- ssh'd, streamt stdout/stderr live, gibt den Remote-Exit-Code zurück
+- räumt die Params-Datei nach dem Run auf
 
 Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein Scheduler,
 keine Lastverteilung, keine Job-Queue. Output landet auf stdout/stderr des
-Aufrufers (kein zentrales Logging im Scope).
+Aufrufers + im per-Node `~/nova_output/<job>/` (kein zentrales Logging im Scope).
+
+### Parameter-Konvention für Workloads
+
+Drei Wege wie Werte zur Workload kommen, in dieser Präzedenz (jeweils
+Spezialfall vor Generischem):
+
+1. **Per-Invocation Parameter-Datei** (für nova_run.sh dispatched jobs).
+   `--params-file <pfad>` shipped die Datei nach `/tmp/...` auf dem Worker
+   und setzt `NOVA_PARAMS_FILE`. Workload-Code:
+   ```python
+   import os, json, pathlib
+   pf = os.environ.get("NOVA_PARAMS_FILE")
+   params = json.loads(pathlib.Path(pf).read_text()) if pf else {}
+   ```
+2. **Per-Node `~/.nova_env`** (Tier 2, siehe oben). Für Werte, die pro Node
+   stabil sind: Hosts, Ports, Account-IDs.
+3. **Repo-Defaults** (Tier 1, in git). Für Settings, die für alle Nodes
+   gleich sind: workloads/csp_scanner/run.sh' hardcoded `--watchlist`,
+   yaml-files im Sibling-Repo, etc.
 
 ### Neuen Workload anlegen
 
