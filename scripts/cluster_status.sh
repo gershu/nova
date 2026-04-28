@@ -11,6 +11,9 @@
 #
 # Der Hub selbst wird nicht gepollt (er ist ja der Pollende).
 
+
+# -u (unbound variable) kann Fehler verursachen, wenn Arrays leer bleiben. Erst initialisieren, dann -u setzen.
+WORKERS=()
 set -uo pipefail   # -e nicht: ein einzelner Worker-Fehler soll den Rest nicht abbrechen
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,8 +29,17 @@ if ! command -v yq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Liste aller Worker-Namen (role: worker) aus nodes.yaml extrahieren.
-mapfile -t WORKERS < <(yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}")
+# Debug: Bash-Version ausgeben
+echo "[DEBUG] Bash-Version: $BASH_VERSION"
+echo "[DEBUG] yq-Ausgabe für Worker-Keys:"
+yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}"
+
+# Liste aller Worker-Namen (role: worker) aus nodes.yaml extrahieren (kompatibel mit Bash 3.2)
+WORKERS=()
+while IFS= read -r line; do
+  WORKERS+=("$line")
+done < <(yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}")
+echo "[DEBUG] WORKERS-Array: ${WORKERS[*]}"
 
 if [[ ${#WORKERS[@]} -eq 0 ]]; then
   echo "Hinweis: keine Worker in ${NODES_FILE} (role=worker) gefunden." >&2
