@@ -41,6 +41,8 @@ nova/
 ├── dotfiles/zsh/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
 │   └── .p10k.zsh               # Prompt mit NOVA_ROLE-Farben
+├── dotfiles/launchd/
+│   └── de.gershu.nova.picker.plist  # launchd-Agent fuer nova_picker (nur hub)
 ├── workloads/                  # Job-Wrapper (siehe Konvention unten)
 │   ├── hello_world/            # Embedded-Workload (Code im nova-Repo)
 │   │   ├── run.sh
@@ -53,7 +55,10 @@ nova/
 │   ├── node_bootstrap.sh       # auf neuem Node: brew + Repo-Clone + erstes Deploy
 │   ├── node_deploy.sh          # auf jedem Node: pull + dotfiles + brew + venv + workload-repos
 │   ├── cluster_status.sh       # auf nova-hub: liest nodes.yaml, polled Worker via SSH
-│   └── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (mit Params)
+│   ├── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (synchron, Phase 0)
+│   ├── nova_submit.sh          # auf nova-hub: Job-Spec ins ~/nova_jobs/queue/ schreiben (Phase 1)
+│   ├── nova_picker.sh          # auf nova-hub via launchd: Queue abarbeiten, dispatch via nova_run.sh
+│   └── nova_status.sh          # auf nova-hub: Job-Queue-Übersicht / Detail / Log
 └── config/
     ├── nodes.yaml              # Node-Inventar (Worker + Capability-Metadaten)
     └── workload_repos.txt      # externe Repos, die node_deploy.sh nach ~/<dir> klont/pullt
@@ -284,7 +289,7 @@ divergieren (das ist der Sinn).
 ~/nova/workloads/csp_scanner/run.sh
 ```
 
-**Remote vom Hub via Dispatcher** (Standard-Pfad):
+**Remote vom Hub via Dispatcher** (Standard-Pfad, synchron):
 
 ```bash
 ~/nova/scripts/nova_run.sh hello_world nova-w1
@@ -300,9 +305,32 @@ divergieren (das ist der Sinn).
 - ssh'd, streamt stdout/stderr live, gibt den Remote-Exit-Code zurück
 - räumt die Params-Datei nach dem Run auf
 
-Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein Scheduler,
-keine Lastverteilung, keine Job-Queue. Output landet auf stdout/stderr des
-Aufrufers + im per-Node `~/nova_output/<job>/` (kein zentrales Logging im Scope).
+**Asynchron via Job-Queue + Picker** (Phase-1-Variante):
+
+```bash
+# Job einreichen (return't sofort mit Job-ID)
+JOB_ID=$(~/nova/scripts/nova_submit.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json)
+
+# Status abfragen
+~/nova/scripts/nova_status.sh                    # Counts + letzte 10 Done
+~/nova/scripts/nova_status.sh --job "${JOB_ID}"  # voller Spec inkl. exit_code
+~/nova/scripts/nova_status.sh --log "${JOB_ID}"  # stdout/stderr des Runs
+```
+
+Mechanik:
+- `nova_submit.sh` schreibt Job-Spec (JSON, mit inlined Params) atomar in
+  `~/nova_jobs/queue/<id>.json`.
+- `nova_picker.sh` läuft per launchd-Agent alle 10s auf nova-hub. Per
+  Iteration: claimed via mv nach `running/`, dispatcht via `nova_run.sh`,
+  schreibt Result + log_path nach `done/<id>.json`.
+- Concurrency-Schutz: mkdir-basierter Lock — kein Doppel-Pickup wenn ein
+  Job länger läuft als das Polling-Intervall.
+- Fehler-Workflow: bei exit ≠ 0 wird `status: failed` ins JSON geschrieben,
+  Job landet trotzdem in done/. Re-Submit ist manuell.
+
+Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein
+Capability-basierter Auto-Dispatch (steht für eine spätere Phase, sobald
+Tags aus `nodes.yaml` mit Workload-Anforderungen gematcht werden sollen).
 
 ### Parameter-Konvention für Workloads
 

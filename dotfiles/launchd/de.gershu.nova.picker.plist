@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-picker LaunchAgent fuer novaadm auf nova-hub.
+
+  Wird durch node_deploy.sh nur auf nova-hub aktiviert (linkt nach
+  ~/Library/LaunchAgents/ und macht launchctl bootstrap). Auf Workern
+  unbenutzt — sie haben keinen Job-Picker.
+
+  Polling-Intervall: 10 Sekunden. Reicht fuer Trading-Workload-
+  Latenz; bei Bedarf in StartInterval anpassen.
+
+  Logs: ~/Library/Logs/nova-picker.log (rotiert nicht automatisch;
+  bei Bedarf manuell aufraeumen).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.picker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/nova_picker.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>10</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-picker.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-picker.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
