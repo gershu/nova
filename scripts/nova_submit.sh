@@ -97,17 +97,19 @@ if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
 fi
 
 # Spec zusammenbauen via python (sauberes JSON)
-SPEC_JSON="$(python3 - <<EOF
+SPEC_JSON="$(python3 - "${JOB_ID}" "${WORKLOAD}" "${WORKER}" "${PARAMS_JSON}" "${EXTRA_JSON}" "${SUBMITTED_AT}" "${SUBMITTED_BY}" <<'EOF'
 import json
+import sys
+
 spec = {
-  "job_id":        "${JOB_ID}",
-  "workload":      "${WORKLOAD}",
-  "worker":        "${WORKER}",
-  "params":        ${PARAMS_JSON},
-  "extra_args":    ${EXTRA_JSON},
-  "submitted_at":  "${SUBMITTED_AT}",
-  "submitted_by":  "${SUBMITTED_BY}",
-  "status":        "queued"
+    "job_id": sys.argv[1],
+    "workload": sys.argv[2],
+    "worker": sys.argv[3],
+    "params": json.loads(sys.argv[4]),
+    "extra_args": json.loads(sys.argv[5]),
+    "submitted_at": sys.argv[6],
+    "submitted_by": sys.argv[7],
+    "status": "queued",
 }
 print(json.dumps(spec, indent=2))
 EOF

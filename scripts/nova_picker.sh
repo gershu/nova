@@ -74,8 +74,11 @@ for spec_file in "${JOBS[@]}"; do
       "${running_file}" "${params_file}"
   fi
 
-  # extra_args als Bash-Array
-  mapfile -t extra_args < <(python3 -c 'import json,sys; [print(a) for a in json.load(open(sys.argv[1])).get("extra_args", [])]' "${running_file}")
+  # extra_args als Bash-Array (bash-3-kompatibel, kein mapfile)
+  extra_args=()
+  while IFS= read -r arg; do
+    extra_args+=("${arg}")
+  done < <(python3 -c 'import json,sys; [print(a) for a in json.load(open(sys.argv[1])).get("extra_args", [])]' "${running_file}")
 
   # started_at in Spec eintragen
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -91,12 +94,19 @@ PY
   # nova_run.sh aufrufen, stdout+stderr in log_file
   set +e
   if [[ -n "${params_file}" ]]; then
-    "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" --params-file "${params_file}" -- "${extra_args[@]}" >"${log_file}" 2>&1
+    if [[ ${#extra_args[@]} -gt 0 ]]; then
+      "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" --params-file "${params_file}" -- "${extra_args[@]}" >"${log_file}" 2>&1
+    else
+      "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" --params-file "${params_file}" >"${log_file}" 2>&1
+    fi
   else
-    "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" -- "${extra_args[@]}" >"${log_file}" 2>&1
+    if [[ ${#extra_args[@]} -gt 0 ]]; then
+      "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" -- "${extra_args[@]}" >"${log_file}" 2>&1
+    else
+      "${REPO_DIR}/scripts/nova_run.sh" "${workload}" "${worker}" >"${log_file}" 2>&1
+    fi
   fi
   rc=$?
-  set -e
 
   [[ -n "${params_file}" ]] && rm -f "${params_file}"
 
