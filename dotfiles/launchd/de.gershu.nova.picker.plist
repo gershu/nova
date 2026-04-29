@@ -1,22 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  nova-picker LaunchAgent fuer novaadm auf nova-hub.
+  nova-picker LaunchDaemon fuer nova-hub (MacMini, headless).
 
-  Wird durch node_deploy.sh nur auf nova-hub aktiviert (linkt nach
-  ~/Library/LaunchAgents/ und macht launchctl bootstrap). Auf Workern
-  unbenutzt — sie haben keinen Job-Picker.
+  Wird als LaunchDaemon installiert (NICHT LaunchAgent), weil der Hub
+  typischerweise via SSH bedient wird und keine permanente GUI-Login-Session
+  hat. LaunchAgents wuerden in dem Setup nie laden — die user/<uid>-Domain
+  existiert nur bei aktivem User-Login.
 
-  Polling-Intervall: 10 Sekunden. Reicht fuer Trading-Workload-
-  Latenz; bei Bedarf in StartInterval anpassen.
+  LaunchDaemon laeuft im System-Kontext, immer aktiv (auch beim Boot,
+  ohne dass jemand eingeloggt sein muss). Der UserName-Key sorgt dafuer
+  dass der Process trotzdem als novaadm laeuft, nicht als root.
 
-  Logs: ~/Library/Logs/nova-picker.log (rotiert nicht automatisch;
-  bei Bedarf manuell aufraeumen).
+  Initial-Setup: scripts/install_picker.sh (einmalig, mit sudo).
+  Liegt in /Library/LaunchDaemons/ (system-weit, root-owned).
+
+  Polling-Intervall: 10 Sekunden. Bei Bedarf in StartInterval anpassen.
+  Logs: /Users/novaadm/Library/Logs/nova-picker.log.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>de.gershu.nova.picker</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
 
     <key>ProgramArguments</key>
     <array>

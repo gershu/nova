@@ -42,7 +42,7 @@ nova/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
 │   └── .p10k.zsh               # Prompt mit NOVA_ROLE-Farben
 ├── dotfiles/launchd/
-│   └── de.gershu.nova.picker.plist  # launchd-Agent fuer nova_picker (nur hub)
+│   └── de.gershu.nova.picker.plist  # launchd-Daemon fuer nova_picker (nur hub)
 ├── workloads/                  # Job-Wrapper (siehe Konvention unten)
 │   ├── hello_world/            # Embedded-Workload (Code im nova-Repo)
 │   │   ├── run.sh
@@ -58,7 +58,8 @@ nova/
 │   ├── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (synchron, Phase 0)
 │   ├── nova_submit.sh          # auf nova-hub: Job-Spec ins ~/nova_jobs/queue/ schreiben (Phase 1)
 │   ├── nova_picker.sh          # auf nova-hub via launchd: Queue abarbeiten, dispatch via nova_run.sh
-│   └── nova_status.sh          # auf nova-hub: Job-Queue-Übersicht / Detail / Log
+│   ├── nova_status.sh          # auf nova-hub: Job-Queue-Übersicht / Detail / Log
+│   └── install_picker.sh       # einmaliger sudo-Setup des Picker-LaunchDaemon auf nova-hub
 └── config/
     ├── nodes.yaml              # Node-Inventar (Worker + Capability-Metadaten)
     └── workload_repos.txt      # externe Repos, die node_deploy.sh nach ~/<dir> klont/pullt
@@ -320,13 +321,29 @@ JOB_ID=$(~/nova/scripts/nova_submit.sh csp_scanner nova-w2 --params-file ~/jobs/
 Mechanik:
 - `nova_submit.sh` schreibt Job-Spec (JSON, mit inlined Params) atomar in
   `~/nova_jobs/queue/<id>.json`.
-- `nova_picker.sh` läuft per launchd-Agent alle 10s auf nova-hub. Per
+- `nova_picker.sh` läuft per launchd-**Daemon** alle 10s auf nova-hub. Per
   Iteration: claimed via mv nach `running/`, dispatcht via `nova_run.sh`,
   schreibt Result + log_path nach `done/<id>.json`.
 - Concurrency-Schutz: mkdir-basierter Lock — kein Doppel-Pickup wenn ein
   Job länger läuft als das Polling-Intervall.
 - Fehler-Workflow: bei exit ≠ 0 wird `status: failed` ins JSON geschrieben,
   Job landet trotzdem in done/. Re-Submit ist manuell.
+
+**LaunchDaemon-Setup auf nova-hub** (einmalig, mit sudo):
+
+```bash
+# auf nova-hub als novaadm:
+sudo ~/nova/scripts/install_picker.sh
+```
+
+Das kopiert die plist nach `/Library/LaunchDaemons/`, setzt root:wheel +
+mode 644, und bootstrap't den Daemon im system-Kontext. Er läuft als
+`novaadm` (per `UserName`-Key), startet automatisch beim Boot, **braucht
+keine Login-Session** (LaunchAgent würde das brauchen — funktioniert nicht
+auf headless Hubs, die nur via SSH bedient werden).
+
+`node_deploy.sh` installiert den Daemon nicht selbst (kann nicht sudo'n);
+es checkt nur ob er aktiv ist und gibt einen Hinweis aus, falls nicht.
 
 Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein
 Capability-basierter Auto-Dispatch (steht für eine spätere Phase, sobald

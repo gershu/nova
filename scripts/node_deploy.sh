@@ -4,7 +4,8 @@
 # Idempotent:
 #   1. git pull (nova-Repo aktualisieren)
 #   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/) +
-#      auf hub: launchd-Agent fuer nova_picker (alle 10s)
+#      auf hub: Status-Check des Picker-LaunchDaemons (Install via
+#      scripts/install_picker.sh einmalig + sudo)
 #   3. brew bundle (Software installieren/aktualisieren)
 #   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
 #      pip install -r requirements-lock.txt
@@ -65,25 +66,17 @@ link_file "${REPO_DIR}/dotfiles/ssh/config"     "$HOME/.ssh/config"
 link_file "${REPO_DIR}/dotfiles/git/.gitconfig" "$HOME/.gitconfig"
 link_file "${REPO_DIR}/dotfiles/vim/.vimrc"     "$HOME/.vimrc"
 
-# Hub-only: launchd-Agent fuer den Job-Picker.
-# nova_picker.sh laeuft nur auf nova-hub (dispatcht an Worker via SSH); auf
-# Workern selbst gibt es keinen Picker. Daher hostname-gated.
+# Hub-only: Picker-Status-Check.
+# Der Picker laeuft als LaunchDaemon (NICHT LaunchAgent) — Initial-Install
+# braucht sudo und wird einmalig manuell via scripts/install_picker.sh
+# durchgefuehrt. node_deploy.sh kann ihn nicht selbst installieren (laeuft
+# als novaadm ohne sudo); deshalb nur informativer Check.
 if [[ "$(hostname -s 2>/dev/null || hostname)" == "nova-hub" ]]; then
-  echo "    (hub) launchd-Agent fuer Picker installieren..."
-  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
-  PICKER_PLIST_SRC="${REPO_DIR}/dotfiles/launchd/de.gershu.nova.picker.plist"
-  PICKER_PLIST_DST="$HOME/Library/LaunchAgents/de.gershu.nova.picker.plist"
-  link_file "${PICKER_PLIST_SRC}" "${PICKER_PLIST_DST}"
-
-  # launchctl reload (bootout + bootstrap) — idempotent, vermeidet
-  # "service already loaded"-Fehler bei Re-Deploys
-  UID_NUM="$(id -u)"
-  launchctl bootout "gui/${UID_NUM}/de.gershu.nova.picker" 2>/dev/null || true
-  if launchctl bootstrap "gui/${UID_NUM}" "${PICKER_PLIST_DST}"; then
-    echo "    (hub) Picker geladen (StartInterval=10s)"
+  if launchctl print "system/de.gershu.nova.picker" >/dev/null 2>&1; then
+    echo "    (hub) Picker LaunchDaemon laeuft."
   else
-    echo "    WARN: launchctl bootstrap fehlgeschlagen — Picker manuell laden:" >&2
-    echo "    launchctl bootstrap gui/${UID_NUM} ${PICKER_PLIST_DST}" >&2
+    echo "    (hub) HINWEIS: Picker LaunchDaemon nicht aktiv." >&2
+    echo "                 Einmalig installieren: sudo ${REPO_DIR}/scripts/install_picker.sh" >&2
   fi
 fi
 
