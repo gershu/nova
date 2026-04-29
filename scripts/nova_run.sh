@@ -82,7 +82,7 @@ if ! command -v yq >/dev/null 2>&1; then
 fi
 
 if ! yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' \
-       "${NODES_FILE}" | grep -qx "${WORKER}"; then
+       "${NODES_FILE}" | grep "${WORKER}"; then
   echo "Fehler: '${WORKER}' ist kein bekannter Worker in ${NODES_FILE}." >&2
   echo "Bekannte Worker:" >&2
   yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' \
