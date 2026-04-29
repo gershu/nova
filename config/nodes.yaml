@@ -16,18 +16,18 @@
 nodes:
   nova-hub:
     role: hub
-    chip: arm64
-    ram_gb: 32
+    chip: x86_64
+    ram_gb: 16
     os: macos-15
-    notes: "Apple Silicon, Stefans Haupt-Mac, Editor + Control Plane"
-
+    tags: [compute-heavy, ib-capable]
+    notes: "MacMini Intel, Control Plane"
+    
   nova-w1:
     role: worker
     chip: arm64
     ram_gb: 16
     os: macos-15
-    tags: [compute-heavy, ib-capable]
-    notes: "frueher nova-uat"
+    notes: "MacbookPro M1 Apple Silicon, Editor und Worker"
 
   nova-w2:
     role: worker
@@ -35,7 +35,7 @@ nodes:
     ram_gb: 8
     os: macos-15
     tags: [general, ib-capable]
-    notes: "frueher nova-prod, Intel Mac"
+    notes: "Old Macbook Intel, Clamshell-Modus, nur Worker"
 
   # Neu zu provisionieren — Eintraege spaeter mit echten Werten ueberschreiben:
   nova-w3:
