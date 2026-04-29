@@ -15,12 +15,22 @@ RUNNING_DIR="${JOBS_DIR}/running"
 DONE_DIR="${JOBS_DIR}/done"
 LOGS_DIR="${JOBS_DIR}/logs"
 
-count_files() { ls -1 "$1"/*.json 2>/dev/null | wc -l | tr -d ' '; }
+#count_files() { ls -1 "$1"/*.json 2>/dev/null | wc -l | tr -d ' '; }
+
+count_files() {
+  local dir="$1"
+  [[ -d "$dir" ]] || { echo 0; return 0; }
+  find "$dir" -maxdepth 1 -type f -name '*.json' 2>/dev/null | wc -l | tr -d ' '
+}
+
+
+
+
 
 if [[ $# -eq 0 ]]; then
   q="$(count_files "${QUEUE_DIR}")"
   r="$(count_files "${RUNNING_DIR}")"
-  d="$(count_files "${DONE_DIR}")"
+  d="$(count_files ${DONE_DIR})"
   echo "queue:   ${q}"
   echo "running: ${r}"
   echo "done:    ${d}"
@@ -29,11 +39,20 @@ if [[ $# -eq 0 ]]; then
   printf '%-50s | %-8s | %-9s | %s\n' "JOB_ID" "STATUS" "EXIT" "WORKER"
   printf -- '---------------------------------------------------+----------+-----------+----------\n'
   ls -1t "${DONE_DIR}"/*.json 2>/dev/null | head -10 | while read -r f; do
-    python3 -c '
+#    python3 -c '
+# import json, sys
+#d = json.load(open(sys.argv[1]))
+#print(f"{d[\"job_id\"][:50]:<50} | {d.get(\"status\",\"?\"):<8} | {str(d.get(\"exit_code\",\"-\")):<9} | {d.get(\"worker\",\"-\")}")
+#' "$f"
+ python3 - "$f" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-print(f"{d[\"job_id\"][:50]:<50} | {d.get(\"status\",\"?\"):<8} | {str(d.get(\"exit_code\",\"-\")):<9} | {d.get(\"worker\",\"-\")}")
-' "$f"
+print(f"{d['job_id'][:50]:<50} | {d.get('status','?'):<8} | {str(d.get('exit_code','-')):<9} | {d.get('worker','-')}")
+PY
+
+
+
+
   done
   exit 0
 fi
@@ -43,11 +62,16 @@ case "$1" in
     [[ $# -lt 2 ]] && { echo "--recent <N>" >&2; exit 64; }
     N="$2"
     ls -1t "${DONE_DIR}"/*.json 2>/dev/null | head -"${N}" | while read -r f; do
-      python3 -c '
+#      python3 -c '
+#import json, sys
+#d = json.load(open(sys.argv[1]))
+#print(f"{d[\"job_id\"]} | {d.get(\"status\",\"?\"):<8} | exit={d.get(\"exit_code\",\"-\")} | {d.get(\"worker\",\"-\")}")
+#' "$f"
+    python3 - "$f" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
-print(f"{d[\"job_id\"]} | {d.get(\"status\",\"?\"):<8} | exit={d.get(\"exit_code\",\"-\")} | {d.get(\"worker\",\"-\")}")
-' "$f"
+print(f"{d['job_id'][:50]:<50} | {d.get('status','?'):<8} | {str(d.get('exit_code','-')):<9} | {d.get('worker','-')}")
+PY
     done
     ;;
   --job)
