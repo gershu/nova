@@ -73,11 +73,15 @@ source "${VENV_DIR}/bin/activate"
 # und die relativen --watchlist / --settings Pfade aufloesen.
 cd "${JOB_SRC_DIR}"
 
+<<<<<<< Updated upstream
 echo "==> csp_scanner config:"
 echo "    watchlist : ${WATCHLIST_PATH}"
 echo "    settings  : ${SETTINGS_PATH}"
 
 exec python -m src.main \
+=======
+exec "${VENV_DIR}/bin/python" -m src.main \
+>>>>>>> Stashed changes
     --watchlist "${WATCHLIST_PATH}" \
     --settings "${SETTINGS_PATH}" \
     "$@"

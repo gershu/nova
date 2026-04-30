@@ -106,6 +106,7 @@ VENV_DIR="${REPO_DIR}/.venv"
 REQ_FILE="${REPO_DIR}/requirements.txt"
 LOCK_FILE="${REPO_DIR}/requirements-lock.txt"
 PY_VERSION_FILE="${REPO_DIR}/.python-version"
+PY_VERSION=""
 
 # pyenv-Setup (init laden, falls vorhanden — node_bootstrap installiert pyenv via brew).
 if command -v pyenv >/dev/null 2>&1; then
@@ -123,6 +124,16 @@ if command -v pyenv >/dev/null 2>&1; then
   fi
 else
   echo "    WARN: pyenv nicht im PATH — verwende System-python3."
+fi
+
+if [[ -n "${PY_VERSION}" && -x "${VENV_DIR}/bin/python" ]]; then
+  VENV_PY_VERSION="$("${VENV_DIR}/bin/python" -c 'import platform; print(platform.python_version())')"
+  if [[ "${VENV_PY_VERSION}" != "${PY_VERSION}" ]]; then
+    VENV_BACKUP="${VENV_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+    echo "    WARN: venv nutzt Python ${VENV_PY_VERSION}, erwartet ${PY_VERSION}."
+    echo "    BACKUP: ${VENV_DIR} -> ${VENV_BACKUP}"
+    mv "${VENV_DIR}" "${VENV_BACKUP}"
+  fi
 fi
 
 # venv anlegen, falls nicht vorhanden. cd ins Repo, damit pyenv die
@@ -149,6 +160,14 @@ elif [[ -f "${REQ_FILE}" ]]; then
   "${VENV_DIR}/bin/pip" install --quiet -r "${REQ_FILE}"
 else
   echo "    WARN: weder requirements-lock.txt noch requirements.txt gefunden."
+fi
+
+# csp_scanner importiert das Modul als `yaml`; das Paket heisst bei pip
+# `PyYAML`. Defensiver Import-Check, damit ein veralteter/kaputter Lock-Stand
+# nicht erst beim Workload als ModuleNotFoundError auffaellt.
+if ! "${VENV_DIR}/bin/python" -c 'import yaml' >/dev/null 2>&1; then
+  echo "    WARN: Python-Modul 'yaml' fehlt — installiere PyYAML..."
+  "${VENV_DIR}/bin/pip" install --quiet 'PyYAML>=6,<7'
 fi
 
 # --- 5) Workload-Repos (Sibling-Repos) --------------------------------------
