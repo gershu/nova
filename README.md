@@ -254,16 +254,48 @@ Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz
    automatisch sourced. Die Variablen sind danach als `os.environ.*`
    in Python sichtbar. Änderung: Datei direkt editieren, sofort
    wirksam. Kein Deploy nötig.
-3. **Tier 3 — Per-Invocation Args** (Command-Line). `run.sh "$@"`
-   reicht alles weitere an Python durch. Für one-off Overrides.
+3. **Tier 3 — Per-Invocation** kommt über zwei Wege:
+   - **JSON-Params via `NOVA_PARAMS_FILE`** (gesetzt durch `nova_run.sh`/
+     `nova_submit.sh` mit `--params-file`). Der Workload-Wrapper liest
+     definierte Felder aus dem JSON und überschreibt damit Tier-1/Tier-2.
+   - **Command-Line-Args via `run.sh "$@"`** — wird unverändert an Python
+     durchgereicht.
+   Späterer Tier gewinnt.
 
-`run.sh`-Files exposen Tier-2-Hooks für die wichtigsten Werte. Beispiel
-csp_scanner:
+`run.sh`-Files exponieren Tier-2- und Tier-3-Hooks für die wichtigsten
+Werte. Beispiel csp_scanner:
 
 ```bash
-WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST:-config/watchlist.yaml}"
-SETTINGS_PATH="${CSP_SCANNER_SETTINGS:-config/settings.yaml}"
+# Tier 1 default
+WATCHLIST_PATH="config/watchlist.yaml"
+SETTINGS_PATH="config/settings.yaml"
+
+# Tier 2 — per-Node aus ~/.nova_env
+[[ -n "${CSP_SCANNER_WATCHLIST:-}" ]] && WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST}"
+[[ -n "${CSP_SCANNER_SETTINGS:-}"  ]] && SETTINGS_PATH="${CSP_SCANNER_SETTINGS}"
+
+# Tier 3 — per-Job aus NOVA_PARAMS_FILE (wenn nova_submit verwendet)
+# JSON: {"watchlist": "config/foo.yaml", "settings": "config/bar.yaml"}
+# (siehe csp_scanner/run.sh fuer den Auflöse-Block)
 ```
+
+Anwendungsbeispiele für csp_scanner:
+
+```bash
+# Einmalig anders auf nova-w2 (per ~/.nova_env):
+echo 'export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml' >> ~/.nova_env
+
+# Per-Job anders (per JSON-Params):
+cat > ~/jobs/aapl_only.json <<'EOF'
+{"watchlist": "config/watchlist_aapl.yaml"}
+EOF
+nova_submit.sh csp_scanner nova-w1 --params-file ~/jobs/aapl_only.json
+```
+
+Voraussetzung für Tier 3 mit csp_scanner: die referenzierte YAML
+(`config/watchlist_aapl.yaml`) muss im **csp_scanner-Repo** existieren
+und committed/gepusht sein — nicht in nova. csp_scanner-Side Arbeit:
+verschiedene Watchlist-Varianten als separate yaml-Files committen.
 
 Setze `CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml` in `~/.nova_env`
 auf nova-w2, und der Default ist überschrieben — ohne dass du die

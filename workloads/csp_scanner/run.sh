@@ -21,9 +21,24 @@ VENV_DIR="${REPO_DIR}/.venv"
 JOB_SRC_DIR="${NOVA_CSP_SCANNER_DIR:-$HOME/csp_scanner}"
 OUTPUT_DIR="${HOME}/nova_output/csp_scanner"
 
-# Tier 2 Overrides fuer die Configs (defaults bleiben repo-tracked):
-WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST:-config/watchlist.yaml}"
-SETTINGS_PATH="${CSP_SCANNER_SETTINGS:-config/settings.yaml}"
+# 3-Tier Konfig-Hierarchie fuer Watchlist + Settings:
+#   Tier 1 — Defaults (csp_scanner-Repo Files)
+WATCHLIST_PATH="config/watchlist.yaml"
+SETTINGS_PATH="config/settings.yaml"
+
+#   Tier 2 — Per-Node-Override aus ~/.nova_env (CSP_SCANNER_WATCHLIST/CSP_SCANNER_SETTINGS)
+[[ -n "${CSP_SCANNER_WATCHLIST:-}" ]] && WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST}"
+[[ -n "${CSP_SCANNER_SETTINGS:-}"  ]] && SETTINGS_PATH="${CSP_SCANNER_SETTINGS}"
+
+#   Tier 3 — Per-Job-Override aus NOVA_PARAMS_FILE (nova_submit JSON)
+#   JSON-Format: {"watchlist": "config/foo.yaml", "settings": "config/bar.yaml"}
+#   Beide Felder optional; was nicht gesetzt ist behaelt den Tier-2/Tier-1-Wert.
+if [[ -n "${NOVA_PARAMS_FILE:-}" && -f "${NOVA_PARAMS_FILE}" ]]; then
+  override_wl="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("watchlist",""))' "${NOVA_PARAMS_FILE}" 2>/dev/null || true)"
+  override_st="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("settings",""))'  "${NOVA_PARAMS_FILE}" 2>/dev/null || true)"
+  [[ -n "${override_wl}" ]] && WATCHLIST_PATH="${override_wl}"
+  [[ -n "${override_st}" ]] && SETTINGS_PATH="${override_st}"
+fi
 
 if [[ ! -d "${VENV_DIR}" ]]; then
   echo "Fehler: venv ${VENV_DIR} nicht gefunden — erst node_deploy.sh ausfuehren." >&2
@@ -57,6 +72,10 @@ source "${VENV_DIR}/bin/activate"
 # CWD = csp_scanner-Repo, damit `python -m src.main` das src/-Package findet
 # und die relativen --watchlist / --settings Pfade aufloesen.
 cd "${JOB_SRC_DIR}"
+
+echo "==> csp_scanner config:"
+echo "    watchlist : ${WATCHLIST_PATH}"
+echo "    settings  : ${SETTINGS_PATH}"
 
 exec python -m src.main \
     --watchlist "${WATCHLIST_PATH}" \
