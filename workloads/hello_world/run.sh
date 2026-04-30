@@ -9,6 +9,19 @@
 #   ~/nova/workloads/hello_world/run.sh
 #   ssh nova-w1 '~/nova/workloads/hello_world/run.sh'
 
+
+print_args() {
+  echo "Anzahl Parameter: $#"
+
+  local i=1
+  for arg in "$@"; do
+    echo "[$i] $arg"
+    i=$((i + 1))
+  done
+}
+
+print_args "$@"
+
 set -euo pipefail
 
 # Per-Node Overrides laden (Tier 2: ~/.nova_env, gitignored, nicht auto-deployed).
@@ -24,6 +37,29 @@ if [[ ! -d "${VENV_DIR}" ]]; then
   echo "Fehler: venv ${VENV_DIR} nicht gefunden — erst node_deploy.sh ausfuehren." >&2
   exit 1
 fi
+
+
+wait_with_progress() {
+  local seconds="${1:-20}"
+  local label="${2:-wait}"
+
+  echo "$(date '+%Y-%m-%d %H:%M:%S') START ${label}: ${seconds}s"
+
+  for ((i=1; i<=seconds; i++)); do
+    printf "\r[%3d/%3d] %s" "$i" "$seconds" "$label"
+    sleep 1
+  done
+
+  printf "\n"
+  echo "$(date '+%Y-%m-%d %H:%M:%S') END   ${label}: ${seconds}s"
+}
+
+wait_with_progress 20 "nova pause"
+
+
+
+
+
 
 # venv aktivieren (setzt PATH + VIRTUAL_ENV)
 # shellcheck disable=SC1091
