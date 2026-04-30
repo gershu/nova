@@ -7,14 +7,8 @@
 #
 # Aufruf:
 #   ~/nova/workloads/hello_world/run.sh
-#   ssh nova-w1 '~/nova/workloads/hello_world/run.sh'
-
+#   ssh nova-prod '~/nova/workloads/hello_world/run.sh'
 set -euo pipefail
-
-# Per-Node Overrides laden (Tier 2: ~/.nova_env, gitignored, nicht auto-deployed).
-# Idempotent: macht nichts, falls die Datei fehlt.
-# shellcheck disable=SC1091
-[[ -f "$HOME/.nova_env" ]] && source "$HOME/.nova_env"
 
 REPO_DIR="${NOVA_REPO_DIR:-$HOME/nova}"
 VENV_DIR="${REPO_DIR}/.venv"

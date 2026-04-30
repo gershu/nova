@@ -3,7 +3,9 @@
 #
 # Idempotent:
 #   1. git pull (nova-Repo aktualisieren)
-#   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/)
+#   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/) +
+#      auf hub: Status-Check des Picker-LaunchDaemons (Install via
+#      scripts/install_picker.sh einmalig + sudo)
 #   3. brew bundle (Software installieren/aktualisieren)
 #   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
 #      pip install -r requirements-lock.txt
@@ -63,6 +65,20 @@ link_file "${REPO_DIR}/dotfiles/zsh/.p10k.zsh"  "$HOME/.p10k.zsh"
 link_file "${REPO_DIR}/dotfiles/ssh/config"     "$HOME/.ssh/config"
 link_file "${REPO_DIR}/dotfiles/git/.gitconfig" "$HOME/.gitconfig"
 link_file "${REPO_DIR}/dotfiles/vim/.vimrc"     "$HOME/.vimrc"
+
+# Hub-only: Picker-Status-Check.
+# Der Picker laeuft als LaunchDaemon (NICHT LaunchAgent) — Initial-Install
+# braucht sudo und wird einmalig manuell via scripts/install_picker.sh
+# durchgefuehrt. node_deploy.sh kann ihn nicht selbst installieren (laeuft
+# als novaadm ohne sudo); deshalb nur informativer Check.
+if [[ "$(hostname -s 2>/dev/null || hostname)" == "nova-hub" ]]; then
+  if launchctl print "system/de.gershu.nova.picker" >/dev/null 2>&1; then
+    echo "    (hub) Picker LaunchDaemon laeuft."
+  else
+    echo "    (hub) HINWEIS: Picker LaunchDaemon nicht aktiv." >&2
+    echo "                 Einmalig installieren: sudo ${REPO_DIR}/scripts/install_picker.sh" >&2
+  fi
+fi
 
 # --- 3) brew bundle ---------------------------------------------------------
 echo "==> [3/5] brew bundle ..."

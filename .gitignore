@@ -17,3 +17,7 @@ workloads/*/output
 # Per-Node Tier-2 Overrides (sollten unter ~/.nova_env liegen, nie im Repo).
 # Defensive: falls jemand versehentlich .nova_env im Repo anlegt.
 .nova_env
+
+# Job-Queue-State (per-Node lokal in ~/nova_jobs/, nicht im Repo).
+# Defensive falls jemand versehentlich nova_jobs/ im Repo anlegt.
+nova_jobs/

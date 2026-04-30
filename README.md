@@ -41,6 +41,8 @@ nova/
 ├── dotfiles/zsh/
 │   ├── .zshrc                  # gesymlinkt nach ~/.zshrc
 │   └── .p10k.zsh               # Prompt mit NOVA_ROLE-Farben
+├── dotfiles/launchd/
+│   └── de.gershu.nova.picker.plist  # launchd-Daemon fuer nova_picker (nur hub)
 ├── workloads/                  # Job-Wrapper (siehe Konvention unten)
 │   ├── hello_world/            # Embedded-Workload (Code im nova-Repo)
 │   │   ├── run.sh
@@ -53,7 +55,11 @@ nova/
 │   ├── node_bootstrap.sh       # auf neuem Node: brew + Repo-Clone + erstes Deploy
 │   ├── node_deploy.sh          # auf jedem Node: pull + dotfiles + brew + venv + workload-repos
 │   ├── cluster_status.sh       # auf nova-hub: liest nodes.yaml, polled Worker via SSH
-│   └── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (mit Params)
+│   ├── nova_run.sh             # auf nova-hub: Workload an Worker dispatchen (synchron, Phase 0)
+│   ├── nova_submit.sh          # auf nova-hub: Job-Spec ins ~/nova_jobs/queue/ schreiben (Phase 1)
+│   ├── nova_picker.sh          # auf nova-hub via launchd: Queue abarbeiten, dispatch via nova_run.sh
+│   ├── nova_status.sh          # auf nova-hub: Job-Queue-Übersicht / Detail / Log
+│   └── install_picker.sh       # einmaliger sudo-Setup des Picker-LaunchDaemon auf nova-hub
 └── config/
     ├── nodes.yaml              # Node-Inventar (Worker + Capability-Metadaten)
     └── workload_repos.txt      # externe Repos, die node_deploy.sh nach ~/<dir> klont/pullt
@@ -248,16 +254,48 @@ Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz
    automatisch sourced. Die Variablen sind danach als `os.environ.*`
    in Python sichtbar. Änderung: Datei direkt editieren, sofort
    wirksam. Kein Deploy nötig.
-3. **Tier 3 — Per-Invocation Args** (Command-Line). `run.sh "$@"`
-   reicht alles weitere an Python durch. Für one-off Overrides.
+3. **Tier 3 — Per-Invocation** kommt über zwei Wege:
+   - **JSON-Params via `NOVA_PARAMS_FILE`** (gesetzt durch `nova_run.sh`/
+     `nova_submit.sh` mit `--params-file`). Der Workload-Wrapper liest
+     definierte Felder aus dem JSON und überschreibt damit Tier-1/Tier-2.
+   - **Command-Line-Args via `run.sh "$@"`** — wird unverändert an Python
+     durchgereicht.
+   Späterer Tier gewinnt.
 
-`run.sh`-Files exposen Tier-2-Hooks für die wichtigsten Werte. Beispiel
-csp_scanner:
+`run.sh`-Files exponieren Tier-2- und Tier-3-Hooks für die wichtigsten
+Werte. Beispiel csp_scanner:
 
 ```bash
-WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST:-config/watchlist.yaml}"
-SETTINGS_PATH="${CSP_SCANNER_SETTINGS:-config/settings.yaml}"
+# Tier 1 default
+WATCHLIST_PATH="config/watchlist.yaml"
+SETTINGS_PATH="config/settings.yaml"
+
+# Tier 2 — per-Node aus ~/.nova_env
+[[ -n "${CSP_SCANNER_WATCHLIST:-}" ]] && WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST}"
+[[ -n "${CSP_SCANNER_SETTINGS:-}"  ]] && SETTINGS_PATH="${CSP_SCANNER_SETTINGS}"
+
+# Tier 3 — per-Job aus NOVA_PARAMS_FILE (wenn nova_submit verwendet)
+# JSON: {"watchlist": "config/foo.yaml", "settings": "config/bar.yaml"}
+# (siehe csp_scanner/run.sh fuer den Auflöse-Block)
 ```
+
+Anwendungsbeispiele für csp_scanner:
+
+```bash
+# Einmalig anders auf nova-w2 (per ~/.nova_env):
+echo 'export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml' >> ~/.nova_env
+
+# Per-Job anders (per JSON-Params):
+cat > ~/jobs/aapl_only.json <<'EOF'
+{"watchlist": "config/watchlist_aapl.yaml"}
+EOF
+nova_submit.sh csp_scanner nova-w1 --params-file ~/jobs/aapl_only.json
+```
+
+Voraussetzung für Tier 3 mit csp_scanner: die referenzierte YAML
+(`config/watchlist_aapl.yaml`) muss im **csp_scanner-Repo** existieren
+und committed/gepusht sein — nicht in nova. csp_scanner-Side Arbeit:
+verschiedene Watchlist-Varianten als separate yaml-Files committen.
 
 Setze `CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml` in `~/.nova_env`
 auf nova-w2, und der Default ist überschrieben — ohne dass du die
@@ -284,7 +322,7 @@ divergieren (das ist der Sinn).
 ~/nova/workloads/csp_scanner/run.sh
 ```
 
-**Remote vom Hub via Dispatcher** (Standard-Pfad):
+**Remote vom Hub via Dispatcher** (Standard-Pfad, synchron):
 
 ```bash
 ~/nova/scripts/nova_run.sh hello_world nova-w1
@@ -300,9 +338,48 @@ divergieren (das ist der Sinn).
 - ssh'd, streamt stdout/stderr live, gibt den Remote-Exit-Code zurück
 - räumt die Params-Datei nach dem Run auf
 
-Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein Scheduler,
-keine Lastverteilung, keine Job-Queue. Output landet auf stdout/stderr des
-Aufrufers + im per-Node `~/nova_output/<job>/` (kein zentrales Logging im Scope).
+**Asynchron via Job-Queue + Picker** (Phase-1-Variante):
+
+```bash
+# Job einreichen (return't sofort mit Job-ID)
+JOB_ID=$(~/nova/scripts/nova_submit.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json)
+
+# Status abfragen
+~/nova/scripts/nova_status.sh                    # Counts + letzte 10 Done
+~/nova/scripts/nova_status.sh --job "${JOB_ID}"  # voller Spec inkl. exit_code
+~/nova/scripts/nova_status.sh --log "${JOB_ID}"  # stdout/stderr des Runs
+```
+
+Mechanik:
+- `nova_submit.sh` schreibt Job-Spec (JSON, mit inlined Params) atomar in
+  `~/nova_jobs/queue/<id>.json`.
+- `nova_picker.sh` läuft per launchd-**Daemon** alle 10s auf nova-hub. Per
+  Iteration: claimed via mv nach `running/`, dispatcht via `nova_run.sh`,
+  schreibt Result + log_path nach `done/<id>.json`.
+- Concurrency-Schutz: mkdir-basierter Lock — kein Doppel-Pickup wenn ein
+  Job länger läuft als das Polling-Intervall.
+- Fehler-Workflow: bei exit ≠ 0 wird `status: failed` ins JSON geschrieben,
+  Job landet trotzdem in done/. Re-Submit ist manuell.
+
+**LaunchDaemon-Setup auf nova-hub** (einmalig, mit sudo):
+
+```bash
+# auf nova-hub als novaadm:
+sudo ~/nova/scripts/install_picker.sh
+```
+
+Das kopiert die plist nach `/Library/LaunchDaemons/`, setzt root:wheel +
+mode 644, und bootstrap't den Daemon im system-Kontext. Er läuft als
+`novaadm` (per `UserName`-Key), startet automatisch beim Boot, **braucht
+keine Login-Session** (LaunchAgent würde das brauchen — funktioniert nicht
+auf headless Hubs, die nur via SSH bedient werden).
+
+`node_deploy.sh` installiert den Daemon nicht selbst (kann nicht sudo'n);
+es checkt nur ob er aktiv ist und gibt einen Hinweis aus, falls nicht.
+
+Welcher Node welchen Job ausführt entscheidet der Aufrufer — kein
+Capability-basierter Auto-Dispatch (steht für eine spätere Phase, sobald
+Tags aus `nodes.yaml` mit Workload-Anforderungen gematcht werden sollen).
 
 ### Parameter-Konvention für Workloads
 
