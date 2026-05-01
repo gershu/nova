@@ -81,16 +81,22 @@ if ! command -v yq >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' \
-       "${NODES_FILE}" | grep "${WORKER}"; then
+if ! yq -r '.nodes | to_entries | .[] | select(.value.roles[]? == "worker") | .key' \
+       "${NODES_FILE}" | grep -qx "${WORKER}"; then
   echo "Fehler: '${WORKER}' ist kein bekannter Worker in ${NODES_FILE}." >&2
   echo "Bekannte Worker:" >&2
-  yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' \
+  yq -r '.nodes | to_entries | .[] | select(.value.roles[]? == "worker") | .key' \
        "${NODES_FILE}" | sed 's/^/  - /' >&2
   exit 1
 fi
 
-# ---------- Params-File optional auf Worker shippen ----------
+# ---------- Local vs Remote Dispatch entscheiden ----------
+# Wenn target == self (nova-hub als Worker), spar SSH-Hop und ruf direkt lokal.
+LOCAL_HOST="$(hostname -s 2>/dev/null || hostname)"
+IS_LOCAL=0
+[[ "${WORKER}" == "${LOCAL_HOST}" ]] && IS_LOCAL=1
+
+# ---------- Params-File optional auf Worker shippen (nur remote) ----------
 REMOTE_PARAMS=""
 if [[ -n "${PARAMS_FILE}" ]]; then
   if [[ ! -f "${PARAMS_FILE}" ]]; then
@@ -98,32 +104,48 @@ if [[ -n "${PARAMS_FILE}" ]]; then
     exit 1
   fi
 
-  # Eindeutiger Pfad auf dem Worker (vermeidet Race bei concurrent Aufrufen)
-  REMOTE_PARAMS="/tmp/nova_params_$(date +%s)_$$_$(basename "${PARAMS_FILE}")"
-  echo "==> Shippe ${PARAMS_FILE} -> ${WORKER}:${REMOTE_PARAMS}"
-  scp -q "${PARAMS_FILE}" "${WORKER}:${REMOTE_PARAMS}"
+  if [[ ${IS_LOCAL} -eq 1 ]]; then
+    # Lokaler Aufruf — Params-File wird nicht gescpd, direkt nutzen
+    REMOTE_PARAMS="${PARAMS_FILE}"
+  else
+    # Remote — auf Worker shippen
+    REMOTE_PARAMS="/tmp/nova_params_$(date +%s)_$$_$(basename "${PARAMS_FILE}")"
+    echo "==> Shippe ${PARAMS_FILE} -> ${WORKER}:${REMOTE_PARAMS}"
+    scp -q "${PARAMS_FILE}" "${WORKER}:${REMOTE_PARAMS}"
+  fi
 fi
 
-# ---------- Remote-Aufruf bauen + ausfuehren ----------
-REMOTE_CMD="~/nova/workloads/${WORKLOAD}/run.sh"
-if [[ -n "${REMOTE_PARAMS}" ]]; then
-  REMOTE_CMD="NOVA_PARAMS_FILE=${REMOTE_PARAMS} ${REMOTE_CMD}"
-fi
+# ---------- Aufruf ausfuehren ----------
+if [[ ${IS_LOCAL} -eq 1 ]]; then
+  echo "==> Local dispatch (target == self): ${WORKLOAD}"
+  [[ -n "${REMOTE_PARAMS}" ]] && echo "    NOVA_PARAMS_FILE=${REMOTE_PARAMS}"
+  echo
 
-echo "==> Dispatch: ${WORKLOAD} -> ${WORKER}"
-echo "    ${REMOTE_CMD} $*"
-echo
+  set +e
+  if [[ -n "${REMOTE_PARAMS}" ]]; then
+    NOVA_PARAMS_FILE="${REMOTE_PARAMS}" "${WORKLOAD_RUN}" "$@"
+  else
+    "${WORKLOAD_RUN}" "$@"
+  fi
+  RC=$?
+  set -e
+else
+  REMOTE_CMD="~/nova/workloads/${WORKLOAD}/run.sh"
+  [[ -n "${REMOTE_PARAMS}" ]] && REMOTE_CMD="NOVA_PARAMS_FILE=${REMOTE_PARAMS} ${REMOTE_CMD}"
 
-# stdin geschlossen (sonst klauten ssh-Calls evtl. lokales stdin),
-# stdout/stderr stream live.
-set +e
-ssh -n "${WORKER}" "${REMOTE_CMD} $*"
-RC=$?
-set -e
+  echo "==> Dispatch: ${WORKLOAD} -> ${WORKER}"
+  echo "    ${REMOTE_CMD} $*"
+  echo
 
-# ---------- Cleanup ----------
-if [[ -n "${REMOTE_PARAMS}" ]]; then
-  ssh -n "${WORKER}" "rm -f ${REMOTE_PARAMS}" 2>/dev/null || true
+  # stdin geschlossen (sonst klauten ssh-Calls evtl. lokales stdin),
+  # stdout/stderr stream live.
+  set +e
+  ssh -n "${WORKER}" "${REMOTE_CMD} $*"
+  RC=$?
+  set -e
+
+  # Cleanup remote tmp file
+  [[ -n "${REMOTE_PARAMS}" ]] && ssh -n "${WORKER}" "rm -f ${REMOTE_PARAMS}" 2>/dev/null || true
 fi
 
 echo

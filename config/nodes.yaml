@@ -15,22 +15,23 @@
 
 nodes:
   nova-hub:
-    role: hub
+    roles: [hub, worker]
     chip: x86_64
     ram_gb: 16
     os: macos-15
-    tags: [compute-heavy, ib-capable]
-    notes: "MacMini Intel, Control Plane"
-    
+    tags: [compute-heavy, ib-capable, ib-host]
+    notes: "MacMini Intel, Control Plane + Worker (TWS-Co-Location, ib-host)"
+
   nova-w1:
-    role: worker
+    roles: [worker]
     chip: arm64
     ram_gb: 16
     os: macos-15
+    tags: [compute-heavy]
     notes: "MacbookPro M1 Apple Silicon, Editor und Worker"
 
   nova-w2:
-    role: worker
+    roles: [worker]
     chip: x86_64
     ram_gb: 8
     os: macos-15
@@ -39,7 +40,7 @@ nodes:
 
   # Neu zu provisionieren — Eintraege spaeter mit echten Werten ueberschreiben:
   nova-w3:
-    role: worker
+    roles: [worker]
     chip: TBD
     ram_gb: 0
     os: TBD

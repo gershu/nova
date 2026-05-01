@@ -142,7 +142,10 @@ Auf nova-hub:
 ~/nova/scripts/cluster_status.sh
 ```
 
-Liest `config/nodes.yaml` und pollt alle Worker (`role: worker`) per SSH.
+Liest `config/nodes.yaml` und pollt alle Worker (`roles` enthält `worker`) per SSH.
+nova-hub kann Mehrfach-Rollen tragen (`roles: [hub, worker]`); in dem Fall
+wird er nicht via SSH gepollt (er ist ja der Pollende), die Worker-Rolle
+ermöglicht aber Workload-Dispatch zu sich selbst (siehe nova_run.sh).
 Zeigt pro Worker: Reachability, Uptime, letzter Commit-SHA, Brewfile-Drift,
 Capability-Tags aus dem Inventar.
 
@@ -331,7 +334,11 @@ divergieren (das ist der Sinn).
 ```
 
 `nova_run.sh`:
-- validiert dass der Workload existiert und der Worker in `nodes.yaml` (role=worker) steht
+- validiert dass der Workload existiert und der Worker in `nodes.yaml` (`roles` enthält `worker`) steht
+- erkennt Self-Dispatch (target == eigener Hostname) und ruft `run.sh` direkt
+  lokal auf (kein SSH-Hop, keine scp). Wichtig für nova-hub mit
+  `roles: [hub, worker]` — IB-Workloads laufen damit lokal gegen TWS auf
+  127.0.0.1, ohne Source-IP-Filter.
 - shipt optional eine Params-Datei via scp auf den Worker und exportiert
   `NOVA_PARAMS_FILE` mit dem Remote-Pfad (Workload kann's per
   `os.environ.get('NOVA_PARAMS_FILE')` lesen + JSON parsen)

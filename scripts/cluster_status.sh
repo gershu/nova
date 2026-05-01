@@ -29,17 +29,17 @@ if ! command -v yq >/dev/null 2>&1; then
   exit 1
 fi
 
-# Debug: Bash-Version ausgeben
-echo "[DEBUG] Bash-Version: $BASH_VERSION"
-echo "[DEBUG] yq-Ausgabe für Worker-Keys:"
-yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}"
+# Liste aller Worker-Namen (roles enthaelt "worker") aus nodes.yaml extrahieren.
+# nova-hub kann sowohl hub als auch worker sein (Mehrfach-Rolle) — wir pollen
+# allerdings den Hub nicht via SSH (er ist ja der Pollende). Skip wenn Hostname
+# == eigener Hostname.
+LOCAL_HOST="$(hostname -s 2>/dev/null || hostname)"
 
-# Liste aller Worker-Namen (role: worker) aus nodes.yaml extrahieren (kompatibel mit Bash 3.2)
 WORKERS=()
 while IFS= read -r line; do
+  [[ "${line}" == "${LOCAL_HOST}" ]] && continue   # self-skip
   WORKERS+=("$line")
-done < <(yq -r '.nodes | to_entries | .[] | select(.value.role == "worker") | .key' "${NODES_FILE}")
-echo "[DEBUG] WORKERS-Array: ${WORKERS[*]}"
+done < <(yq -r '.nodes | to_entries | .[] | select(.value.roles[]? == "worker") | .key' "${NODES_FILE}")
 
 if [[ ${#WORKERS[@]} -eq 0 ]]; then
   echo "Hinweis: keine Worker in ${NODES_FILE} (role=worker) gefunden." >&2
