@@ -39,7 +39,7 @@ WORKERS=()
 while IFS= read -r line; do
   [[ "${line}" == "${LOCAL_HOST}" ]] && continue   # self-skip
   WORKERS+=("$line")
-done < <(yq -r '.nodes | to_entries | .[] | select(.value.roles[]? == "worker") | .key' "${NODES_FILE}")
+done < <(yq -r '.nodes | to_entries | .[] | select(.value.roles | contains(["worker"])) | .key' "${NODES_FILE}")
 
 if [[ ${#WORKERS[@]} -eq 0 ]]; then
   echo "Hinweis: keine Worker in ${NODES_FILE} (role=worker) gefunden." >&2
