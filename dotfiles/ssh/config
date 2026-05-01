@@ -8,6 +8,8 @@ Host nova-hub
   HostName nova-hub.local
   User novaadm
   IdentityFile ~/.ssh/id_ed25519
+  ServerAliveInterval 30      
+  ServerAliveCountMax 3       
 
 Host nova-w1
   HostName nova-w1.local
