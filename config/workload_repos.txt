@@ -11,3 +11,4 @@
 # Kommentare mit '#'. Leerzeilen ignoriert.
 
 csp_scanner git@github.com:gershu/csp_scanner.git
+nova-lab git@github.com:gershu/nova-lab.git
