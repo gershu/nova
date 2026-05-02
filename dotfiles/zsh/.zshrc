@@ -122,3 +122,6 @@ unset LC_ALL
 [[ -f ~/.p10k.zsh ]] && source ~/.p10k.zsh
 
 # ---------- Ende ----------
+
+test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
+
