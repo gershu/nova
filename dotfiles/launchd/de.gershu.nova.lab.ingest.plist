@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab daily-ingest LaunchDaemon fuer nova-hub (MacMini, headless).
+
+  Wie der Picker (de.gershu.nova.picker.plist) als LaunchDaemon
+  installiert — bindet nicht an User-Login-Session.
+
+  StartCalendarInterval triggert taeglich um 23:00 lokaler Zeit
+  (nach US-Markt-Close 22:00 Zuerich + 1h Puffer fuer EOD-Bereitstellung).
+
+  Triggert lab_ingest_daily.sh, welches einen Job an die nova-Queue
+  submitted. Picker holt's beim naechsten 10s-Tick.
+
+  Initial-Setup: scripts/install_lab_ingest_daemon.sh (analog zu
+  install_picker.sh).
+
+  Logs: /Users/novaadm/Library/Logs/nova-lab-ingest.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.ingest</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_ingest_daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-ingest.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-ingest.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
