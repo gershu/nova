@@ -62,7 +62,7 @@ if ! command -v yq >/dev/null 2>&1; then
 fi
 
 if ! yq -r '.nodes | to_entries | .[] | select(.value.roles | contains(["worker"])) | .key' \
-       "${NODES_FILE}" | grep -qx "${WORKER}"; then
+       "${NODES_FILE}" | grep "${WORKER}"; then
   echo "Fehler: '${WORKER}' ist kein bekannter Worker in ${NODES_FILE}." >&2
   exit 1
 fi
