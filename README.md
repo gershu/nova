@@ -243,6 +243,17 @@ relativ nach `output/` schreibt, automatisch im richtigen Ziel landet
 ohne Code-Änderung. Der Symlink ist via `.gitignore` (workloads/*/output)
 ausgeschlossen.
 
+**Zentrale Output-Sammlung auf hub** (durch Picker, nach jedem erfolgreichen
+Job): `~/nova_output_central/<workload>/<job_id>/` enthält einen Snapshot
+des Worker-Output-Verzeichnisses zum Zeitpunkt des Job-Abschlusses. Bei
+Self-Dispatch (worker == hub) wird lokal gespiegelt; bei Remote-Worker
+via `rsync -a worker:nova_output/<workload>/`.
+
+Vorteil: alle Outputs aller Worker an einem Ort, mit Job-Provenienz
+(`<job_id>` matched gegen `~/nova_jobs/done/<job_id>.json`). Worker-lokale
+Kopie in `~/nova_output/` bleibt **unangetastet** als Backup. Cleanup
+beider Pfade ist manuell — kein automatisches Löschen.
+
 ### Konfigurations-Hierarchie (3 Tiers)
 
 Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz

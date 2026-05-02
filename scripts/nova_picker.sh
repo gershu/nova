@@ -110,6 +110,28 @@ PY
 
   [[ -n "${params_file}" ]] && rm -f "${params_file}"
 
+  # Output-Sammlung — bei Erfolg den Workload-Output vom Worker nach
+  # ~/nova_output_central/<workload>/<job_id>/ spiegeln. Per-Job-Snapshot.
+  # Worker-lokale Kopie (~/nova_output/<workload>/) bleibt unangetastet.
+  if [[ ${rc} -eq 0 ]]; then
+    central_dir="${HOME}/nova_output_central/${workload}/${job_id}"
+    mkdir -p "${central_dir}"
+    local_host="$(hostname -s 2>/dev/null || hostname)"
+    if [[ "${worker}" == "${local_host}" ]]; then
+      # Self-Dispatch: lokale Kopie
+      src_dir="${HOME}/nova_output/${workload}"
+      if [[ -d "${src_dir}" ]]; then
+        rsync -a "${src_dir}/" "${central_dir}/" >>"${log_file}" 2>&1 || \
+          echo "[$(date -u +%FT%TZ)] WARN: lokales rsync fuer ${job_id} fehlgeschlagen" >&2
+      fi
+    else
+      # Remote: pull vom Worker via SSH (rsync --files-from=- nicht noetig,
+      # ganzer Workload-Output-Dir wird gespiegelt — bei kleinen Output-Files OK)
+      rsync -a "${worker}:nova_output/${workload}/" "${central_dir}/" >>"${log_file}" 2>&1 || \
+        echo "[$(date -u +%FT%TZ)] WARN: rsync von ${worker} fuer ${job_id} fehlgeschlagen" >&2
+    fi
+  fi
+
   completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   status="success"
   [[ ${rc} -ne 0 ]] && status="failed"

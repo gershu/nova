@@ -21,3 +21,8 @@ workloads/*/output
 # Job-Queue-State (per-Node lokal in ~/nova_jobs/, nicht im Repo).
 # Defensive falls jemand versehentlich nova_jobs/ im Repo anlegt.
 nova_jobs/
+
+# Per-Node Output-Sammlung (~/nova_output/ pro Worker, ~/nova_output_central/
+# auf hub als Aggregation). Nie im Repo.
+nova_output/
+nova_output_central/
