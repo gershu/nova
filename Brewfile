@@ -7,6 +7,7 @@ brew "fd"
 brew "fzf"
 brew "goenv"
 brew "lazygit"
+brew "ollama"      # Local LLM serving (auto-startet nur auf nova-w5 via LaunchAgent)
 brew "powerlevel10k"
 brew "pyenv"
 brew "python@3.11"

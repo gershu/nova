@@ -38,7 +38,7 @@ nodes:
     tags: [general, ib-capable]
     notes: "Old Macbook Intel, Clamshell-Modus, nur Worker"
 
-  # Neu zu provisionieren — Eintraege spaeter mit echten Werten ueberschreiben:
+  # Reserviert, noch nicht provisioniert:
   nova-w3:
     roles: [worker]
     chip: TBD
@@ -48,9 +48,21 @@ nodes:
     notes: "noch nicht provisioniert"
 
   nova-w4:
-    role: worker
+    roles: [worker]
     chip: TBD
     ram_gb: 0
     os: TBD
     tags: []
     notes: "noch nicht provisioniert"
+
+  nova-w5:
+    roles: [worker, llm_serve]
+    chip: arm64
+    ram_gb: 24
+    os: macos-15
+    tags: [compute-heavy, llm-host, metal-gpu]
+    capabilities:
+      llm_endpoint: "http://nova-w5.local:11434"     # Ollama HTTP-API (LAN-only)
+      llm_models: [qwen2.5:14b-instruct-q4_K_M]      # initial; weitere per `ollama pull`
+      llm_runtime: ollama
+    notes: "MacMini M4 24GB Apple Silicon, LLM-Inference-Worker (Ollama). Metal-GPU braucht User-Session, daher LaunchAgent (nicht Daemon)."

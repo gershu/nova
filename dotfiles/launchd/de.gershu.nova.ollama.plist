@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-w5 Ollama LaunchAgent.
+
+  Wichtig: LaunchAgent (nicht Daemon) — Ollama braucht Metal-GPU-Access,
+  der wiederum eine aktive User-Session braucht. nova-w5 muss mit
+  Auto-Login (System Settings -> Users & Groups -> Login Options) als
+  novaadm starten.
+
+  Bind auf 0.0.0.0:11434 -> erreichbar fuer Hub und andere Worker im LAN.
+  ACHTUNG: keine Auth bei Ollama. macOS-Firewall muss eingehende
+  Verbindungen auf Port 11434 nur aus dem LAN zulassen (oder gar nicht
+  exponiert, falls Stefan strikt sein will und alles via SSH-Tunnel laufen
+  laesst).
+
+  Initial-Setup: scripts/install_ollama_agent.sh (User-level, kein sudo).
+
+  Logs: /Users/novaadm/Library/Logs/ollama.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.ollama</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/ollama</string>
+        <string>serve</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/ollama.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/ollama.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+
+        <!-- Ollama-Konfig: Bind auf alle Interfaces (LAN-only via Firewall absichern) -->
+        <key>OLLAMA_HOST</key>
+        <string>0.0.0.0:11434</string>
+
+        <!-- Models nach $HOME/.ollama/models — default, hier explizit dokumentiert -->
+        <key>OLLAMA_MODELS</key>
+        <string>/Users/novaadm/.ollama/models</string>
+
+        <!-- Concurrent requests; 1 reicht fuer single-user Lab-Scenarien -->
+        <key>OLLAMA_NUM_PARALLEL</key>
+        <string>1</string>
+
+        <!-- Modell im RAM halten (sonst evicted nach 5min idle = re-load-Latenz) -->
+        <key>OLLAMA_KEEP_ALIVE</key>
+        <string>24h</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
