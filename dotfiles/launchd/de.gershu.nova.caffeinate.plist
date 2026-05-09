@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Headless-Server Anti-Sleep fuer nova-w5 (oder andere headless-Macs).
+
+  caffeinate hindert das System am Schlafen:
+    -d  display nicht schlafen
+    -i  idle-sleep nicht
+    -m  disk nicht schlafen
+    -s  prevent system sleep on AC
+
+  Plus: System Settings -> Energy fuer Best-Effort-Konfiguration parallel
+  setzen ("Wake for network access", "Prevent automatic sleeping").
+
+  Initial-Setup: scripts/install_caffeinate_agent.sh (User-level, kein sudo).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.caffeinate</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-dims</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/caffeinate.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/caffeinate.log</string>
+</dict>
+</plist>
