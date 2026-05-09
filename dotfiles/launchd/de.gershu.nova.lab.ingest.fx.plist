@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab daily-ingest-FX LaunchDaemon fuer nova-hub (MacMini, headless).
+
+  Triggert taeglich um 22:50 Lokalzeit — 10 Min vor lab_ingest (23:00),
+  damit FX-Rates frisch sind wenn Portfolio-Show/Reporting laeuft.
+  yfinance EOD-FX ist ab US-Close (~22:00 Zuerich) verfuegbar.
+
+  Triggert lab_ingest_fx_daily.sh, welches Job an nova-Queue submitted.
+  Picker holt's beim naechsten 10s-Tick.
+
+  Initial-Setup: scripts/install_lab_ingest_fx_daemon.sh (sudo, einmalig).
+
+  Logs: /Users/novaadm/Library/Logs/nova-lab-ingest-fx.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.ingest.fx</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_ingest_fx_daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>50</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-ingest-fx.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-ingest-fx.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
