@@ -24,6 +24,7 @@
 # export IB_ACCOUNT_ID=DUxxxxxxx       # Paper-Account beginnt mit DU
 #
 # Client-IDs (jede Anwendung muss eine eindeutige clientId nutzen, sonst
+# kollidiert die IB-Session):
 # export IB_CLIENT_ID=7                # ib_check (Diagnose)
 # export IB_INGEST_CLIENT_ID=11        # nova-lab ingest (modules/ingest/sources/ib_src.py)
 # # csp_scanner nutzt CLIENT_ID 20 (im csp_scanner-Repo gepflegt)
@@ -36,6 +37,15 @@
 # export CSP_SCANNER_SETTINGS=config/settings.yaml        # default: config/settings.yaml
 # Beispiel: auf nova-w2 nur eine konservative Watchlist scannen
 # export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml
+
+# ---- LLM (Ollama auf nova-w5) ----
+# Default-Endpoint und -Modell fuer modules.llm.OllamaClient.
+# Alle nicht-w5 Nodes sollten auf nova-w5.local zeigen; w5 selbst kann
+# localhost nehmen fuer minimale Latenz.
+# export LLM_OLLAMA_HOST=http://nova-w5.local:11434
+# export LLM_DEFAULT_MODEL=qwen2.5:14b-instruct-q4_K_M
+# export LLM_TIMEOUT_S=120
+# export LLM_RETRIES=3
 
 # ---- API Keys / Secrets (vorerst nur als Beispiel; Keychain ist sauberer) ----
 # export ALPHA_VANTAGE_API_KEY=xxx
