@@ -30,6 +30,34 @@ if ! command -v ollama >/dev/null 2>&1; then
   exit 1
 fi
 
+# GUI-Session-Check: bootstrap in gui/$UID braucht aktive Aqua-Session.
+# Bei SSH-only ohne GUI-Login schlaegt das mit Error 125 fehl.
+UID_NUM="$(id -u)"
+if ! launchctl print "gui/${UID_NUM}" >/dev/null 2>&1; then
+  echo "Fehler: keine aktive GUI-Session fuer UID ${UID_NUM} (novaadm)." >&2
+  echo
+  echo "  launchctl bootstrap gui/${UID_NUM} braucht eine laufende Aqua-Session." >&2
+  echo "  Wenn du via SSH eingeloggt bist und niemand am Mac grafisch eingeloggt ist," >&2
+  echo "  schlaegt das mit Error 125 fehl." >&2
+  echo
+  echo "  Loesungen:" >&2
+  echo "    a) Script lokal am Mac in Terminal.app ausfuehren." >&2
+  echo "    b) Auto-Login fuer novaadm aktivieren + reboot:" >&2
+  echo "         System Settings -> Users & Groups -> Login Options" >&2
+  echo "         -> Automatically log in as: novaadm" >&2
+  echo "    c) Falls novaadm bereits grafisch eingeloggt ist (anderer Bug):" >&2
+  echo "         sudo launchctl asuser ${UID_NUM} launchctl bootstrap gui/${UID_NUM} <plist>" >&2
+  exit 1
+fi
+
+# SSH-Warnung (informativ, kein Abort): bootstrap kann trotzdem funktionieren wenn
+# auto-login + GUI-Session aktiv sind. Aber falls gui-Session fehlt, ist das die
+# Wahrscheinlichste Ursache.
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+  echo "==> Hinweis: Du bist via SSH eingeloggt. GUI-Session-Check oben hat geklappt"
+  echo "    (Auto-Login ist also aktiv) — bootstrap sollte gleich durchgehen."
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(dirname "${SCRIPT_DIR}")"
 
