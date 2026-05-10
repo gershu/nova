@@ -15,6 +15,10 @@ openpyxl>=3.1,<4
 # weil modules/llm direkt nutzt.
 requests>=2.31,<3
 
+# RSS news parsing — fuer DACH-Coverage-Lueckenfueller in modules/llm/news_rss
+# (ergaenzt yfinance.news das bei deutschen Aktien wenig liefert).
+feedparser>=6.0,<7
+
 # Notebook / development
 jupyter>=1,<2
 ipykernel>=6,<7
