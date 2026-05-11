@@ -19,6 +19,10 @@ requests>=2.31,<3
 # (ergaenzt yfinance.news das bei deutschen Aktien wenig liefert).
 feedparser>=6.0,<7
 
+# HTML parsing fuer modules/news_sa (Seeking-Alpha IMAP-Mails).
+# War bisher transitive ueber yfinance — jetzt explizit.
+beautifulsoup4>=4.12,<5
+
 # Notebook / development
 jupyter>=1,<2
 ipykernel>=6,<7

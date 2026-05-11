@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab daily Seeking-Alpha-IMAP-Pull LaunchDaemon fuer nova-hub.
+
+  Schedule: 22:55 — nach ingest_fx (22:50), vor ingest (23:00).
+  Liegt im "ruhigen Vorlauf-Slot" der taeglichen Sequence; SA-Mails
+  vom Tag sind dann fuer alert_explainer (23:35) verfuegbar.
+
+  Voraussetzung: ~/.nova_env enthaelt GMAIL_IMAP_USER + GMAIL_IMAP_PASSWORD.
+  Ohne diese Variablen schlaegt der Daemon fehl mit clean error message;
+  keine Halbzustaende moeglich (move-to-processed erst nach DB-write).
+
+  Initial-Setup: scripts/install_lab_news_sa_daemon.sh
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-news-sa.log
+  Manueller Trigger: sudo launchctl kickstart system/de.gershu.nova.lab.news_sa
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.news_sa</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_news_sa_daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>55</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-news-sa.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-news-sa.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>

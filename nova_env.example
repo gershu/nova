@@ -34,6 +34,15 @@
 # export IB_MARKET_DATA_TYPE=2         # 1=realtime, 2=frozen, 3=delayed, 4=delayed-frozen
 # export IB_REQUEST_TIMEOUT=15         # seconds
 
+# ---- Gmail IMAP fuer modules/news_sa (Seeking-Alpha-Mails) ----
+# Setup: myaccount.google.com -> Security -> 2-Step-Verification on
+#        -> App passwords -> "Mail" -> 16-Char-Code generieren
+# Plus Gmail-Filter: From: noreply@seekingalpha.com -> Label 'nova-sa'
+# export GMAIL_IMAP_HOST=imap.gmail.com
+# export GMAIL_IMAP_USER=deine.adresse@gmail.com
+# export GMAIL_IMAP_PASSWORD='xxxx xxxx xxxx xxxx'
+# export GMAIL_SA_LABEL=nova-sa
+
 # ---- LLM (Ollama auf nova-w5) ----
 # Default-Endpoint und -Modell fuer modules.llm.OllamaClient.
 # Alle nicht-w5 Nodes sollten auf nova-w5.local zeigen; w5 selbst kann
