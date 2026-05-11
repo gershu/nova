@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab weekly Value-Screener LaunchDaemon fuer nova-hub.
+
+  Schedule: Sonntag 22:30 — NACH lab_fundamentals (22:00), VOR der
+  taeglichen Sequence (22:50 ingest_fx, 23:00 ingest, ...).
+
+  Ablauf:
+    Sonntag 22:00  lab_fundamentals      refresh-all (Wochen-Werte)
+    Sonntag 22:30  lab_screener_value    filter (nutzt frische Werte)
+    Daily   22:50- ingest -> screener_csp -> monitor -> digest
+
+  filter ist read-only auf ref_fundamentals_latest + schreibt sig_value_picks
+  + value_picks-Watchlist. Keine externen API-Calls (yfinance/IB) — daher
+  schnell (<1 min selbst bei 500 Tickers).
+
+  Initial-Setup: scripts/install_lab_screener_value_daemon.sh
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-screener-value.log
+  Manueller Trigger: sudo launchctl kickstart system/de.gershu.nova.lab.screener_value
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.screener_value</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_screener_value_weekly.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-screener-value.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-screener-value.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
