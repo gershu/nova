@@ -23,6 +23,9 @@ feedparser>=6.0,<7
 jupyter>=1,<2
 ipykernel>=6,<7
 notebook>=7,<8
+# nbstripout strippt Output beim git-commit — Notebooks bleiben diff-bar.
+# Aktivierung pro Clone via:  nbstripout --install  (im nova-lab Repo).
+nbstripout>=0.7,<1
 
 # Visualization
 matplotlib>=3.8,<4
