@@ -2,9 +2,10 @@
 # install_lab_screener_csp_daemon.sh — sudo-Setup des
 # nova-lab CSP-Screener LaunchDaemon auf nova-hub.
 #
-# Triggert taeglich 23:35 — nach digest 23:30, mit frischen quotes vom
-# 23:00 ingest. Ueberschreibt system_recommendations-watchlist mit
-# Top-N CSP-Kandidaten basierend auf IB-option-chain.
+# Triggert taeglich 23:05 — nach ingest 23:00, vor monitor 23:15. Mit
+# frischen quotes vom 23:00 ingest. Ueberschreibt system_recommendations-
+# watchlist mit Top-N CSP-Kandidaten — damit digest 23:30 die Picks
+# anzeigen kann (siehe digest/sections/csp_picks.py).
 #
 # Aufruf:
 #   sudo ~/nova/scripts/install_lab_screener_csp_daemon.sh

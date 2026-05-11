@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # lab_screener_csp_daily.sh — taeglich von launchd auf nova-hub.
 #
-# Schedule: 23:35 (nach digest 23:30) — nutzt today's frische quotes
-# aus ingest 23:00. system_recommendations-watchlist wird ueberschrieben
-# fuer naechsten Tag-Briefing-Zyklus.
+# Schedule: 23:05 (nach ingest 23:00, vor monitor 23:15) — nutzt today's
+# frisch-ingested quotes. system_recommendations-watchlist wird ueberschrieben
+# damit digest 23:30 die frischen CSP-Picks anzeigen kann.
 
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
