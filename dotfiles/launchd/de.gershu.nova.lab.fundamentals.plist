@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab weekly Fundamentals-Refresh LaunchDaemon fuer nova-hub.
+
+  Schedule: Sonntag 22:00 — VOR der taeglichen Sequence (22:50 ingest_fx,
+  23:00 ingest, 23:05 screener_csp, 23:15 monitor, 23:30 digest, 23:35
+  alert_explainer/portfolio_briefing). Liegt komfortabel davor, damit:
+    - fundamentals von Sonntag-Abend (Wochenend-fresh) in DB stehen wenn
+      die Daily-Sequence Montagabend laeuft.
+    - screener_csp ab Montag den frischen Value-Filter nutzen kann
+      (sobald wir den im screener_csp aktivieren — kommt im naechsten step).
+
+  Frequenz: weekly reicht — Fundamentals aendern sich quartalsweise,
+  TTM-Ratios rolling aber langsam. Daily waere Verschwendung von
+  yfinance-Quote (rate-limit) + DB-Speicher.
+
+  Initial-Setup: scripts/install_lab_fundamentals_daemon.sh
+  Logs: /Users/novaadm/Library/Logs/nova-lab-fundamentals.log
+  Manueller Trigger: sudo launchctl kickstart system/de.gershu.nova.lab.fundamentals
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.fundamentals</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_fundamentals_weekly.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-fundamentals.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-fundamentals.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>
