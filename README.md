@@ -47,8 +47,8 @@ nova/
 │   ├── hello_world/            # Embedded-Workload (Code im nova-Repo)
 │   │   ├── run.sh
 │   │   └── hello_world.py
-│   └── csp_scanner/            # Sibling-Repo-Workload: Code lebt anderswo
-│       └── run.sh              # Wrapper, ruft ~/csp_scanner/src/main.py
+│   └── lab_*/                  # Sibling-Repo-Workloads (~/nova-lab/modules/*)
+│       └── run.sh              # Wrapper, ruft `python -m modules.<name>`
 ├── scripts/
 │   ├── provision_node.sh       # auf nova-hub: SSH-Material auf neuen Worker kopieren
 │   ├── node_set_name.sh        # auf neuem Node: Hostname + NOVA_ROLE setzen
@@ -172,14 +172,14 @@ werden direkt im nova-Repo committet, sind nach `node_deploy.sh` auf allen Nodes
 **(b) Sibling-Repo** — Code lebt in einem eigenen GitHub-Repo, das auf
 jedem Node unter `~/<repo_name>` lokal geklont wird. nova/workloads/<job_name>/
 enthält nur den `run.sh`-Wrapper, der ins Sibling-Repo `cd`'t. Beispiel
-`csp_scanner`:
+`lab_screener_csp`:
 
 ```
-workloads/csp_scanner/
-└── run.sh                  # cd ~/csp_scanner && python -m src.main ...
+workloads/lab_screener_csp/
+└── run.sh                  # cd ~/nova-lab && python -m modules.screener_csp ...
 
-~/csp_scanner/              # eigenes git-Repo, gepullt durch node_deploy.sh
-├── src/
+~/nova-lab/                 # eigenes git-Repo, gepullt durch node_deploy.sh
+├── modules/
 ├── config/
 └── ...
 ```
@@ -260,9 +260,9 @@ Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz
 (später überschreibt früher):
 
 1. **Tier 1 — Repo-Defaults** (in git, identisch über alle Nodes).
-   Z.B. `workloads/csp_scanner/config/settings.yaml` (embedded) oder
-   `~/csp_scanner/config/*.yaml` (sibling-repo). Änderung: git commit
-   + push + `node_deploy.sh`.
+   Z.B. `workloads/hello_world/hello_world.py` (embedded) oder
+   `~/nova-lab/modules/screener_csp/__main__.py` (sibling-repo). Änderung:
+   git commit + push + `node_deploy.sh`.
 2. **Tier 2 — Per-Node `~/.nova_env`** (gitignored, manuell pro Node).
    Shell-File mit `export VAR=value`-Zeilen. Wird von jedem `run.sh`
    automatisch sourced. Die Variablen sind danach als `os.environ.*`
@@ -277,43 +277,30 @@ Werte für Workloads kommen aus drei Schichten, in dieser Präzedenz
    Späterer Tier gewinnt.
 
 `run.sh`-Files exponieren Tier-2- und Tier-3-Hooks für die wichtigsten
-Werte. Beispiel csp_scanner:
+Werte. Beispiel `lab_screener_csp` (CSP-Screener im nova-lab):
 
 ```bash
-# Tier 1 default
-WATCHLIST_PATH="config/watchlist.yaml"
-SETTINGS_PATH="config/settings.yaml"
+# Tier 1 default: Modul-interne Defaults in modules/screener_csp/__main__.py
+# (min_dte=25, max_dte=50, buffer_min=5%, buffer_max=15%, ...)
 
-# Tier 2 — per-Node aus ~/.nova_env
-[[ -n "${CSP_SCANNER_WATCHLIST:-}" ]] && WATCHLIST_PATH="${CSP_SCANNER_WATCHLIST}"
-[[ -n "${CSP_SCANNER_SETTINGS:-}"  ]] && SETTINGS_PATH="${CSP_SCANNER_SETTINGS}"
+# Tier 2 — per-Node aus ~/.nova_env (z.B. IB-Connection)
+# export IB_GATEWAY_HOST=127.0.0.1
+# export IB_SCREENER_CLIENT_ID=15
 
-# Tier 3 — per-Job aus NOVA_PARAMS_FILE (wenn nova_submit verwendet)
-# JSON: {"watchlist": "config/foo.yaml", "settings": "config/bar.yaml"}
-# (siehe csp_scanner/run.sh fuer den Auflöse-Block)
+# Tier 3 — per-Job aus NOVA_PARAMS_FILE
+# JSON-Override aller Filter/Score-Parameter:
+# {"min_dte": 30, "min_annualized_yield": 10.0, "use_conviction": true, ...}
 ```
 
-Anwendungsbeispiele für csp_scanner:
+Anwendungsbeispiel:
 
 ```bash
-# Einmalig anders auf nova-w2 (per ~/.nova_env):
-echo 'export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml' >> ~/.nova_env
-
-# Per-Job anders (per JSON-Params):
-cat > ~/jobs/aapl_only.json <<'EOF'
-{"watchlist": "config/watchlist_aapl.yaml"}
+# Per-Job mit strengeren Parametern:
+cat > ~/jobs/csp_strict.json <<'EOF'
+{"min_annualized_yield": 12.0, "min_conviction": 0.5, "top_n_overall": 10}
 EOF
-nova_submit.sh csp_scanner nova-w1 --params-file ~/jobs/aapl_only.json
+nova_submit.sh lab_screener_csp nova-hub run --params-file ~/jobs/csp_strict.json
 ```
-
-Voraussetzung für Tier 3 mit csp_scanner: die referenzierte YAML
-(`config/watchlist_aapl.yaml`) muss im **csp_scanner-Repo** existieren
-und committed/gepusht sein — nicht in nova. csp_scanner-Side Arbeit:
-verschiedene Watchlist-Varianten als separate yaml-Files committen.
-
-Setze `CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml` in `~/.nova_env`
-auf nova-w2, und der Default ist überschrieben — ohne dass du die
-`run.sh` oder die Repo-yaml-Files anrührst.
 
 **Setup pro Node (einmalig, als novaadm):**
 
@@ -333,15 +320,15 @@ divergieren (das ist der Sinn).
 
 ```bash
 ~/nova/workloads/hello_world/run.sh
-~/nova/workloads/csp_scanner/run.sh
+~/nova/workloads/lab_screener_csp/run.sh run
 ```
 
 **Remote vom Hub via Dispatcher** (Standard-Pfad, synchron):
 
 ```bash
 ~/nova/scripts/nova_run.sh hello_world nova-w1
-~/nova/scripts/nova_run.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json
-~/nova/scripts/nova_run.sh csp_scanner nova-w2 -- --extra-flag wert
+~/nova/scripts/nova_run.sh lab_screener_csp nova-hub run --params-file ~/jobs/lab_screener_csp_daily.json
+~/nova/scripts/nova_run.sh lab_fundamentals nova-hub refresh-all --since-days 6
 ```
 
 `nova_run.sh`:
@@ -360,7 +347,7 @@ divergieren (das ist der Sinn).
 
 ```bash
 # Job einreichen (return't sofort mit Job-ID)
-JOB_ID=$(~/nova/scripts/nova_submit.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json)
+JOB_ID=$(~/nova/scripts/nova_submit.sh lab_screener_csp nova-hub run --params-file ~/jobs/lab_screener_csp_daily.json)
 
 # Status abfragen
 ~/nova/scripts/nova_status.sh                    # Counts + letzte 10 Done
@@ -415,7 +402,7 @@ Spezialfall vor Generischem):
 2. **Per-Node `~/.nova_env`** (Tier 2, siehe oben). Für Werte, die pro Node
    stabil sind: Hosts, Ports, Account-IDs.
 3. **Repo-Defaults** (Tier 1, in git). Für Settings, die für alle Nodes
-   gleich sind: workloads/csp_scanner/run.sh' hardcoded `--watchlist`,
+   gleich sind: Modul-interne Defaults in `nova-lab/modules/*/__main__.py`,
    yaml-files im Sibling-Repo, etc.
 
 ### Neuen Workload anlegen
@@ -446,8 +433,8 @@ ist um eigene History zu rechtfertigen):
    ```
    <lokales-verzeichnis> git@github.com:gershu/<workload_name>.git
    ```
-4. `workloads/<workload_name>/run.sh` anlegen (als Kopie + Anpassung von
-   `csp_scanner/run.sh`), das `~/<lokales-verzeichnis>` als CWD nutzt.
+4. `workloads/<workload_name>/run.sh` anlegen (als Kopie + Anpassung eines
+   bestehenden `lab_*/run.sh`), das `~/<lokales-verzeichnis>` als CWD nutzt.
 5. nova committen + pushen, dann `node_deploy.sh` auf jedem Node — Schritt 5
    klont das neue Sibling-Repo.
 

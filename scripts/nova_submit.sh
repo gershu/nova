@@ -12,8 +12,8 @@
 #
 # Examples:
 #   nova_submit.sh hello_world nova-w1
-#   nova_submit.sh csp_scanner nova-w2 --params-file ~/jobs/aapl.json
-#   nova_submit.sh csp_scanner nova-w2 --params-file p.json -- --debug
+#   nova_submit.sh lab_screener_csp nova-hub run --params-file ~/jobs/lab_screener_csp_daily.json
+#   nova_submit.sh lab_fundamentals nova-hub refresh-all --since-days 6
 
 set -euo pipefail
 

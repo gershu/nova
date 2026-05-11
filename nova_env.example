@@ -24,19 +24,15 @@
 # export IB_ACCOUNT_ID=DUxxxxxxx       # Paper-Account beginnt mit DU
 #
 # Client-IDs (jede Anwendung muss eine eindeutige clientId nutzen, sonst
-# kollidiert die IB-Session):
+# kollidiert die IB-Session). Konvention nova-lab:
 # export IB_CLIENT_ID=7                # ib_check (Diagnose)
 # export IB_INGEST_CLIENT_ID=11        # nova-lab ingest (modules/ingest/sources/ib_src.py)
-# # csp_scanner nutzt CLIENT_ID 20 (im csp_scanner-Repo gepflegt)
+# export IB_PORTFOLIO_CLIENT_ID=12     # portfolio resolver (modules/portfolio/_ib_resolver.py)
+# export IB_SCREENER_CLIENT_ID=15      # screener_csp (modules/screener_csp/ib_options.py)
+# export IB_FUNDAMENTALS_CLIENT_ID=25  # fundamentals (modules/fundamentals/probe_ib.py)
 #
 # export IB_MARKET_DATA_TYPE=2         # 1=realtime, 2=frozen, 3=delayed, 4=delayed-frozen
 # export IB_REQUEST_TIMEOUT=15         # seconds
-
-# ---- csp_scanner Tier-2 Overrides ----
-# export CSP_SCANNER_WATCHLIST=config/watchlist.yaml      # default: config/watchlist.yaml
-# export CSP_SCANNER_SETTINGS=config/settings.yaml        # default: config/settings.yaml
-# Beispiel: auf nova-w2 nur eine konservative Watchlist scannen
-# export CSP_SCANNER_WATCHLIST=config/watchlist_prod.yaml
 
 # ---- LLM (Ollama auf nova-w5) ----
 # Default-Endpoint und -Modell fuer modules.llm.OllamaClient.

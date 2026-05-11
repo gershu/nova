@@ -21,9 +21,9 @@
 #
 # Examples:
 #   nova_run.sh hello_world nova-w1
-#   nova_run.sh csp_scanner nova-w2 --params-file ~/jobs/csp_aapl.json
-#   nova_run.sh csp_scanner nova-w2 -- --extra-flag wert
-#   nova_run.sh csp_scanner nova-w2 --params-file p.json -- --override-x
+#   nova_run.sh lab_screener_csp nova-hub run --params-file ~/jobs/lab_screener_csp_daily.json
+#   nova_run.sh lab_ingest nova-hub -- --since 2026-01-01
+#   nova_run.sh lab_fundamentals nova-hub refresh-all --since-days 6
 
 set -euo pipefail
 
@@ -44,8 +44,8 @@ Usage: $(basename "$0") <workload> <worker> [--params-file <pfad>] [-- <args...>
 
 Examples:
   $(basename "$0") hello_world nova-w1
-  $(basename "$0") csp_scanner nova-w2 --params-file params.json
-  $(basename "$0") csp_scanner nova-w2 -- --extra-flag wert
+  $(basename "$0") lab_screener_csp nova-hub run --params-file params.json
+  $(basename "$0") lab_fundamentals nova-hub refresh-all --since-days 6
 EOF
   exit 64
 fi
