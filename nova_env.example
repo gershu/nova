@@ -34,6 +34,13 @@
 # export IB_MARKET_DATA_TYPE=2         # 1=realtime, 2=frozen, 3=delayed, 4=delayed-frozen
 # export IB_REQUEST_TIMEOUT=15         # seconds
 
+# ---- Obsidian-Vault-Export (modules/obsidian) ----
+# Default-Output: ~/nova_output/obsidian/  (auf nova-hub).
+# stefan_mac pullt von dort via rsync in den lokalen Vault.
+# Override-Pfad nur wenn obsidian-publish *direkt* in einen lokalen Vault
+# schreiben soll (z.B. wenn nova-hub UND Vault auf gleicher Maschine).
+# export OBSIDIAN_VAULT_PATH=/Users/novaadm/nova_output/obsidian
+
 # ---- Gmail IMAP fuer modules/news_sa (Seeking-Alpha-Mails) ----
 # Setup: myaccount.google.com -> Security -> 2-Step-Verification on
 #        -> App passwords -> "Mail" -> 16-Char-Code generieren

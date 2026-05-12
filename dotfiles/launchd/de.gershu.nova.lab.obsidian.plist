@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab daily Obsidian-Vault-Export LaunchDaemon fuer nova-hub.
+
+  Schedule: 23:55 — letzter Step der taeglichen Sequence, NACH
+  digest/alert_explainer/portfolio_briefing (23:30-23:45). Bekommt alle
+  frischen Inhalte mit (today's digest, today's CSP-Picks, alle Briefings).
+
+  Read-only auf der DB; schreibt nach ~/nova_output/obsidian/ (oder
+  OBSIDIAN_VAULT_PATH override aus ~/.nova_env). stefan_mac pullt von dort
+  via rsync in seinen lokalen Obsidian-Vault.
+
+  Initial-Setup: scripts/install_lab_obsidian_daemon.sh
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-obsidian.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.obsidian</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_obsidian_daily.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>23</integer>
+        <key>Minute</key>
+        <integer>55</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-obsidian.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-obsidian.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>

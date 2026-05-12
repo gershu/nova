@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Obsidian-Vault-Pull LaunchAgent fuer stefan_mac.
+
+  LaunchAgent (NICHT Daemon) — User-Domain, weil:
+    - User-owned Vault (~/Documents/Obsidian Vault/)
+    - Kein sudo-Bedarf
+    - Vault liegt im User-Home
+
+  Triggert taeglich 00:10 (kurz nach nova-hub-Daemon 23:55).
+  Pullt von nova-hub via rsync in den lokalen Vault.
+
+  Install:
+    cp dotfiles/launchd/de.gershu.nova.obsidian.pull.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.gershu.nova.obsidian.pull.plist
+
+  Manueller Trigger:
+    launchctl kickstart gui/$(id -u)/de.gershu.nova.obsidian.pull
+
+  Stop:
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/de.gershu.nova.obsidian.pull.plist
+
+  Schedule-Anpassung: Hour/Minute oder StartInterval (z.B. alle 30 min).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.obsidian.pull</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/stefan_mac/nova/scripts/obsidian_pull_from_hub.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>10</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/stefan_mac/Library/Logs/nova-obsidian-pull.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/stefan_mac/Library/Logs/nova-obsidian-pull.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/stefan_mac</string>
+    </dict>
+</dict>
+</plist>
