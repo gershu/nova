@@ -35,22 +35,24 @@ JOBS_DIR="${HOME}/jobs"
 LOG_DIR_ROOT="${HOME}/nova_replay_logs"
 WORKLOADS_DIR="${REPO_DIR}/workloads"
 
-# Chain-Definition: "label|workload|extra_args"
-# extra_args wird in eval'd damit ${JOBS_DIR} drin resolved.
+# Chain-Definition: "label|workload|subcommand_args|params_file"
+# subcommand_args sind die CLI-Args (subcommands, flags) ohne --params-file.
+# params_file wird als NOVA_PARAMS_FILE env-var gesetzt (Production-Convention).
+# Leerer params_file = kein params-File noetig (z.B. fetch/publish subcommands).
 DAILY_CHAIN=(
-    "ingest_fx|lab_ingest_fx|--params-file ${JOBS_DIR}/lab_ingest_fx_daily.json"
-    "news_sa|lab_news_sa|fetch"
-    "ingest|lab_ingest|--params-file ${JOBS_DIR}/lab_ingest_daily.json"
-    "screener_csp|lab_screener_csp|run --params-file ${JOBS_DIR}/lab_screener_csp_daily.json"
-    "monitor|lab_monitor|--params-file ${JOBS_DIR}/lab_monitor_daily.json"
-    "digest|lab_digest|--params-file ${JOBS_DIR}/lab_digest_daily.json"
-    "alert_explainer|lab_alert_explainer|--params-file ${JOBS_DIR}/lab_alert_explainer_daily.json"
-    "portfolio_briefing|lab_portfolio_briefing|--params-file ${JOBS_DIR}/lab_portfolio_briefing_daily.json"
-    "obsidian|lab_obsidian|publish"
+    "ingest_fx|lab_ingest_fx||${JOBS_DIR}/lab_ingest_fx_daily.json"
+    "news_sa|lab_news_sa|fetch|"
+    "ingest|lab_ingest||${JOBS_DIR}/lab_ingest_daily.json"
+    "screener_csp|lab_screener_csp|run|${JOBS_DIR}/lab_screener_csp_daily.json"
+    "monitor|lab_monitor||${JOBS_DIR}/lab_monitor_daily.json"
+    "digest|lab_digest||${JOBS_DIR}/lab_digest_daily.json"
+    "alert_explainer|lab_alert_explainer||${JOBS_DIR}/lab_alert_explainer_daily.json"
+    "portfolio_briefing|lab_portfolio_briefing||${JOBS_DIR}/lab_portfolio_briefing_daily.json"
+    "obsidian|lab_obsidian|publish|"
 )
 WEEKLY_CHAIN=(
-    "fundamentals|lab_fundamentals|refresh-all --since-days 6"
-    "screener_value|lab_screener_value|filter --params-file ${JOBS_DIR}/lab_screener_value_weekly.json"
+    "fundamentals|lab_fundamentals|refresh-all --since-days 6|"
+    "screener_value|lab_screener_value|filter|${JOBS_DIR}/lab_screener_value_weekly.json"
 )
 
 # Steps die einen IB-Precheck brauchen
@@ -129,8 +131,10 @@ echo "    Dry-Run:     ${DRY_RUN}"
 echo "    Stop-on-fail: ${STOP_ON_FAIL}"
 echo "    Steps        (${#CHAIN[@]}):"
 for entry in "${CHAIN[@]}"; do
-    IFS='|' read -r label workload args <<< "${entry}"
-    echo "      ${label}  ->  ${workload}  ${args}"
+    IFS='|' read -r label workload args params_file <<< "${entry}"
+    pf_short=""
+    [[ -n "${params_file}" ]] && pf_short="  NOVA_PARAMS_FILE=$(basename "${params_file}")"
+    echo "      ${label}  ->  ${workload} ${args}${pf_short}"
 done
 echo
 
@@ -142,7 +146,7 @@ fi
 # ---------- Step-Execution ----------
 
 run_step() {
-    local label="$1" workload="$2" args="$3"
+    local label="$1" workload="$2" args="$3" params_file="$4"
     local logfile="${LOG_DIR}/${label}.log"
     local run_sh="${WORKLOADS_DIR}/${workload}/run.sh"
 
@@ -162,18 +166,37 @@ run_step() {
         return 1
     fi
 
+    # Params-File-Check (warnen wenn referenced aber nicht vorhanden)
+    if [[ -n "${params_file}" && ! -f "${params_file}" ]]; then
+        echo "  [WARN]  ${label} — params_file ${params_file} fehlt; Daemon-Driver wuerde default-File erstellen"
+        echo "          Tip: einmal '${REPO_DIR}/scripts/lab_${label}_daily.sh' laufen lassen fuer Auto-Setup, dann Replay erneut."
+    fi
+
     local start_ts=$(date -u +%s)
     echo "  [RUN ]  ${label}  ($(date -u +%H:%M:%S))"
-    # eval um ${VARS} in args zu expandieren
-    local cmd
-    cmd="\"${run_sh}\" $(eval echo "${args}")"
-    if eval "${cmd}" > "${logfile}" 2>&1; then
-        local elapsed=$(( $(date -u +%s) - start_ts ))
+
+    # NOVA_PARAMS_FILE als env-var setzen (Production-Convention).
+    # workload-run.sh forwarded das nach python -m modules.<x>.
+    local rc=0
+    if [[ -n "${params_file}" ]]; then
+        if NOVA_PARAMS_FILE="${params_file}" "${run_sh}" ${args} > "${logfile}" 2>&1; then
+            rc=0
+        else
+            rc=$?
+        fi
+    else
+        if "${run_sh}" ${args} > "${logfile}" 2>&1; then
+            rc=0
+        else
+            rc=$?
+        fi
+    fi
+
+    local elapsed=$(( $(date -u +%s) - start_ts ))
+    if [[ ${rc} -eq 0 ]]; then
         echo "  [OK  ]  ${label}  (${elapsed}s)"
         return 0
     else
-        local rc=$?
-        local elapsed=$(( $(date -u +%s) - start_ts ))
         echo "  [FAIL]  ${label}  (rc=${rc}, ${elapsed}s)  — siehe ${logfile}"
         return ${rc}
     fi
@@ -184,8 +207,8 @@ n_ok=0
 n_fail=0
 n_skip=0
 for entry in "${CHAIN[@]}"; do
-    IFS='|' read -r label workload args <<< "${entry}"
-    if run_step "${label}" "${workload}" "${args}"; then
+    IFS='|' read -r label workload args params_file <<< "${entry}"
+    if run_step "${label}" "${workload}" "${args}" "${params_file}"; then
         # Check ob skipped (logfile-content):
         if [[ -f "${LOG_DIR}/${label}.log" ]] && \
            grep -q '^(IB-Precheck failed)$' "${LOG_DIR}/${label}.log" 2>/dev/null; then
