@@ -154,6 +154,37 @@ fi
 # --- 5) Workload-Repos (Sibling-Repos) --------------------------------------
 echo "==> [5/5] Workload-Repos synchronisieren..."
 
+NBSTRIPOUT_BIN="${VENV_DIR}/bin/nbstripout"
+
+# Helper: bereinige Jupyter-Auto-Saves in einem Repo BEVOR git pull laeuft.
+# nbstripout entfernt nicht-semantische Metadata (kernel-id, exec-counts, outputs)
+# die Jupyter beim simplen "Oeffnen" eines Notebooks ins File schreibt — ohne dass
+# Stefan inhaltlich was geaendert hat. Dadurch wird der working-tree clean fuer
+# git-pull, ohne dass Stefan manuell stashen muss.
+strip_dirty_notebooks() {
+  local target="$1"
+  [[ -x "${NBSTRIPOUT_BIN}" ]] || return 0
+  # Liste dirty .ipynb-Files (geaendert oder untracked-mod) — defensive ohne grep
+  local dirty
+  dirty="$(cd "${target}" && git diff --name-only -- '*.ipynb' 2>/dev/null)"
+  [[ -z "${dirty}" ]] && return 0
+  echo "    (strippe ${target} dirty .ipynb files via nbstripout)"
+  while IFS= read -r nb; do
+    [[ -z "${nb}" ]] && continue
+    "${NBSTRIPOUT_BIN}" "${target}/${nb}" 2>/dev/null || true
+  done <<< "${dirty}"
+}
+
+# Helper: nbstripout-Filter aktivieren wenn .gitattributes ihn vorsieht.
+# Idempotent — nbstripout --install checkt selbst ob schon konfiguriert.
+ensure_nbstripout_filter() {
+  local target="$1"
+  [[ -x "${NBSTRIPOUT_BIN}" ]] || return 0
+  [[ -f "${target}/.gitattributes" ]] || return 0
+  grep -q 'nbstripout' "${target}/.gitattributes" 2>/dev/null || return 0
+  ( cd "${target}" && "${NBSTRIPOUT_BIN}" --install --attributes .gitattributes ) 2>/dev/null || true
+}
+
 WORKLOAD_REPOS_FILE="${REPO_DIR}/config/workload_repos.txt"
 if [[ -f "${WORKLOAD_REPOS_FILE}" ]]; then
   while IFS= read -r line; do
@@ -169,11 +200,14 @@ if [[ -f "${WORKLOAD_REPOS_FILE}" ]]; then
     target="${HOME}/${local_dir}"
 
     if [[ -d "${target}/.git" ]]; then
+      strip_dirty_notebooks "${target}"
       echo "    git pull in ${target}..."
       git -C "${target}" pull --ff-only
+      ensure_nbstripout_filter "${target}"
     else
       echo "    git clone ${git_url} -> ${target}..."
       git clone "${git_url}" "${target}"
+      ensure_nbstripout_filter "${target}"
     fi
   done < "${WORKLOAD_REPOS_FILE}"
 else
