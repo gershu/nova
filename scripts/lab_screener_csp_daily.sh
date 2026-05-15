@@ -8,6 +8,17 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+# ENV laden fuer IB_GATEWAY_HOST/PORT etc.
+[[ -f "$HOME/.nova_env" ]] && source "$HOME/.nova_env"
+
+# IB-Precheck — screener_csp braucht zwingend Option-Chains via IB.
+# Bei Failure clean abort; downstream-Daemons (monitor, digest) laufen
+# weiter mit dem letzten Stand. NOVA_SKIP_IF_NO_IB=0 deaktiviert das Gate.
+if ! "${HOME}/nova/scripts/check_ib_gateway.sh"; then
+  echo "[lab_screener_csp_daily] IB Gateway down — Job uebersprungen." >&2
+  exit 0    # exit 0 damit launchd den daemon nicht als 'failed' markiert
+fi
+
 PARAMS_FILE="${HOME}/jobs/lab_screener_csp_daily.json"
 mkdir -p "$(dirname "${PARAMS_FILE}")"
 
