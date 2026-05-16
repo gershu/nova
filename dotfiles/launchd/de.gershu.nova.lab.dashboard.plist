@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab Dashboard LaunchDaemon — Streamlit long-running service.
+
+  Long-running (KeepAlive=true), bindet 0.0.0.0:8501 fuer Tailscale-Zugriff.
+  Bei crash automatischer Restart.
+
+  Zugriff von stefan_mac:
+    http://nova-hub.tailscale-domain:8501          (via Tailscale)
+    http://localhost:8501  (via ssh -L 8501:localhost:8501 nova-hub)
+
+  Initial-Setup: scripts/install_lab_dashboard_daemon.sh
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-dashboard.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.dashboard</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/workloads/lab_dashboard/run.sh</string>
+        <string>--port</string>
+        <string>8501</string>
+        <string>--bind</string>
+        <string>0.0.0.0</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-dashboard.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-dashboard.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm</string>
+</dict>
+</plist>

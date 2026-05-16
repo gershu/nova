@@ -35,3 +35,8 @@ nbstripout>=0.7,<1
 matplotlib>=3.8,<4
 seaborn>=0.13,<1
 yfinance>=0.2,<1
+
+# Dashboard (modules/dashboard) — Streamlit-Frontend mit Plotly-Charts.
+# Single-user web-UI; binded an 0.0.0.0:8501 fuer Tailscale-Zugriff.
+streamlit>=1.36,<2
+plotly>=5.20,<7
