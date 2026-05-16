@@ -42,8 +42,32 @@ mkdir -p "${VAULT_TARGET}"
 # WICHTIG: --delete entfernt NUR Files innerhalb des nova-lab/-Targets, NICHT
 # andere Folder im Vault. Stefans Notes ausserhalb von nova-lab/ sind safe.
 echo "==> Pulling nova-lab Obsidian-Export von ${NOVA_HUB_SSH_HOST}..."
-rsync -avz --delete \
+if rsync -avz --delete \
       --exclude='.git*' --exclude='.DS_Store' \
-      "${REMOTE_SRC}" "${VAULT_TARGET}/"
+      "${REMOTE_SRC}" "${VAULT_TARGET}/"; then
+  echo "==> Pull abgeschlossen. Vault-Target: ${VAULT_TARGET}"
+  exit 0
+fi
 
-echo "==> Pull abgeschlossen. Vault-Target: ${VAULT_TARGET}"
+RC=$?
+# rsync exit 23 oder Operation-Not-Permitted: oft TCC-Permission-Issue
+if [[ ${RC} -eq 23 || ${RC} -eq 11 ]]; then
+  echo
+  echo "==> rsync FEHLER (rc=${RC}). Wahrscheinliche Ursache:"
+  echo "    macOS TCC-Protection auf ${VAULT_ROOT} (Documents/Desktop/Downloads"
+  echo "    sind seit Mojave geschuetzt fuer LaunchAgents ohne UI-Kontext)."
+  echo
+  echo "    Fix einmalig:"
+  echo "      System Settings -> Privacy & Security -> Full Disk Access"
+  echo "      + /usr/bin/rsync"
+  echo "      + /bin/bash"
+  echo "      + $(realpath "$0")"
+  echo
+  echo "    Danach LaunchAgent neustarten:"
+  echo "      launchctl bootout 'gui/\$(id -u)' ~/Library/LaunchAgents/de.gershu.nova.obsidian.pull.plist"
+  echo "      launchctl bootstrap 'gui/\$(id -u)' ~/Library/LaunchAgents/de.gershu.nova.obsidian.pull.plist"
+  echo
+  echo "    Alternative: VAULT_ROOT auf TCC-freien Pfad setzen (ENV"
+  echo "    OBSIDIAN_VAULT_ROOT=~/Obsidian_Sync ; Obsidian Vault dorthin verschieben)."
+fi
+exit ${RC}

@@ -64,3 +64,19 @@ echo "      launchctl kickstart gui/\$(id -u)/${LABEL}"
 echo
 echo "    Stop:"
 echo "      launchctl bootout gui/\$(id -u) ${PLIST_DST}"
+echo
+echo "==> WICHTIG bei macOS Mojave+ und Vault unter ~/Documents/:"
+echo
+echo "    Falls 'Operation not permitted' im Log auftaucht, ist es TCC"
+echo "    (Documents/Desktop/Downloads sind geschuetzte Folder). LaunchAgents"
+echo "    haben keinen UI-Kontext und triggern keinen Permission-Prompt."
+echo
+echo "    Fix einmalig:"
+echo "      System Settings -> Privacy & Security -> Full Disk Access"
+echo "      + /usr/bin/rsync"
+echo "      + /bin/bash"
+echo "      + ${REPO_DIR}/scripts/obsidian_pull_from_hub.sh"
+echo
+echo "    Danach LaunchAgent neustarten:"
+echo "      launchctl bootout gui/\$(id -u) ${PLIST_DST}"
+echo "      launchctl bootstrap gui/\$(id -u) ${PLIST_DST}"
