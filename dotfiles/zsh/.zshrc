@@ -125,3 +125,5 @@ unset LC_ALL
 
 test -e "${HOME}/.iterm2_shell_integration.zsh" && source "${HOME}/.iterm2_shell_integration.zsh"
 
+eval "$(/opt/homebrew/bin/brew shellenv)"
+export PATH="$(npm config get prefix)/bin:$PATH"
