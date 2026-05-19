@@ -28,7 +28,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-lc</string>
-        <string>source ~/.nova_env 2&gt;/dev/null; source /Users/novaadm/nova/.venv/bin/activate &amp;&amp; cd /Users/novaadm/nova &amp;&amp; exec streamlit run modules/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false</string>
+        <string>source ~/.nova_env 2&gt;/dev/null; cd /Users/novaadm/nova &amp;&amp; exec /Users/novaadm/nova/.venv/bin/python -m modules.dashboard --port 8501 --bind 0.0.0.0</string>
     </array>
 
     <key>RunAtLoad</key>

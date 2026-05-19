@@ -21,7 +21,7 @@
     <array>
         <string>/bin/bash</string>
         <string>-lc</string>
-        <string>source ~/.nova_env 2&gt;/dev/null; source /Users/novaadm/nova/.venv/bin/activate &amp;&amp; cd /Users/novaadm/nova &amp;&amp; exec python -m modules.fred_ingest fetch-all</string>
+        <string>source ~/.nova_env 2&gt;/dev/null; cd /Users/novaadm/nova &amp;&amp; exec /Users/novaadm/nova/.venv/bin/python -m modules.fred_ingest fetch-all</string>
     </array>
 
     <key>StartCalendarInterval</key>
