@@ -2,16 +2,12 @@
 # node_deploy.sh — auf jedem Node lokal oder remote ausführbar.
 #
 # Idempotent:
-#   1. git pull (nova-Repo aktualisieren)
-#   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/) +
-#      auf hub: Status-Check des Picker-LaunchDaemons (Install via
-#      scripts/install_picker.sh einmalig + sudo)
+#   1. git pull (nova-Repo aktualisieren — beinhaltet Code + Workloads + Configs)
+#   2. Dotfiles symlinken (zsh, ssh/config, git, vim aus dotfiles/)
 #   3. brew bundle (Software installieren/aktualisieren)
 #   4. Python-Umgebung: pyenv install (gemaess .python-version) + venv +
 #      pip install -r requirements-lock.txt
-#   5. Workload-Repos (config/workload_repos.txt): Sibling-Repos klonen/pullen,
-#      damit Workload-Code unabhaengig von nova versioniert bleibt aber auf
-#      jedem Node konsistent ist.
+#   5. nbstripout-Filter aktivieren (Jupyter-Auto-Saves clean halten)
 
 set -euo pipefail
 
@@ -23,11 +19,26 @@ if [[ ! -d "${REPO_DIR}/.git" ]]; then
 fi
 
 # --- 1) Sourcen aktualisieren -----------------------------------------------
+
+# Bereinige Jupyter-Auto-Saves BEVOR git pull laeuft — sonst blockiert
+# dirty working tree den fast-forward.
+NBSTRIPOUT_BIN="${REPO_DIR}/.venv/bin/nbstripout"
+if [[ -x "${NBSTRIPOUT_BIN}" ]]; then
+  dirty="$(cd "${REPO_DIR}" && git diff --name-only -- '*.ipynb' 2>/dev/null || true)"
+  if [[ -n "${dirty}" ]]; then
+    echo "==> [1/5] Strippe dirty .ipynb via nbstripout..."
+    while IFS= read -r nb; do
+      [[ -z "${nb}" ]] && continue
+      "${NBSTRIPOUT_BIN}" "${REPO_DIR}/${nb}" 2>/dev/null || true
+    done <<< "${dirty}"
+  fi
+fi
+
 echo "==> [1/5] git pull in ${REPO_DIR}..."
 git -C "${REPO_DIR}" pull --ff-only
 
 # --- 2) Dotfiles symlinken --------------------------------------------------
-# link_file <quelle-im-repo> <ziel-im-home>
+
 link_file() {
   local src="$1"
   local dst="$2"
@@ -37,13 +48,11 @@ link_file() {
     return
   fi
 
-  # Wenn das Ziel bereits ein Symlink auf die richtige Quelle ist, fertig.
   if [[ -L "${dst}" ]] && [[ "$(readlink "${dst}")" == "${src}" ]]; then
     echo "    OK:  ${dst} -> ${src} (bereits korrekt)"
     return
   fi
 
-  # Existierende Datei/Symlink mit Backup-Suffix sichern.
   if [[ -e "${dst}" || -L "${dst}" ]]; then
     local backup
     backup="${dst}.bak.$(date +%Y%m%d%H%M%S)"
@@ -56,8 +65,6 @@ link_file() {
 }
 
 echo "==> [2/5] Dotfiles linken..."
-# ~/.ssh/ braucht 700 — wenn der Ordner noch nicht existiert (sehr seltener
-# Edge Case auf hub), defensiv anlegen.
 [[ -d "$HOME/.ssh" ]] || { mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"; }
 
 link_file "${REPO_DIR}/dotfiles/zsh/.zshrc"     "$HOME/.zshrc"
@@ -66,24 +73,10 @@ link_file "${REPO_DIR}/dotfiles/ssh/config"     "$HOME/.ssh/config"
 link_file "${REPO_DIR}/dotfiles/git/.gitconfig" "$HOME/.gitconfig"
 link_file "${REPO_DIR}/dotfiles/vim/.vimrc"     "$HOME/.vimrc"
 
-# Hub-only: Picker-Status-Check.
-# Der Picker laeuft als LaunchDaemon (NICHT LaunchAgent) — Initial-Install
-# braucht sudo und wird einmalig manuell via scripts/install_picker.sh
-# durchgefuehrt. node_deploy.sh kann ihn nicht selbst installieren (laeuft
-# als novaadm ohne sudo); deshalb nur informativer Check.
-if [[ "$(hostname -s 2>/dev/null || hostname)" == "nova-hub" ]]; then
-  if launchctl print "system/de.gershu.nova.picker" >/dev/null 2>&1; then
-    echo "    (hub) Picker LaunchDaemon laeuft."
-  else
-    echo "    (hub) HINWEIS: Picker LaunchDaemon nicht aktiv." >&2
-    echo "                 Einmalig installieren: sudo ${REPO_DIR}/scripts/install_picker.sh" >&2
-  fi
-fi
-
 # --- 3) brew bundle ---------------------------------------------------------
+
 echo "==> [3/5] brew bundle ..."
 
-# Falls brew nicht im PATH ist (z.B. erste Shell nach Installation), shellenv laden.
 if ! command -v brew >/dev/null 2>&1; then
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -100,6 +93,7 @@ fi
 brew bundle --file="${REPO_DIR}/Brewfile"
 
 # --- 4) Python venv + requirements ------------------------------------------
+
 echo "==> [4/5] Python-Umgebung..."
 
 VENV_DIR="${REPO_DIR}/.venv"
@@ -107,13 +101,9 @@ REQ_FILE="${REPO_DIR}/requirements.txt"
 LOCK_FILE="${REPO_DIR}/requirements-lock.txt"
 PY_VERSION_FILE="${REPO_DIR}/.python-version"
 
-# pyenv-Setup (init laden, falls vorhanden — node_bootstrap installiert pyenv via brew).
 if command -v pyenv >/dev/null 2>&1; then
   eval "$(pyenv init -)"
 
-  # Pinned Python-Version installieren, falls .python-version vorhanden und
-  # die Version noch nicht installiert ist. Erster Lauf kann mehrere Minuten
-  # dauern (Source-Build).
   if [[ -f "${PY_VERSION_FILE}" ]]; then
     PY_VERSION="$(tr -d '[:space:]' < "${PY_VERSION_FILE}")"
     if [[ -n "${PY_VERSION}" ]] && ! pyenv versions --bare | grep -qx "${PY_VERSION}"; then
@@ -125,19 +115,11 @@ else
   echo "    WARN: pyenv nicht im PATH — verwende System-python3."
 fi
 
-# venv anlegen, falls nicht vorhanden. cd ins Repo, damit pyenv die
-# .python-version aus dem CWD aufgreift und python3 die richtige Version ist.
 if [[ ! -d "${VENV_DIR}" ]]; then
   echo "    Lege venv unter ${VENV_DIR} an..."
   ( cd "${REPO_DIR}" && python3 -m venv "${VENV_DIR}" )
 fi
 
-# pip + requirements (idempotent — bereits installierte Pakete in passender
-# Version werden uebersprungen).
-#
-# Bevorzuge requirements-lock.txt (deterministisch, == gepinnte Versionen
-# inklusive transitiver Deps). Fallback auf requirements.txt (Versions-Bereiche),
-# falls Lock-File fehlt — z.B. waehrend Initial-Setup oder bewusster Regen.
 "${VENV_DIR}/bin/pip" install --quiet --upgrade pip setuptools wheel
 
 if [[ -f "${LOCK_FILE}" ]]; then
@@ -145,73 +127,19 @@ if [[ -f "${LOCK_FILE}" ]]; then
   "${VENV_DIR}/bin/pip" install --quiet -r "${LOCK_FILE}"
 elif [[ -f "${REQ_FILE}" ]]; then
   echo "    WARN: requirements-lock.txt fehlt — Fallback auf requirements.txt."
-  echo "    pip install -r requirements.txt (Bereiche, NICHT byte-identisch)..."
   "${VENV_DIR}/bin/pip" install --quiet -r "${REQ_FILE}"
 else
   echo "    WARN: weder requirements-lock.txt noch requirements.txt gefunden."
 fi
 
-# --- 5) Workload-Repos (Sibling-Repos) --------------------------------------
-echo "==> [5/5] Workload-Repos synchronisieren..."
+# --- 5) nbstripout-Filter aktivieren ----------------------------------------
 
-NBSTRIPOUT_BIN="${VENV_DIR}/bin/nbstripout"
-
-# Helper: bereinige Jupyter-Auto-Saves in einem Repo BEVOR git pull laeuft.
-# nbstripout entfernt nicht-semantische Metadata (kernel-id, exec-counts, outputs)
-# die Jupyter beim simplen "Oeffnen" eines Notebooks ins File schreibt — ohne dass
-# Stefan inhaltlich was geaendert hat. Dadurch wird der working-tree clean fuer
-# git-pull, ohne dass Stefan manuell stashen muss.
-strip_dirty_notebooks() {
-  local target="$1"
-  [[ -x "${NBSTRIPOUT_BIN}" ]] || return 0
-  # Liste dirty .ipynb-Files (geaendert oder untracked-mod) — defensive ohne grep
-  local dirty
-  dirty="$(cd "${target}" && git diff --name-only -- '*.ipynb' 2>/dev/null)"
-  [[ -z "${dirty}" ]] && return 0
-  echo "    (strippe ${target} dirty .ipynb files via nbstripout)"
-  while IFS= read -r nb; do
-    [[ -z "${nb}" ]] && continue
-    "${NBSTRIPOUT_BIN}" "${target}/${nb}" 2>/dev/null || true
-  done <<< "${dirty}"
-}
-
-# Helper: nbstripout-Filter aktivieren wenn .gitattributes ihn vorsieht.
-# Idempotent — nbstripout --install checkt selbst ob schon konfiguriert.
-ensure_nbstripout_filter() {
-  local target="$1"
-  [[ -x "${NBSTRIPOUT_BIN}" ]] || return 0
-  [[ -f "${target}/.gitattributes" ]] || return 0
-  grep -q 'nbstripout' "${target}/.gitattributes" 2>/dev/null || return 0
-  ( cd "${target}" && "${NBSTRIPOUT_BIN}" --install --attributes .gitattributes ) 2>/dev/null || true
-}
-
-WORKLOAD_REPOS_FILE="${REPO_DIR}/config/workload_repos.txt"
-if [[ -f "${WORKLOAD_REPOS_FILE}" ]]; then
-  while IFS= read -r line; do
-    # Kommentare + Leerzeilen ueberspringen
-    [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
-
-    # Format: <lokales-verzeichnis> <git-url>
-    local_dir="$(echo "${line}" | awk '{print $1}')"
-    git_url="$(echo "${line}" | awk '{print $2}')"
-
-    [[ -z "${local_dir}" || -z "${git_url}" ]] && continue
-
-    target="${HOME}/${local_dir}"
-
-    if [[ -d "${target}/.git" ]]; then
-      strip_dirty_notebooks "${target}"
-      echo "    git pull in ${target}..."
-      git -C "${target}" pull --ff-only
-      ensure_nbstripout_filter "${target}"
-    else
-      echo "    git clone ${git_url} -> ${target}..."
-      git clone "${git_url}" "${target}"
-      ensure_nbstripout_filter "${target}"
-    fi
-  done < "${WORKLOAD_REPOS_FILE}"
-else
-  echo "    (keine config/workload_repos.txt — uebersprungen)"
+echo "==> [5/5] nbstripout-Filter..."
+if [[ -x "${NBSTRIPOUT_BIN}" ]] && [[ -f "${REPO_DIR}/.gitattributes" ]]; then
+  if grep -q 'nbstripout' "${REPO_DIR}/.gitattributes" 2>/dev/null; then
+    ( cd "${REPO_DIR}" && "${NBSTRIPOUT_BIN}" --install --attributes .gitattributes ) 2>/dev/null || true
+    echo "    nbstripout-Filter aktiv."
+  fi
 fi
 
 echo

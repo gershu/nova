@@ -40,4 +40,7 @@ EOF
 fi
 
 # Subcommand 'run' fuer den Daily-Job
-exec "${HOME}/nova/scripts/nova_submit.sh" lab_screener_csp nova-hub run --params-file "${PARAMS_FILE}"
+source "${HOME}/nova/.venv/bin/activate"
+cd "${HOME}/nova"
+export NOVA_PARAMS_FILE="${PARAMS_FILE}"
+exec python -m modules.screener_csp run

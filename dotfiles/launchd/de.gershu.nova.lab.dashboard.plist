@@ -26,11 +26,9 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/novaadm/nova/workloads/lab_dashboard/run.sh</string>
-        <string>--port</string>
-        <string>8501</string>
-        <string>--bind</string>
-        <string>0.0.0.0</string>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>source ~/.nova_env 2&gt;/dev/null; source /Users/novaadm/nova/.venv/bin/activate &amp;&amp; cd /Users/novaadm/nova &amp;&amp; exec streamlit run modules/dashboard/app.py --server.port 8501 --server.address 0.0.0.0 --browser.gatherUsageStats false</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -57,6 +55,6 @@
     </dict>
 
     <key>WorkingDirectory</key>
-    <string>/Users/novaadm</string>
+    <string>/Users/novaadm/nova</string>
 </dict>
 </plist>

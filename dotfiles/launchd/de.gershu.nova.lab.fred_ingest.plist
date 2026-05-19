@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab fred_ingest LaunchDaemon — daily FRED-API-Refresh.
+
+  Schedule: 22:30 UTC (FRED publiziert EOD typischerweise ab ~22:00 UTC).
+
+  Initial-Setup: scripts/install_daemon.sh lab.fred_ingest
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-fred_ingest.log
+  ENV:           NOVA_FRED_API_KEY (via ~/.nova_env)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.fred_ingest</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>source ~/.nova_env 2&gt;/dev/null; source /Users/novaadm/nova/.venv/bin/activate &amp;&amp; cd /Users/novaadm/nova &amp;&amp; exec python -m modules.fred_ingest fetch-all</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-fred_ingest.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-fred_ingest.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

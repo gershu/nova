@@ -8,6 +8,6 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-exec "${HOME}/nova/scripts/nova_submit.sh" \
-    lab_news_sa nova-hub \
-    fetch
+source "${HOME}/nova/.venv/bin/activate"
+cd "${HOME}/nova"
+exec python -m modules.news_sa fetch

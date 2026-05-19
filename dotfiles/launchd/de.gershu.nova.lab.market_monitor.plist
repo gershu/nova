@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab market_monitor LaunchDaemon — Z-Score-Alert-Check.
+
+  Schedule: 22:45 UTC (15 min nach fred_ingest, damit auf frischen Daten).
+
+  Initial-Setup: scripts/install_daemon.sh lab.market_monitor
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-market_monitor.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.market_monitor</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>source ~/.nova_env 2&gt;/dev/null; source /Users/novaadm/nova/.venv/bin/activate &amp;&amp; cd /Users/novaadm/nova &amp;&amp; exec python -m modules.market_monitor run</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>22</integer>
+        <key>Minute</key>
+        <integer>45</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-market_monitor.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-market_monitor.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

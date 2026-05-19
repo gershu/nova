@@ -15,9 +15,6 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-# Submission via nova_submit -> Picker dispatcht (Hub als Self-Worker).
-# Konsistent zum CSP-Daemon-Pattern. Argumente nach 'refresh-all' werden
-# vom workload-run.sh als extra_args durchgereicht.
-exec "${HOME}/nova/scripts/nova_submit.sh" \
-    lab_fundamentals nova-hub \
-    refresh-all --since-days 6
+source "${HOME}/nova/.venv/bin/activate"
+cd "${HOME}/nova"
+exec python -m modules.fundamentals refresh-all --since-days 6

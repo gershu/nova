@@ -6,6 +6,6 @@
 set -euo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
-exec "${HOME}/nova/scripts/nova_submit.sh" \
-    lab_obsidian nova-hub \
-    publish
+source "${HOME}/nova/.venv/bin/activate"
+cd "${HOME}/nova"
+exec python -m modules.obsidian publish

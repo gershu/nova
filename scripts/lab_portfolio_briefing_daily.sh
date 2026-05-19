@@ -21,4 +21,7 @@ if [[ ! -f "${PARAMS_FILE}" ]]; then
 EOF
 fi
 
-exec "${HOME}/nova/scripts/nova_submit.sh" lab_portfolio_briefing nova-hub --params-file "${PARAMS_FILE}"
+source "${HOME}/nova/.venv/bin/activate"
+cd "${HOME}/nova"
+export NOVA_PARAMS_FILE="${PARAMS_FILE}"
+exec python -m modules.llm.portfolio_briefing

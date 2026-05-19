@@ -1,0 +1,98 @@
+# Static S&P 500 Universe für modules.screener_value.
+#
+# Pflege: manuell. S&P 500 ändert sich ~5-10× pro Jahr durch Index-Komitee;
+# diese YAML ist Snapshot, nicht Live-Source. Quarterly-Review empfohlen:
+#   - Aktuelle Mitgliedschaft via https://en.wikipedia.org/wiki/List_of_S%26P_500_companies
+#   - Diffs anpassen, commit + push + node_deploy.sh
+#
+# Starter-Set: Top ~60 nach Market Cap (Q1-2026 Schätzung), repräsentativ
+# über Sektoren. Stefan kann auf volle 500 erweitern.
+#
+# Format: Liste von Objekten mit symbol + name (+ optional sector).
+# 'symbol' ist das yfinance-Ticker-Format (BRK.B -> BRK-B Mapping macht
+# der yf_adapter via _candidate_tickers).
+
+universe: sp500
+last_updated: '2026-05-11'
+
+symbols:
+  # Technology — Mega-Cap
+  - {symbol: AAPL,  name: 'Apple Inc.',                  sector: Technology}
+  - {symbol: MSFT,  name: 'Microsoft Corporation',       sector: Technology}
+  - {symbol: NVDA,  name: 'NVIDIA Corporation',          sector: Technology}
+  - {symbol: GOOGL, name: 'Alphabet Inc. Class A',       sector: 'Communication Services'}
+  - {symbol: META,  name: 'Meta Platforms Inc.',         sector: 'Communication Services'}
+  - {symbol: AVGO,  name: 'Broadcom Inc.',               sector: Technology}
+  - {symbol: ORCL,  name: 'Oracle Corporation',          sector: Technology}
+  - {symbol: ADBE,  name: 'Adobe Inc.',                  sector: Technology}
+  - {symbol: CRM,   name: 'Salesforce Inc.',             sector: Technology}
+  - {symbol: AMD,   name: 'Advanced Micro Devices',      sector: Technology}
+  - {symbol: INTC,  name: 'Intel Corporation',           sector: Technology}
+  - {symbol: CSCO,  name: 'Cisco Systems Inc.',          sector: Technology}
+  - {symbol: IBM,   name: 'IBM Corporation',             sector: Technology}
+  - {symbol: QCOM,  name: 'QUALCOMM Inc.',               sector: Technology}
+  - {symbol: TXN,   name: 'Texas Instruments Inc.',      sector: Technology}
+
+  # Consumer Discretionary / Staples
+  - {symbol: AMZN,  name: 'Amazon.com Inc.',             sector: 'Consumer Discretionary'}
+  - {symbol: TSLA,  name: 'Tesla Inc.',                  sector: 'Consumer Discretionary'}
+  - {symbol: HD,    name: 'Home Depot Inc.',             sector: 'Consumer Discretionary'}
+  - {symbol: MCD,   name: 'McDonald''s Corporation',     sector: 'Consumer Discretionary'}
+  - {symbol: NKE,   name: 'Nike Inc.',                   sector: 'Consumer Discretionary'}
+  - {symbol: SBUX,  name: 'Starbucks Corporation',       sector: 'Consumer Discretionary'}
+  - {symbol: WMT,   name: 'Walmart Inc.',                sector: 'Consumer Staples'}
+  - {symbol: COST,  name: 'Costco Wholesale Corp.',      sector: 'Consumer Staples'}
+  - {symbol: PG,    name: 'Procter & Gamble Co.',        sector: 'Consumer Staples'}
+  - {symbol: KO,    name: 'Coca-Cola Company',           sector: 'Consumer Staples'}
+  - {symbol: PEP,   name: 'PepsiCo Inc.',                sector: 'Consumer Staples'}
+
+  # Financials
+  - {symbol: BRK.B, name: 'Berkshire Hathaway Inc.',     sector: Financials}
+  - {symbol: JPM,   name: 'JPMorgan Chase & Co.',        sector: Financials}
+  - {symbol: V,     name: 'Visa Inc.',                   sector: Financials}
+  - {symbol: MA,    name: 'Mastercard Inc.',             sector: Financials}
+  - {symbol: BAC,   name: 'Bank of America Corp.',       sector: Financials}
+  - {symbol: WFC,   name: 'Wells Fargo & Co.',           sector: Financials}
+  - {symbol: GS,    name: 'Goldman Sachs Group Inc.',    sector: Financials}
+  - {symbol: MS,    name: 'Morgan Stanley',              sector: Financials}
+  - {symbol: AXP,   name: 'American Express Co.',        sector: Financials}
+  - {symbol: BLK,   name: 'BlackRock Inc.',              sector: Financials}
+
+  # Healthcare
+  - {symbol: UNH,   name: 'UnitedHealth Group Inc.',     sector: Healthcare}
+  - {symbol: LLY,   name: 'Eli Lilly and Company',       sector: Healthcare}
+  - {symbol: JNJ,   name: 'Johnson & Johnson',           sector: Healthcare}
+  - {symbol: ABBV,  name: 'AbbVie Inc.',                 sector: Healthcare}
+  - {symbol: MRK,   name: 'Merck & Co.',                 sector: Healthcare}
+  - {symbol: PFE,   name: 'Pfizer Inc.',                 sector: Healthcare}
+  - {symbol: TMO,   name: 'Thermo Fisher Scientific',    sector: Healthcare}
+  - {symbol: ABT,   name: 'Abbott Laboratories',         sector: Healthcare}
+  - {symbol: DHR,   name: 'Danaher Corporation',         sector: Healthcare}
+
+  # Industrials
+  - {symbol: BA,    name: 'Boeing Company',              sector: Industrials}
+  - {symbol: CAT,   name: 'Caterpillar Inc.',            sector: Industrials}
+  - {symbol: GE,    name: 'GE Aerospace',                sector: Industrials}
+  - {symbol: RTX,   name: 'RTX Corporation',             sector: Industrials}
+  - {symbol: LMT,   name: 'Lockheed Martin Corp.',       sector: Industrials}
+  - {symbol: HON,   name: 'Honeywell International',     sector: Industrials}
+  - {symbol: UPS,   name: 'United Parcel Service',       sector: Industrials}
+
+  # Energy
+  - {symbol: XOM,   name: 'Exxon Mobil Corporation',     sector: Energy}
+  - {symbol: CVX,   name: 'Chevron Corporation',         sector: Energy}
+  - {symbol: COP,   name: 'ConocoPhillips',              sector: Energy}
+
+  # Communication
+  - {symbol: NFLX,  name: 'Netflix Inc.',                sector: 'Communication Services'}
+  - {symbol: DIS,   name: 'Walt Disney Company',         sector: 'Communication Services'}
+  - {symbol: T,     name: 'AT&T Inc.',                   sector: 'Communication Services'}
+  - {symbol: VZ,    name: 'Verizon Communications',      sector: 'Communication Services'}
+
+  # Utilities
+  - {symbol: NEE,   name: 'NextEra Energy Inc.',         sector: Utilities}
+  - {symbol: DUK,   name: 'Duke Energy Corporation',     sector: Utilities}
+
+  # Real Estate
+  - {symbol: PLD,   name: 'Prologis Inc.',               sector: 'Real Estate'}
+  - {symbol: AMT,   name: 'American Tower Corp.',        sector: 'Real Estate'}
