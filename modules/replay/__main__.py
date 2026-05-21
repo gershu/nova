@@ -66,7 +66,9 @@ def _connect_and_load_series(args) -> tuple[duckdb.DuckDBPyConnection, list[Dail
     con = duckdb.connect(str(DB_PATH), read_only=True)
 
     # Sanity: portfolio vorhanden?
-    n_holdings = con.execute("SELECT count(*) FROM pos_holdings").fetchone()[0]
+    n_holdings = con.execute(
+        "SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL"
+    ).fetchone()[0]
     if not n_holdings:
         print("FEHLER: pos_holdings ist leer.", file=sys.stderr)
         raise SystemExit(64)

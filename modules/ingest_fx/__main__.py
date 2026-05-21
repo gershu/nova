@@ -76,7 +76,7 @@ def derive_pairs(con: duckdb.DuckDBPyConnection, base: str) -> list[tuple[str, s
         """
         SELECT DISTINCT currency
         FROM (
-            SELECT currency FROM pos_holdings    WHERE currency IS NOT NULL
+            SELECT currency FROM pos_holdings    WHERE currency IS NOT NULL AND valid_to IS NULL
             UNION
             SELECT currency FROM ref_instruments WHERE currency IS NOT NULL
         )

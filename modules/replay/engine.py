@@ -125,7 +125,7 @@ def portfolio_value_series(
                     CASE WHEN upper(h.currency) = upper(?) THEN 1.0 ELSE NULL END
                 ) AS value_base
             FROM dates_in_range d
-            CROSS JOIN pos_holdings h
+            CROSS JOIN (SELECT * FROM pos_holdings WHERE valid_to IS NULL) h
             LEFT JOIN quote_for_date q
               ON q.ref_instrument_id = h.ref_instrument_id AND q.ts = d.ts
             LEFT JOIN fx_for_date fx

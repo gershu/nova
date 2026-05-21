@@ -92,6 +92,7 @@ def publish_holdings(con: duckdb.DuckDBPyConnection, vault: pathlib.Path,
                SUM(h.quantity) AS qty, AVG(h.cost_per_share) AS avg_cost
         FROM pos_holdings h
         LEFT JOIN ref_instruments i USING (ref_instrument_id)
+        WHERE h.valid_to IS NULL
         GROUP BY h.ref_instrument_id, i.symbol, i.name, i.asset_type, i.currency
         ORDER BY i.symbol
     """).fetchall()
@@ -284,7 +285,9 @@ def publish_instrument_files(con: duckdb.DuckDBPyConnection, vault: pathlib.Path
     # Holdings
     if _table_exists(con, "pos_holdings"):
         target_ids.update(
-            r[0] for r in con.execute("SELECT DISTINCT ref_instrument_id FROM pos_holdings").fetchall()
+            r[0] for r in con.execute(
+                "SELECT DISTINCT ref_instrument_id FROM pos_holdings WHERE valid_to IS NULL"
+            ).fetchall()
         )
     # Value-Picks (letzter run)
     if _table_exists(con, "sig_value_picks"):
@@ -338,7 +341,10 @@ def _build_instrument_frontmatter(con, rid: str, symbol: str) -> dict:
 
     tags = ["instrument"]
     if _table_exists(con, "pos_holdings"):
-        h = con.execute("SELECT 1 FROM pos_holdings WHERE ref_instrument_id = ? LIMIT 1", [rid]).fetchone()
+        h = con.execute(
+            "SELECT 1 FROM pos_holdings WHERE ref_instrument_id = ? AND valid_to IS NULL LIMIT 1",
+            [rid],
+        ).fetchone()
         if h:
             tags.append("holding")
 

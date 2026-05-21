@@ -128,6 +128,7 @@ def fetch_per_currency_totals(
         FROM pos_holdings h
         LEFT JOIN latest l ON l.ref_instrument_id = h.ref_instrument_id
         WHERE l.last_close IS NOT NULL
+          AND h.valid_to IS NULL
         GROUP BY h.currency
     """
     rows_today = con.execute(sql, [ts]).fetchall()
@@ -210,7 +211,7 @@ def fetch_top_movers(
         ),
         today AS    (SELECT ref_instrument_id, close AS close_today FROM ranked WHERE rn = 1),
         yesterday AS(SELECT ref_instrument_id, close AS close_prev  FROM ranked WHERE rn = 2),
-        in_portfolio AS (SELECT DISTINCT ref_instrument_id FROM pos_holdings)
+        in_portfolio AS (SELECT DISTINCT ref_instrument_id FROM pos_holdings WHERE valid_to IS NULL)
         SELECT
             r.symbol,
             r.currency,
@@ -253,7 +254,8 @@ def fetch_alerts_for_holdings(
             COALESCE(e.confidence, 0)   AS confidence,
             COALESCE(e.news_used, 0)    AS news_used
         FROM sig_alerts a
-        JOIN pos_holdings p ON p.ref_instrument_id = a.ref_instrument_id
+        JOIN (SELECT DISTINCT ref_instrument_id FROM pos_holdings WHERE valid_to IS NULL) p
+          ON p.ref_instrument_id = a.ref_instrument_id
         LEFT JOIN ref_instruments r ON r.ref_instrument_id = a.ref_instrument_id
         LEFT JOIN sig_alert_explanations e
           ON e.ref_instrument_id = a.ref_instrument_id
@@ -452,7 +454,9 @@ def main() -> int:
                 return 0
 
         # Sanity: gibt's ueberhaupt Holdings?
-        n_holdings = con.execute("SELECT count(*) FROM pos_holdings").fetchone()[0]
+        n_holdings = con.execute(
+            "SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL"
+        ).fetchone()[0]
         if not n_holdings:
             print("FEHLER: pos_holdings ist leer. Erst portfolio importieren.", file=sys.stderr)
             return 64

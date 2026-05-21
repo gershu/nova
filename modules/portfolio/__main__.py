@@ -111,8 +111,6 @@ def query_portfolio(
             FROM ranked WHERE rn = 1
         )
         SELECT
-            h.holding_id,
-            h.lot_id,
             h.ref_instrument_id,
             r.con_id,
             r.isin,
@@ -125,6 +123,7 @@ def query_portfolio(
             h.cost_per_share,
             h.currency,
             h.acquired_at,
+            h.valid_from,
             h.broker,
             h.account,
             l.last_close,
@@ -133,15 +132,16 @@ def query_portfolio(
         FROM pos_holdings h
         LEFT JOIN ref_instruments r ON r.ref_instrument_id = h.ref_instrument_id
         LEFT JOIN latest          l ON l.ref_instrument_id = h.ref_instrument_id
+        WHERE h.valid_to IS NULL
         ORDER BY h.currency NULLS LAST, r.symbol, h.acquired_at
         """,
         [ts, ts, *source_params],
     ).fetchall()
 
     cols = [
-        "holding_id", "lot_id", "ref_instrument_id",
+        "ref_instrument_id",
         "con_id", "isin", "symbol", "exchange", "name", "asset_type", "preferred_source",
-        "quantity", "cost_per_share", "currency", "acquired_at",
+        "quantity", "cost_per_share", "currency", "acquired_at", "valid_from",
         "broker", "account",
         "last_close", "quote_ts", "quote_source",
     ]
@@ -218,8 +218,8 @@ def render_groups(holdings: list[dict]) -> tuple[str, list[dict]]:
                 "exchange":          h["exchange"],
                 "broker":            h["broker"],
                 "account":           h["account"],
-                "lot_id":            h["lot_id"],
                 "acquired_at":       h["acquired_at"],
+                "valid_from":        h["valid_from"],
                 "asset_type":        h["asset_type"],
                 "quantity":          qty,
                 "cost_per_share":    cost,
@@ -390,7 +390,7 @@ def main() -> int:
     # portfolio show ist pure read — read_only erlaubt parallel zu Importern.
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
-        n_holdings = con.execute("SELECT count(*) FROM pos_holdings").fetchone()
+        n_holdings = con.execute("SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL").fetchone()
         if not n_holdings or n_holdings[0] == 0:
             print("==> nova-lab portfolio")
             print("    Keine Holdings. Erst importieren:")

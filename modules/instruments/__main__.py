@@ -174,7 +174,10 @@ def cmd_show(con: duckdb.DuckDBPyConnection, args) -> int:
         print(f"    {k:<18s}: {v if v is not None else '—'}")
 
     # Plus: cross-references
-    n_holdings = con.execute("SELECT count(*) FROM pos_holdings WHERE ref_instrument_id = ?", [rid]).fetchone()[0]
+    n_holdings = con.execute(
+        "SELECT count(*) FROM pos_holdings WHERE ref_instrument_id = ? AND valid_to IS NULL",
+        [rid],
+    ).fetchone()[0]
     n_quotes   = con.execute("SELECT count(*) FROM mkt_quotes_daily WHERE ref_instrument_id = ?", [rid]).fetchone()[0]
     try:
         watchlists = con.execute(

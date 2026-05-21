@@ -110,12 +110,14 @@ def load_holdings_with_latest_quote(
         ),
         latest AS (SELECT ref_instrument_id, ts AS quote_ts, close AS last_close FROM ranked WHERE rn = 1)
         SELECT
-            h.holding_id, h.ref_instrument_id, r.symbol, r.asset_type,
+            h.ref_instrument_id || '|' || h.broker AS holding_id,
+            h.ref_instrument_id, r.symbol, r.asset_type,
             h.currency, h.quantity, h.cost_per_share,
             l.last_close, l.quote_ts
         FROM pos_holdings h
         LEFT JOIN ref_instruments r ON r.ref_instrument_id = h.ref_instrument_id
         LEFT JOIN latest          l ON l.ref_instrument_id = h.ref_instrument_id
+        WHERE h.valid_to IS NULL
         ORDER BY h.currency, r.symbol
         """,
         [ts, ts],

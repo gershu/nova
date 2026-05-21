@@ -219,7 +219,7 @@ def cmd_where(con: duckdb.DuckDBPyConnection, args) -> int:
 
     # Plus check ob im Portfolio
     in_portfolio = con.execute(
-        "SELECT count(*) FROM pos_holdings WHERE ref_instrument_id = ?",
+        "SELECT count(*) FROM pos_holdings WHERE ref_instrument_id = ? AND valid_to IS NULL",
         [rid],
     ).fetchone()[0]
 

@@ -150,7 +150,7 @@ def _execute(shocks: list[Shock], base: str, ts: date | None, top_n: int, name: 
 
     con = duckdb.connect(str(DB_PATH), read_only=True)
     try:
-        n_holdings = con.execute("SELECT count(*) FROM pos_holdings").fetchone()[0]
+        n_holdings = con.execute("SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL").fetchone()[0]
         if not n_holdings:
             print("FEHLER: Keine Holdings in pos_holdings — erst portfolio importieren.", file=sys.stderr)
             return 64
@@ -306,7 +306,7 @@ def cmd_run_saved(args) -> int:
             return 64
         meta, shocks = loaded
 
-        n_holdings = con.execute("SELECT count(*) FROM pos_holdings").fetchone()[0]
+        n_holdings = con.execute("SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL").fetchone()[0]
         if not n_holdings:
             print("FEHLER: pos_holdings ist leer.", file=sys.stderr)
             return 64

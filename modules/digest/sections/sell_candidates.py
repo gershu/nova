@@ -2,10 +2,12 @@
 mit aktueller Bewertung jeder Position.
 
 Quelle: list_portfolio_view_members WHERE view_id='sell_candidates'
-        + pos_holdings + mkt_quotes_daily.
+        + pos_holdings (SCD-2, current rows) + mkt_quotes_daily.
+
+Member-Identitaet seit SCD-2-Migration: (ref_instrument_id, broker).
 
 Empty-Section (== None) wenn:
-  - Schema portfolio_views nicht migriert
+  - Schema portfolio_core nicht migriert
   - View existiert nicht
   - View hat keine Members (oder keine die aktuell gehalten werden)
 """
@@ -33,8 +35,8 @@ def render(con: duckdb.DuckDBPyConnection, ts: date | None = None) -> Optional[s
     if not _table_exists(con, "list_portfolio_view_members"):
         return None
 
-    # Join: view-member -> lot -> instrument; aggregiert pro Wertpapier
-    # (mehrere Lots eines Symbols rollen zusammen).
+    # Join: view-member -> current holding -> instrument; aggregiert pro
+    # Wertpapier (mehrere Broker-Positionen eines Symbols rollen zusammen).
     rows = con.execute("""
         WITH latest_spot AS (
             WITH ranked AS (
@@ -49,10 +51,12 @@ def render(con: duckdb.DuckDBPyConnection, ts: date | None = None) -> Optional[s
         ),
         view_holdings AS (
             SELECT h.ref_instrument_id, h.quantity, h.cost_per_share,
-                   m.notes, m.lot_id
+                   m.notes
             FROM list_portfolio_view_members m
-            JOIN pos_holdings h USING (lot_id)
-            WHERE m.view_id = ?
+            JOIN pos_holdings h
+              ON h.ref_instrument_id = m.ref_instrument_id
+             AND h.broker            = m.broker
+            WHERE m.view_id = ? AND h.valid_to IS NULL
         )
         SELECT vh.ref_instrument_id, i.symbol, i.name, i.currency,
                SUM(vh.quantity) AS qty,

@@ -58,7 +58,8 @@ base_join = """
 
 params: list = [since]
 if only_portfolio:
-    base_join += " AND a.ref_instrument_id IN (SELECT DISTINCT ref_instrument_id FROM pos_holdings)"
+    base_join += (" AND a.ref_instrument_id IN "
+                  "(SELECT DISTINCT ref_instrument_id FROM pos_holdings WHERE valid_to IS NULL)")
 
 alerts = run_query(base_join + " ORDER BY a.ts DESC, a.ref_instrument_id, a.rule_name", tuple(params))
 
