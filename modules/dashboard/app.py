@@ -60,7 +60,8 @@ DuckDB; Daemons schreiben weiter parallel.
 - **6 Alerts** — sig_alerts + LLM-Erklaerungen, Filter nach Regel/Sentiment/Zeitraum
 - **7 Marktlage** — VIX, Economic Indicators, Z-Scores, Korrelations-Matrix
 - **8 Decision Journal** — Feedback-Loop: Recommendations -> Entscheidung -> Outcome
-- **9 Database** — Inventar aller Tabellen + Views mit Daten- + SQL-Inspektion
+- **9 Allocation** — Ist-Allokation vs. Ziel-Baender + Drift (sig_allocation)
+- **10 Database** — Inventar aller Tabellen + Views mit Daten- + SQL-Inspektion
 
 Cross-Currency-Aggregation erfolgt in EUR. Native-Werte bleiben sichtbar.
 
