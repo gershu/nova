@@ -31,6 +31,16 @@ _SEV_ORDER = {"critical": 1, "warning": 2, "info": 3}
 
 # ---------- Daten laden ----------
 
+# Recommendations (latest ts) — die abgeleitete Quintessenz
+recs = pd.DataFrame()
+if table_exists("sig_recommendations"):
+    latest_rec = run_query("SELECT max(ts) AS ts FROM sig_recommendations")
+    if not latest_rec.empty and pd.notna(latest_rec.iloc[0]["ts"]):
+        recs = run_query("""
+            SELECT rec_id, ts, category, symbol, action, priority, title, rationale
+            FROM sig_recommendations WHERE ts = ?
+        """, (str(latest_rec.iloc[0]["ts"]),))
+
 # Setups (latest ts)
 setups = pd.DataFrame()
 if table_exists("sig_market_setups"):
@@ -78,21 +88,50 @@ if table_exists("list_watchlist_members"):
 
 # ---------- KPI-Header ----------
 
+n_recs     = len(recs)
 n_critical = int((setups["severity"] == "critical").sum()) if not setups.empty else 0
 n_warning  = int((setups["severity"] == "warning").sum())  if not setups.empty else 0
 n_info     = int((setups["severity"] == "info").sum())     if not setups.empty else 0
 n_alerts   = len(alerts)
 n_csp      = len(csp)
 
-k1, k2, k3, k4, k5 = st.columns(5)
-k1.metric("🔴 Critical-Setups", n_critical)
-k2.metric("🟠 Warning-Setups",  n_warning)
-k3.metric("🟢 Info-Setups",     n_info)
-k4.metric("Portfolio-Alerts (7d)", n_alerts)
-k5.metric("CSP-Opportunities",  n_csp)
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1.metric("💡 Empfehlungen",     n_recs)
+k2.metric("🔴 Critical-Setups",  n_critical)
+k3.metric("🟠 Warning-Setups",   n_warning)
+k4.metric("🟢 Info-Setups",      n_info)
+k5.metric("Portfolio-Alerts (7d)", n_alerts)
+k6.metric("CSP-Opportunities",   n_csp)
 
-if n_critical == 0 and n_warning == 0 and n_alerts == 0:
+if n_recs == 0 and n_critical == 0 and n_warning == 0 and n_alerts == 0:
     st.success("Keine dringenden Action-Items — ruhige Lage.")
+
+st.divider()
+
+
+# ---------- Empfehlungen (LLM-Recommendation-Layer) ----------
+
+st.subheader("💡 Empfehlungen")
+if recs.empty:
+    st.info("Keine Empfehlungen. `python -m modules.llm.recommendations run` "
+            "ausfuehren — oder es ist tatsaechlich nichts vorzuschlagen.")
+else:
+    _PRIO_ICON  = {"high": "🔴", "medium": "🟠", "low": "🟢"}
+    _PRIO_ORDER = {"high": 1, "medium": 2, "low": 3}
+    r = recs.copy()
+    r["_ord"] = r["priority"].map(_PRIO_ORDER).fillna(9)
+    r = r.sort_values(["_ord", "rec_id"])
+    st.caption(f"Stand: {str(r.iloc[0]['ts'])} · "
+               f"LLM-abgeleitet aus Setups + Alerts + Portfolio-Zustand · "
+               f"Vorschläge, keine Order")
+    for _, row in r.iterrows():
+        icon = _PRIO_ICON.get(row["priority"], "·")
+        tgt  = f"  ·  **{row['symbol']}**" if row["symbol"] else ""
+        st.markdown(
+            f"{icon} `{row['action']}`{tgt}  ·  _{row['category'] or ''}_  \n"
+            f"**{row['title'] or ''}**  \n"
+            f"{row['rationale'] or ''}"
+        )
 
 st.divider()
 
