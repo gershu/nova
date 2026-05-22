@@ -49,14 +49,15 @@ VALID_PRIORITY = {"high", "medium", "low"}
 
 SYSTEM_PROMPT = (
     "Du bist Chief Investment Officer fuer ein Privatanleger-Portfolio.\n"
-    "Aufgabe: aus Portfolio-Zustand, aktiven Markt-Setups und Alerts "
-    "konkrete, BEGRUENDETE Handlungs-Vorschlaege ableiten.\n"
+    "Aufgabe: aus Portfolio-Zustand, aktiven Markt-Setups, Alerts und "
+    "Allokations-Drift konkrete, BEGRUENDETE Handlungs-Vorschlaege ableiten.\n"
     "\n"
     "GRUNDREGELN:\n"
     "- Human-in-loop: du gibst VORSCHLAEGE, keine Order. Der Anleger "
     "  entscheidet und fuehrt selbst aus.\n"
     "- Jeder Vorschlag MUSS sich auf die gegebenen Daten stuetzen (Setup, "
-    "  Alert, Positions-Gewicht). Erfinde KEINE Fakten, KEINE Nachrichten.\n"
+    "  Alert, Positions-Gewicht, Allokations-Drift). Erfinde KEINE Fakten, "
+    "  KEINE Nachrichten.\n"
     "- Konservativ: wenn nichts dringend ist, gib WENIGE oder KEINE "
     "  Vorschlaege. Eine leere Liste ist eine valide, ehrliche Antwort.\n"
     "- Sprache abwaegend ('erwaegen', 'pruefen'), nicht befehlend.\n"
@@ -157,6 +158,27 @@ def _table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def fetch_allocation_drift(con: duckdb.DuckDBPyConnection) -> list[dict]:
+    """Klassen-Allokation am juengsten sig_allocation-ts (Ist vs. Ziel-Band).
+
+    Sortiert nach Drift-Betrag — die am weitesten abgedrifteten Klassen
+    zuerst. Fehlt sig_allocation, ist die Liste leer (modules.allocation
+    noch nicht gelaufen).
+    """
+    if not _table_exists(con, "sig_allocation"):
+        return []
+    latest = con.execute("SELECT max(ts) FROM sig_allocation").fetchone()
+    if not latest or not latest[0]:
+        return []
+    rows = con.execute("""
+        SELECT label, target_pct, actual_pct, drift_pct, band_status
+        FROM sig_allocation WHERE ts = ?
+        ORDER BY abs(COALESCE(drift_pct, 0)) DESC, label
+    """, [latest[0]]).fetchall()
+    return [{"label": r[0], "target_pct": r[1], "actual_pct": r[2],
+             "drift_pct": r[3], "band_status": r[4]} for r in rows]
+
+
 def fetch_portfolio_alerts(con: duckdb.DuckDBPyConnection, ts: date) -> list[dict]:
     """Alerts der letzten 7 Tage auf gehaltenen Positionen.
 
@@ -209,7 +231,7 @@ def fetch_portfolio_alerts(con: duckdb.DuckDBPyConnection, ts: date) -> list[dic
 # ---------- Prompt ----------
 
 def build_user_prompt(ts: date, snap: dict, setups: list[dict],
-                       alerts: list[dict]) -> str:
+                       alerts: list[dict], drift: list[dict]) -> str:
     lines = [
         f"DATUM: {ts.isoformat()}",
         "",
@@ -244,11 +266,25 @@ def build_user_prompt(ts: date, snap: dict, setups: list[dict],
         lines.append("  (keine Alerts auf gehaltenen Positionen)")
 
     lines.append("")
+    lines.append("ALLOKATIONS-DRIFT (Ist vs. Ziel-Baender):")
+    if drift:
+        for d in drift:
+            tgt = f"{d['target_pct']:.0f}%" if d["target_pct"] is not None else "—"
+            dr  = f"{d['drift_pct']:+.1f}" if d["drift_pct"] is not None else "—"
+            flag = ("  <-- ausserhalb Band"
+                    if d["band_status"] in ("below", "above") else "")
+            lines.append(
+                f"  {d['label']:<24s} {d['actual_pct']:5.1f}%  "
+                f"(Ziel {tgt}, Drift {dr})  {d['band_status']}{flag}")
+    else:
+        lines.append("  (keine Allokations-Daten — modules.allocation noch nicht gelaufen)")
+
+    lines.append("")
     lines.append("AUFGABE:")
     lines.append("Leite 0-5 konkrete Handlungs-Vorschlaege ab. Jeder Vorschlag")
-    lines.append("stuetzt sich auf ein konkretes Setup, einen Alert oder ein")
-    lines.append("Positions-Merkmal aus den Daten oben. Wenn nichts dringend")
-    lines.append("ist: leere Liste.")
+    lines.append("stuetzt sich auf ein konkretes Setup, einen Alert, eine")
+    lines.append("Allokations-Drift oder ein Positions-Merkmal aus den Daten")
+    lines.append("oben. Wenn nichts dringend ist: leere Liste.")
     lines.append("")
     lines.append("Antworte als JSON-Objekt mit Schluessel 'recommendations',")
     lines.append("einer Liste von Objekten mit:")
@@ -326,17 +362,21 @@ def cmd_run(args) -> int:
             return 64
         setups = fetch_active_setups(con)
         alerts = fetch_portfolio_alerts(con, ts)
+        drift  = fetch_allocation_drift(con)
 
-        prompt = build_user_prompt(ts, snap, setups, alerts)
+        prompt = build_user_prompt(ts, snap, setups, alerts, drift)
         based_on = {
             "setups": [s["name"] for s in setups],
             "alerts": [f"{a['symbol']}:{a['rule_name']}" for a in alerts],
+            "allocation_drift": [d["label"] for d in drift
+                                 if d["band_status"] in ("below", "above")],
             "n_positions": len(snap["positions"]),
         }
 
         print(f"==> recommendations run  (ts={ts}, model={model})")
         print(f"    Input: {len(snap['positions'])} Positionen, "
-              f"{len(setups)} Setups, {len(alerts)} Alerts")
+              f"{len(setups)} Setups, {len(alerts)} Alerts, "
+              f"{len(drift)} Allokations-Klassen")
         print("==> LLM call ...")
 
         with OllamaClient(model=model) as llm:
