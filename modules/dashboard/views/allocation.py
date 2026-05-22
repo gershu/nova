@@ -21,6 +21,7 @@ import plotly.express as px
 import streamlit as st
 import yaml
 
+from modules.dashboard.components.format import de_int
 from modules.dashboard.components.kpi import fmt_money
 from modules.dashboard.db import run_query, table_exists
 
@@ -245,14 +246,15 @@ def render_struktur() -> None:
                  "weight_pct": float(by_name["weight_pct"].sum()),
                  "pnl_eur": float(by_name["pnl_eur"].sum())})
     st.dataframe(
-        pd.DataFrame(rows), use_container_width=True, hide_index=True,
+        pd.DataFrame(rows).style.format({"mtm_eur": de_int, "pnl_eur": de_int}),
+        use_container_width=True, hide_index=True,
         column_config={
             "klasse":     st.column_config.TextColumn("Klasse"),
             "position":   st.column_config.TextColumn("Position"),
             "asset_type": st.column_config.TextColumn("Typ", width="small"),
-            "mtm_eur":    st.column_config.NumberColumn("MV (EUR)",  format="%.0f"),
+            "mtm_eur":    "MV (EUR)",
             "weight_pct": st.column_config.NumberColumn("Anteil %",  format="%.2f%%"),
-            "pnl_eur":    st.column_config.NumberColumn("PnL (EUR)", format="%.0f"),
+            "pnl_eur":    "PnL (EUR)",
         },
     )
     st.caption("Teilsummen je Klasse · Holdings nach Name gruppiert "
@@ -332,7 +334,7 @@ def render_ziel() -> None:
     tbl["status"] = tbl["band_status"].map(lambda s: _STATUS_ICON.get(s, s))
     st.dataframe(
         tbl[["label", "actual_pct", "target_pct", "band", "drift_pct",
-             "actual_eur", "status"]],
+             "actual_eur", "status"]].style.format({"actual_eur": de_int}),
         use_container_width=True, hide_index=True,
         column_config={
             "label":      st.column_config.TextColumn("Klasse"),
@@ -340,7 +342,7 @@ def render_ziel() -> None:
             "target_pct": st.column_config.NumberColumn("Ziel", format="%.0f %%"),
             "band":       st.column_config.TextColumn("Band"),
             "drift_pct":  st.column_config.NumberColumn("Drift", format="%+.1f"),
-            "actual_eur": st.column_config.NumberColumn("Wert EUR", format="%.0f"),
+            "actual_eur": "Wert EUR",
             "status":     st.column_config.TextColumn("Status"),
         },
     )
@@ -385,14 +387,15 @@ def render_views() -> None:
 
     st.markdown("**Summen pro View (EUR)**")
     st.dataframe(
-        sums[["view_name", "n_members", "cost_eur", "mtm_eur", "pnl_eur", "pnl_pct"]],
+        sums[["view_name", "n_members", "cost_eur", "mtm_eur", "pnl_eur", "pnl_pct"]]
+            .style.format({"cost_eur": de_int, "mtm_eur": de_int, "pnl_eur": de_int}),
         use_container_width=True, hide_index=True,
         column_config={
             "view_name":  st.column_config.TextColumn("View"),
             "n_members":  st.column_config.NumberColumn("# Members", format="%d"),
-            "cost_eur":   st.column_config.NumberColumn("Cost (EUR)", format="%.0f"),
-            "mtm_eur":    st.column_config.NumberColumn("MV (EUR)",   format="%.0f"),
-            "pnl_eur":    st.column_config.NumberColumn("Δ (EUR)",    format="%.0f"),
+            "cost_eur":   "Cost (EUR)",
+            "mtm_eur":    "MV (EUR)",
+            "pnl_eur":    "Δ (EUR)",
             "pnl_pct":    st.column_config.NumberColumn("Δ %",        format="%.2f%%"),
         },
     )
@@ -421,7 +424,9 @@ def render_views() -> None:
             st.dataframe(
                 members[["symbol", "broker", "name", "asset_type", "currency",
                          "quantity", "cost_eur", "mtm_eur", "pnl_eur",
-                         "weight_in_view_pct"]],
+                         "weight_in_view_pct"]]
+                    .style.format({"quantity": de_int, "cost_eur": de_int,
+                                   "mtm_eur": de_int, "pnl_eur": de_int}),
                 use_container_width=True, hide_index=True,
                 column_config={
                     "symbol":     st.column_config.TextColumn("Symbol", width="small"),
@@ -429,10 +434,10 @@ def render_views() -> None:
                     "name":       st.column_config.TextColumn("Name"),
                     "asset_type": st.column_config.TextColumn("Type", width="small"),
                     "currency":   st.column_config.TextColumn("CCY", width="small"),
-                    "quantity":   st.column_config.NumberColumn(format="%.0f"),
-                    "cost_eur":   st.column_config.NumberColumn("Cost (EUR)", format="%.0f"),
-                    "mtm_eur":    st.column_config.NumberColumn("MV (EUR)",   format="%.0f"),
-                    "pnl_eur":    st.column_config.NumberColumn("Δ (EUR)",    format="%.0f"),
+                    "quantity":   "Menge",
+                    "cost_eur":   "Cost (EUR)",
+                    "mtm_eur":    "MV (EUR)",
+                    "pnl_eur":    "Δ (EUR)",
                     "weight_in_view_pct": st.column_config.NumberColumn("Weight %", format="%.2f%%"),
                 },
             )

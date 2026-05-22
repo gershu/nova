@@ -16,6 +16,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from modules.dashboard.components.format import de_dec, de_int
 from modules.dashboard.components.kpi import fmt_money, fmt_pct, kpi_row
 from modules.dashboard.db import run_query
 
@@ -96,15 +97,20 @@ with st.expander(f"Pro-Currency-Detail ({len(ccy_groups)} Buckets, Native + EUR)
            .sort_values("mv_eur", ascending=False)
     )
     st.dataframe(
-        cc_df, use_container_width=True, hide_index=True,
+        cc_df.style.format({
+            "fx_rate_eur": lambda v: de_dec(v, 4),
+            "mv_native": de_int, "mv_eur": de_int,
+            "pnl_native": de_int, "pnl_eur": de_int,
+        }),
+        use_container_width=True, hide_index=True,
         column_config={
             "currency":     st.column_config.TextColumn("CCY", width="small"),
             "n_positions":  st.column_config.NumberColumn("# Pos", format="%d"),
-            "fx_rate_eur":  st.column_config.NumberColumn("FX→EUR", format="%.4f"),
-            "mv_native":    st.column_config.NumberColumn("MV (native)",  format="%.0f"),
-            "mv_eur":       st.column_config.NumberColumn("MV (EUR)",     format="%.0f"),
-            "pnl_native":   st.column_config.NumberColumn("PnL (native)", format="%.0f"),
-            "pnl_eur":      st.column_config.NumberColumn("PnL (EUR)",    format="%.0f"),
+            "fx_rate_eur":  "FX→EUR",
+            "mv_native":    "MV (native)",
+            "mv_eur":       "MV (EUR)",
+            "pnl_native":   "PnL (native)",
+            "pnl_eur":      "PnL (EUR)",
         },
     )
 
@@ -128,7 +134,8 @@ no_quote = agg[agg["px_close"].isna()]
 if not no_quote.empty:
     with st.expander(f"⚠ Keine Quote ({len(no_quote)})", expanded=False):
         st.dataframe(
-            no_quote[["symbol", "currency", "quantity", "avg_cost"]],
+            no_quote[["symbol", "currency", "quantity", "avg_cost"]]
+                .style.format({"quantity": de_int, "avg_cost": de_dec}),
             use_container_width=True, hide_index=True,
         )
 
@@ -262,25 +269,32 @@ s4.metric("Δ (EUR, gefiltert)",
           delta=f"{flt_pct:+.2f}%" if flt_pct is not None else None)
 
 st.dataframe(
-    display,
+    display.style.format({
+        "quantity":    de_int,
+        "avg_cost":    de_dec,
+        "px_close":    de_dec,
+        "fx_rate_eur": lambda v: de_dec(v, 4),
+        "cost_native": de_int, "mtm_native": de_int, "pnl_native": de_int,
+        "cost_eur":    de_int, "mtm_eur":    de_int, "pnl_eur":    de_int,
+    }),
     use_container_width=True, height=520,
     column_config={
         "ref_instrument_id": None,
         "asset_type":  st.column_config.TextColumn("type", width="small"),
         "currency":    st.column_config.TextColumn("ccy",  width="small"),
         "broker":      st.column_config.TextColumn("broker", width="small"),
-        "quantity":    st.column_config.NumberColumn(format="%.0f"),
-        "avg_cost":    st.column_config.NumberColumn("avg cost", format="%.2f"),
-        "px_close":    st.column_config.NumberColumn("spot",     format="%.2f"),
+        "quantity":    "Menge",
+        "avg_cost":    "avg cost",
+        "px_close":    "spot",
         "quote_ts":    st.column_config.DateColumn("spot ts"),
         "quote_source": st.column_config.TextColumn("src", width="small"),
-        "fx_rate_eur": st.column_config.NumberColumn("FX→EUR", format="%.4f"),
-        "cost_native": st.column_config.NumberColumn("cost (native)", format="%.0f"),
-        "mtm_native":  st.column_config.NumberColumn("MV (native)",   format="%.0f"),
-        "pnl_native":  st.column_config.NumberColumn("Δ (native)",    format="%.0f"),
-        "cost_eur":    st.column_config.NumberColumn("cost (EUR)",    format="%.0f"),
-        "mtm_eur":     st.column_config.NumberColumn("MV (EUR)",      format="%.0f"),
-        "pnl_eur":     st.column_config.NumberColumn("Δ (EUR)",       format="%.0f"),
+        "fx_rate_eur": "FX→EUR",
+        "cost_native": "cost (native)",
+        "mtm_native":  "MV (native)",
+        "pnl_native":  "Δ (native)",
+        "cost_eur":    "cost (EUR)",
+        "mtm_eur":     "MV (EUR)",
+        "pnl_eur":     "Δ (EUR)",
         "result_pct":  st.column_config.NumberColumn("Δ %",           format="%.2f%%"),
         "valid_from":  st.column_config.DateColumn("seit",            format="YYYY-MM-DD"),
     },

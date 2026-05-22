@@ -17,6 +17,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from modules.dashboard.components.format import de_int
 from modules.dashboard.db import connection
 from modules.decision_journal import store
 
@@ -223,7 +224,8 @@ else:
     cols = ["rec_ts", "rec_id", "rec_action", "rec_symbol", "rec_title",
             "status", "decided_at", "trades", "outcome", "outcome_pnl_eur"]
     st.dataframe(
-        view[cols], use_container_width=True, hide_index=True,
+        view[cols].style.format({"outcome_pnl_eur": de_int}),
+        use_container_width=True, hide_index=True,
         column_config={
             "rec_ts":          st.column_config.TextColumn("Datum", width="small"),
             "rec_id":          st.column_config.NumberColumn("#", width="small"),
@@ -234,7 +236,7 @@ else:
             "decided_at":      st.column_config.TextColumn("Entschieden", width="small"),
             "trades":          st.column_config.NumberColumn("Trades", width="small"),
             "outcome":         st.column_config.TextColumn("Outcome"),
-            "outcome_pnl_eur": st.column_config.NumberColumn("PnL EUR", format="%.0f"),
+            "outcome_pnl_eur": "PnL EUR",
         },
     )
     st.caption("Erfassung + Bewertung in den Abschnitten oben — oder per "
