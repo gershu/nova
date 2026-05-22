@@ -1,0 +1,59 @@
+# nova — Instrument -> Allokations-Klasse Zuordnung.
+#
+# Ordnet jede ref_instrument_id einer der Klassen aus config/allocation.yaml
+# (target_allocation) zu. modules/allocation invertiert diese Map und
+# aggregiert v_mkt_holdings je Klasse.
+#
+# Die Klassen-Schluessel muessen EXAKT den Schluesseln in allocation.yaml
+# entsprechen. Instrumente ohne Eintrag landen im Bucket 'unclassified' und
+# werden vom Modul laut gemeldet — dann hier ergaenzen.
+#
+# Gruppiert nach Klasse zur Lesbarkeit; tunebar ohne Code-Deploy.
+# Stand: 2026-05-22 — geseedet aus dem damaligen Portfolio (29 Instrumente).
+
+classification:
+
+  technology_equity:
+    - IB:NVDA:USD            # NVIDIA Corp.
+    - IB:META:USD            # Meta Platforms Inc. Class A
+    - IB:ABEA:EUR            # Alphabet Inc. Class A (Xetra)
+    - IB:GOOGL:USD           # Alphabet Inc. Class A
+    - IB:GOOG:USD            # Alphabet Inc. Class C
+    - IB:AAPL:USD            # Apple Inc.
+    - IB:MSFT:USD            # Microsoft Corp.
+    - IB:MSF:EUR             # Microsoft Corp. (Xetra)
+    - IB:AMZN:USD            # Amazon.com Inc.
+    - IB:INTC:USD            # Intel Corp.
+    - IB:SYM:USD             # Symbotic Inc.
+    - IB:ADBE:USD            # Adobe Inc.
+    - IB:RBLX:USD            # Roblox Corp. Class A
+    - IB:TTD:USD             # The Trade Desk Inc. Class A
+
+  quality_equity:
+    - IB:BRK_B:USD           # Berkshire Hathaway Inc. Class B
+    - IB:BRYN:EUR            # Berkshire Hathaway Inc. Class B (Xetra)
+    - IB:DHR:USD             # Danaher Corp.
+    - IB:VLTO:USD            # Veralto Corp.
+
+  bonds:
+    - IB:IBCID654613619:EUR  # Katjes International — Anleihe 2023/2028
+
+  etf:
+    - IB:QQQ:USD             # Invesco QQQ Trust Series 1
+    - IB:SPY:USD             # SPDR S&P 500 ETF Trust
+
+  dividend_equity:
+    - IB:EOAN:EUR            # E.ON SE
+    - IB:DBK:EUR             # Deutsche Bank AG
+    - IB:BAS:EUR             # BASF SE
+    - IB:MUV2:EUR            # Muenchener Rueckversicherungs-Gesellschaft AG
+    - IB:CBK:EUR             # Commerzbank AG
+
+  # cash_collateral: T-Bonds — aktuell keine Positionen.
+  # Bei Aufbau des Sleeve (Verkauf -> T-Bond -> CSP) die T-Bond-IDs hier eintragen.
+  cash_collateral: []
+
+  satellites:
+    - IB:BNTX:USD            # BioNTech SE ADR
+    - IB:MRNA:USD            # Moderna Inc.
+    - IB:UN0:EUR             # Uniper SE
