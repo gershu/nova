@@ -1,0 +1,99 @@
+# nova — Portfolio-Allokations-Policy.
+#
+# Maschinenlesbare Fassung des Investment Policy Statement
+# (docs/investment_policy_statement.md). Das IPS ist die Quelle der
+# Wahrheit — Zielwerte dort beschliessen, dann hierher uebertragen.
+#
+# Wird (kuenftig) von modules/allocation ausgewertet: Ist-Allokation
+# aus v_mkt_holdings gegen die Zielbaender gestellt, Drift + Konzentration
+# nach sig_allocation geschrieben.
+#
+# Die Zuordnung Instrument -> Klasse wird separat gepflegt (nicht hier) —
+# insbesondere muessen T-Bonds dem cash_collateral-Sleeve zugeordnet
+# werden, NICHT der bonds-Klasse.
+#
+# Schwellwerte hier tunebar ohne Code-Deploy — nur node_deploy.sh / git pull.
+#
+# STATUS: ENTWURF v0.2 (2026-05-22) — noch nicht in Kraft.
+
+portfolio:
+  base_currency: EUR
+
+# ---- Ziel-Allokation ----
+# target_pct summiert auf 100. min/max sind die Toleranzbaender —
+# innerhalb des Bandes kein Handlungsbedarf.
+
+target_allocation:
+
+  technology_equity:
+    label:      "Technologie-Aktien"
+    role:       "Wachstumsmotor"
+    target_pct: 32
+    min_pct:    28
+    max_pct:    42
+
+  quality_equity:
+    label:      "Quality-Aktien"
+    role:       "Compounder — Stabilitaet durch Geschaeftsqualitaet"
+    target_pct: 19
+    min_pct:    14
+    max_pct:    26
+
+  bonds:
+    label:      "Bonds"
+    role:       "Stabilitaet, Ertrag, Drawdown-Puffer"
+    target_pct: 18
+    min_pct:    12
+    max_pct:    25
+
+  etf:
+    label:      "Index-ETF"
+    role:       "breite Diversifikation"
+    target_pct: 12
+    min_pct:    8
+    max_pct:    16
+
+  dividend_equity:
+    label:      "Dividenden-Aktien"
+    role:       "laufender Ertrag"
+    target_pct: 10
+    min_pct:    7
+    max_pct:    15
+
+  cash_collateral:
+    label:      "Cash / CSP-Collateral"
+    role:       "Liquiditaet, T-Bond-Parkplatz, Praemienbasis"
+    target_pct: 7
+    min_pct:    5
+    max_pct:    15
+
+  satellites:
+    label:      "Sonstige / Satelliten"
+    role:       "taktische Einzelwetten ausserhalb des Kerns"
+    target_pct: 2
+    min_pct:    0
+    max_pct:    5
+
+# ---- Rebalancing ----
+
+rebalancing:
+  drift_tolerance_pct: 5        # Abweichung vom target_pct, ab der ein review ausgeloest wird
+  tax_aware:           true     # Drift IMMER mit Steuer-Konsequenz zeigen, nie isoliert
+  prefer_new_capital:  true     # Drift bevorzugt ueber Zufluesse/Praemien korrigieren, nicht ueber Verkaeufe
+  # Aufbau des cash_collateral-Sleeve erfolgt bewusst ueber Positionsverkaeufe;
+  # Lot-Auswahl steuerschonend (zuerst gewinnarme/verlustbehaftete Lots).
+
+# ---- Konzentrations-Leitplanken ----
+
+concentration:
+  max_single_position_pct: 15   # groesstes Einzelgewicht
+  max_top5_pct:            55   # Top-5-Positionen zusammen
+  # max_per_broker_pct:    __   # offen — Richtwert im Review festlegen
+
+# ---- CSP (Cash Secured Puts) ----
+# Collateral = T-Bonds im cash_collateral-Sleeve. Puts erwirtschaften
+# Praemie zusaetzlich zur Anleiherendite, Sleeve bleibt liquide.
+
+csp:
+  collateral_class:           cash_collateral   # Sleeve, aus dem Collateral gebunden wird
+  underlying_must_fit_target: true              # Puts nur auf Basiswerte, die ins Allokations-Ziel passen
