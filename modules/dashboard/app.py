@@ -53,12 +53,13 @@ DuckDB; Daemons schreiben weiter parallel.
 **Navigation (Sidebar):**
 
 - **1 Overview** — Portfolio-Total in EUR + MTM-Trend + Positions-Tabelle
-- **2 Composition** — Allokation, Top-15, Portfolio-Views, Korrelations-Matrix
-- **3 Tagesbriefing** — LLM-Briefing: Headline, Body, KPIs, Sentiment, History
-- **4 CSP Picks** — Cash-Secured-Put-Kandidaten aus screener_csp
-- **5 Alerts** — sig_alerts + LLM-Erklaerungen, Filter nach Regel/Sentiment/Zeitraum
-- **6 Marktlage** — VIX, Economic Indicators, Z-Scores, Korrelations-Matrix
-- **7 Database** — Inventar aller Tabellen + Views mit Daten- + SQL-Inspektion
+- **2 Action Items** — priorisierte Sicht: aktive Setups + Portfolio-Alerts + CSP-Opportunities
+- **3 Composition** — Allokation, Top-15, Portfolio-Views, Korrelations-Matrix
+- **4 Tagesbriefing** — LLM-Briefing: Headline, Body, KPIs, Sentiment, History
+- **5 CSP Picks** — Cash-Secured-Put-Kandidaten aus screener_csp
+- **6 Alerts** — sig_alerts + LLM-Erklaerungen, Filter nach Regel/Sentiment/Zeitraum
+- **7 Marktlage** — VIX, Economic Indicators, Z-Scores, Korrelations-Matrix
+- **8 Database** — Inventar aller Tabellen + Views mit Daten- + SQL-Inspektion
 
 Cross-Currency-Aggregation erfolgt in EUR. Native-Werte bleiben sichtbar.
 

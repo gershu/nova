@@ -65,6 +65,47 @@ setups:
         op:     ">"
         value:  0.5
 
+  # ---- VIX-Baender (abgestuft — lueckenlose Aussage 0..30) ----
+
+  vix_normal:
+    category: market
+    severity: info
+    summary:  "Volatilitaet im Normalbereich (VIX 15-20)"
+    match:    all
+    conditions:
+      - metric: vix_level
+        op:     ">="
+        value:  15
+      - metric: vix_level
+        op:     "<"
+        value:  20
+
+  vix_elevated:
+    category: market
+    severity: warning
+    summary:  "Volatilitaet erhoeht (VIX 20-30) — noch kein Stress, beobachten"
+    match:    all
+    conditions:
+      - metric: vix_level
+        op:     ">="
+        value:  20
+      - metric: vix_level
+        op:     "<"
+        value:  30
+
+  yield_curve_flat:
+    category: market
+    severity: info
+    summary:  "Yield-Curve flach (2-10-Spread 0-0.5) — Abflachung beobachten"
+    match:    all
+    conditions:
+      - metric: yield_curve_2_10
+        op:     ">="
+        value:  0.0
+      - metric: yield_curve_2_10
+        op:     "<"
+        value:  0.5
+
   yield_curve_inversion:
     category: market
     severity: warning
@@ -85,6 +126,19 @@ setups:
     conditions:
       - metric: max_position_weight_pct
         op:     ">"
+        value:  25
+
+  position_watch:
+    category: portfolio
+    severity: info
+    summary:  "Position naehert sich Konzentrations-Limit (20-25%)"
+    match:    all
+    conditions:
+      - metric: max_position_weight_pct
+        op:     ">="
+        value:  20
+      - metric: max_position_weight_pct
+        op:     "<="
         value:  25
 
   stale_data:
