@@ -39,7 +39,7 @@ import sys
 import duckdb
 
 from ..portfolio._ib_resolver import IBResolver, ResolvedContract, SECTYPE_MAP
-from ..portfolio.import_xlsx import (
+from ..portfolio.instrument_id import (
     ASSET_TYPE_TO_CLASS,
     VALID_ASSET_CLASSES,
     make_ref_instrument_id,
@@ -52,7 +52,7 @@ DB_PATH = pathlib.Path(
         str(pathlib.Path.home() / "nova_data" / "lab.duckdb"),
     )
 )
-PREFERRED_SOURCE = "IB"  # Konsistent mit portfolio.import_xlsx
+PREFERRED_SOURCE = "IB"  # Default-Source fuer ref_instrument_id
 
 
 def ensure_schema(con: duckdb.DuckDBPyConnection) -> None:

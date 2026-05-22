@@ -393,10 +393,8 @@ def main() -> int:
         n_holdings = con.execute("SELECT count(*) FROM pos_holdings WHERE valid_to IS NULL").fetchone()
         if not n_holdings or n_holdings[0] == 0:
             print("==> nova-lab portfolio")
-            print("    Keine Holdings. Erst importieren:")
-            print("      python -m modules.portfolio.template ~/nova_lab_input/portfolio.xlsx")
-            print("      <Excel ausfuellen>")
-            print("      python -m modules.portfolio.import_xlsx ~/nova_lab_input/portfolio.xlsx")
+            print("    Keine Holdings. Pflege via modules.db_edit auf pos_holdings")
+            print("    (SCD-2: valid_from/valid_to, change_type='opening' fuer Erst-Bestand).")
             return 0
 
         ts = resolve_ts(con, params, explicit_source.lower() if explicit_source else None)

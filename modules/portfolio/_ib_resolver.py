@@ -1,8 +1,6 @@
-"""Shared IB-connection + contract-resolution helpers fuer Portfolio-Module.
+"""Shared IB-connection + contract-resolution helpers.
 
-Wird genutzt von:
-  - import_xlsx.py    (resolve ConID -> ContractDetails beim Import)
-  - resolve_conids.py (Migration alter Excel-Format -> ConID-Format)
+Wird genutzt von modules.instruments (ConID -> ContractDetails Resolution).
 
 Konfiguration via gleichen ENV-Vars wie ingest/sources/ib_src.py:
   IB_GATEWAY_HOST, IB_GATEWAY_PORT, IB_REQUEST_TIMEOUT
