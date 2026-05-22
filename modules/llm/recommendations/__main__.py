@@ -85,13 +85,22 @@ def load_params() -> dict:
     return {}
 
 
+def apply_schema(con: duckdb.DuckDBPyConnection, *, verbose: bool = False) -> None:
+    """Schema idempotent applyen (CREATE TABLE IF NOT EXISTS).
+
+    Wird von cmd_init *und* cmd_run aufgerufen — so crasht der taegliche
+    Daemon nicht auf einer DB, auf der init nie lief.
+    """
+    for f in sorted(SQL_DIR.glob("0*.sql")):
+        con.execute(f.read_text())
+        if verbose:
+            print(f"    ✓ {f.name}")
+
+
 def cmd_init(args) -> int:
-    sql_files = sorted(SQL_DIR.glob("0*.sql"))
     con = duckdb.connect(str(DB_PATH))
     try:
-        for f in sql_files:
-            con.execute(f.read_text())
-            print(f"    ✓ {f.name}")
+        apply_schema(con, verbose=True)
         return 0
     finally:
         con.close()
@@ -308,6 +317,7 @@ def cmd_run(args) -> int:
 
     con = duckdb.connect(str(DB_PATH))
     try:
+        apply_schema(con)
         ts = (date.fromisoformat(params["ts"]) if params.get("ts") else date.today())
 
         snap   = fetch_portfolio_snapshot(con)

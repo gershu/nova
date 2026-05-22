@@ -90,17 +90,29 @@ def _evaluate(con, spec: dict) -> tuple[bool, list[dict]]:
 
 # ---------- init ----------
 
-def cmd_init(args) -> int:
+def apply_schema(con: duckdb.DuckDBPyConnection, *, verbose: bool = False) -> None:
+    """Schema idempotent applyen (CREATE TABLE IF NOT EXISTS).
+
+    Wird von cmd_init *und* cmd_run aufgerufen — so crasht der taegliche
+    Daemon nicht auf einer DB, auf der init nie lief.
+    """
     sql_files = sorted(SQL_DIR.glob("0*.sql"))
     if not sql_files:
-        print(f"FEHLER: keine SQL-Files in {SQL_DIR}", file=sys.stderr)
-        return 64
+        raise FileNotFoundError(f"keine SQL-Files in {SQL_DIR}")
+    for f in sql_files:
+        con.execute(f.read_text())
+        if verbose:
+            print(f"    ✓ {f.name}")
+
+
+def cmd_init(args) -> int:
     con = duckdb.connect(str(DB_PATH))
     try:
-        for f in sql_files:
-            con.execute(f.read_text())
-            print(f"    ✓ {f.name}")
+        apply_schema(con, verbose=True)
         return 0
+    except FileNotFoundError as e:
+        print(f"FEHLER: {e}", file=sys.stderr)
+        return 64
     finally:
         con.close()
 
@@ -121,6 +133,7 @@ def cmd_run(args) -> int:
 
     con = duckdb.connect(str(DB_PATH))
     try:
+        apply_schema(con)
         n_active = 0
         print(f"==> setup run  (ts={ts}, run_id={run_id})")
         for name, spec in setups.items():
