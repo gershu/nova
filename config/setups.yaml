@@ -1,0 +1,98 @@
+# nova-lab — Trading-Setup-Definitionen.
+#
+# Jedes Setup ist eine benannte Kombination von Bedingungen. Der Detector
+# (modules.setup) wertet sie taeglich aus und schreibt aktive Setups nach
+# sig_market_setups.
+#
+# Struktur pro Setup:
+#   <setup_name>:
+#     category:  'market' | 'portfolio' | 'risk'
+#     severity:  'info' | 'warning' | 'critical'
+#     summary:   1-Zeiler fuer die Dashboard-Anzeige
+#     match:     'all' (AND, default) | 'any' (OR)
+#     conditions:
+#       - metric: <metrik-name>     # definiert in modules/setup/metrics.py
+#         op:     '>' | '>=' | '<' | '<=' | '==' | '!='
+#         value:  <zahl>
+#
+# Metriken (Stand: modules/setup/metrics.py):
+#   vix_level               letzter VIXCLS-Wert
+#   vix_zscore_90           VIXCLS Z-Score ueber 90d
+#   hy_spread               letzter BAMLH0A0HYM2-Wert (High-Yield-Spread, %)
+#   yield_curve_2_10        letzter T10Y2Y-Wert (%)
+#   max_position_weight_pct hoechster Portfolio-Anteil einer Position (%)
+#   stale_quote_count       Anzahl Holdings mit Quote aelter als 5 Tage
+#
+# Schwellwerte hier tunebar ohne Code-Deploy — nur node_deploy.sh / git pull.
+
+setups:
+
+  # ---- Markt-Regime ----
+
+  risk_off_regime:
+    category: market
+    severity: critical
+    summary:  "Risk-Off — erhoehte Volatilitaet + Credit-Stress"
+    match:    all
+    conditions:
+      - metric: vix_level
+        op:     ">"
+        value:  30
+      - metric: hy_spread
+        op:     ">"
+        value:  5.0
+
+  vix_stress:
+    category: market
+    severity: warning
+    summary:  "VIX-Stress — Volatilitaet 2 Sigma ueber 90d-Schnitt"
+    match:    all
+    conditions:
+      - metric: vix_zscore_90
+        op:     ">"
+        value:  2.0
+
+  calm_bull:
+    category: market
+    severity: info
+    summary:  "Calm-Bull — niedrige Vola, gesunde Yield-Curve"
+    match:    all
+    conditions:
+      - metric: vix_level
+        op:     "<"
+        value:  15
+      - metric: yield_curve_2_10
+        op:     ">"
+        value:  0.5
+
+  yield_curve_inversion:
+    category: market
+    severity: warning
+    summary:  "Yield-Curve invertiert — 10Y-2Y-Spread negativ"
+    match:    all
+    conditions:
+      - metric: yield_curve_2_10
+        op:     "<"
+        value:  0.0
+
+  # ---- Portfolio / Risk ----
+
+  position_concentration:
+    category: portfolio
+    severity: warning
+    summary:  "Einzelposition ueber 25% Portfolio-Anteil"
+    match:    all
+    conditions:
+      - metric: max_position_weight_pct
+        op:     ">"
+        value:  25
+
+  stale_data:
+    category: risk
+    severity: warning
+    summary:  "Mehrere Holdings ohne frische Quotes (Daten-Luecke)"
+    match:    all
+    conditions:
+      - metric: stale_quote_count
+        op:     ">="
+        value:  3
