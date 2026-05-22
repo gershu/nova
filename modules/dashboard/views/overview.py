@@ -18,7 +18,7 @@ from plotly.subplots import make_subplots
 
 from modules.dashboard.components.format import de_dec, de_int
 from modules.dashboard.components.kpi import fmt_money, fmt_pct, kpi_row
-from modules.dashboard.db import run_query
+from modules.dashboard.db import run_query, table_exists
 
 
 st.title("📈 Portfolio Overview")
@@ -268,7 +268,7 @@ s4.metric("Δ (EUR, gefiltert)",
           fmt_money(flt_pnl, places=0),
           delta=f"{flt_pct:+.2f}%" if flt_pct is not None else None)
 
-st.dataframe(
+_pos_event = st.dataframe(
     display.style.format({
         "quantity":    de_int,
         "avg_cost":    de_dec,
@@ -278,6 +278,7 @@ st.dataframe(
         "cost_eur":    de_int, "mtm_eur":    de_int, "pnl_eur":    de_int,
     }),
     use_container_width=True, height=520,
+    on_select="rerun", selection_mode="single-row", key="positions_table",
     column_config={
         "ref_instrument_id": None,
         "asset_type":  st.column_config.TextColumn("type", width="small"),
@@ -299,3 +300,121 @@ st.dataframe(
         "valid_from":  st.column_config.DateColumn("seit",            format="YYYY-MM-DD"),
     },
 )
+
+
+# ---------- Positions-Detail (Zeilen-Auswahl) ----------
+
+_sel = _pos_event.selection["rows"]
+if not _sel:
+    st.caption("↑ Zeile anklicken fuer Detail — Chart · News · Alerts · Signals.")
+else:
+    _row    = display.iloc[_sel[0]]
+    _ref_id = _row["ref_instrument_id"]
+    _sym    = _row["symbol"] or _ref_id
+    _name   = _row["name"] or ""
+
+    st.divider()
+    st.subheader(f"🔎 {_sym} — {_name}")
+
+    t_chart, t_news, t_alerts, t_signals = st.tabs(
+        ["Chart", "News", "Alerts", "Signals"])
+
+    # --- Chart: Schlusskurs-Linie ---
+    with t_chart:
+        _tf = st.radio("Zeitfenster", ["90 Tage", "1 Jahr", "Max"],
+                       horizontal=True, key="pos_detail_tf")
+        _days  = {"90 Tage": 90, "1 Jahr": 365, "Max": 100_000}[_tf]
+        _since = (date.today() - timedelta(days=_days)).isoformat()
+        _px = run_query("""
+            WITH ranked AS (
+                SELECT ts, close, source,
+                       ROW_NUMBER() OVER (PARTITION BY ts ORDER BY
+                           CASE source WHEN 'ib' THEN 1 WHEN 'yfinance' THEN 2
+                                       ELSE 9 END) AS rk
+                FROM mkt_quotes_daily
+                WHERE ref_instrument_id = ? AND ts >= ?
+            )
+            SELECT ts, close FROM ranked WHERE rk = 1 ORDER BY ts
+        """, (_ref_id, _since))
+        if _px.empty:
+            st.info("Keine Kursdaten fuer dieses Instrument.")
+        else:
+            _px["ts"] = pd.to_datetime(_px["ts"])
+            st.line_chart(_px.set_index("ts")["close"], height=320)
+            st.caption(f"{len(_px)} Handelstage · Schlusskurs in "
+                       f"{_row['currency'] or '—'}.")
+
+    # --- News ---
+    with t_news:
+        if not table_exists("ref_sa_articles"):
+            st.info("Keine News-Tabellen vorhanden.")
+        else:
+            _news = run_query("""
+                SELECT a.ts, a.title, a.summary, a.url, a.source
+                FROM ref_sa_article_symbols s
+                JOIN ref_sa_articles a USING (article_id)
+                WHERE s.ref_instrument_id = ?
+                ORDER BY a.ts DESC LIMIT 20
+            """, (_ref_id,))
+            if _news.empty:
+                st.info("Keine News zu diesem Instrument.")
+            else:
+                st.caption(f"{len(_news)} aktuellste Artikel.")
+                for _, _a in _news.iterrows():
+                    _title = _a["title"] or "(ohne Titel)"
+                    if _a["url"]:
+                        st.markdown(f"**[{_title}]({_a['url']})**")
+                    else:
+                        st.markdown(f"**{_title}**")
+                    st.caption(f"{_a['ts']}  ·  {_a['source'] or ''}")
+                    if _a["summary"]:
+                        st.write(_a["summary"])
+                    st.divider()
+
+    # --- Alerts ---
+    with t_alerts:
+        if not table_exists("sig_alerts"):
+            st.info("Keine Alert-Tabelle vorhanden.")
+        else:
+            _al = run_query("""
+                SELECT ts, rule_name, direction, trigger_value, threshold
+                FROM sig_alerts WHERE ref_instrument_id = ?
+                ORDER BY ts DESC LIMIT 50
+            """, (_ref_id,))
+            if _al.empty:
+                st.info("Keine Alerts zu diesem Instrument.")
+            else:
+                st.dataframe(
+                    _al.style.format({"trigger_value": de_dec,
+                                      "threshold": de_dec}),
+                    use_container_width=True, hide_index=True,
+                    column_config={
+                        "ts":            st.column_config.DateColumn("Datum"),
+                        "rule_name":     st.column_config.TextColumn("Regel"),
+                        "direction":     st.column_config.TextColumn("Richtung", width="small"),
+                        "trigger_value": "Trigger",
+                        "threshold":     "Schwelle",
+                    },
+                )
+
+    # --- Signals: Recommendations fuer dieses Symbol ---
+    with t_signals:
+        if not table_exists("sig_recommendations"):
+            st.info("Keine Recommendation-Tabelle vorhanden.")
+        else:
+            _sig = run_query("""
+                SELECT ts, action, priority, category, title, rationale
+                FROM sig_recommendations WHERE ref_instrument_id = ?
+                ORDER BY ts DESC
+            """, (_ref_id,))
+            if _sig.empty:
+                st.info("Keine Empfehlungen zu diesem Instrument.")
+            else:
+                _pic = {"high": "🔴", "medium": "🟠", "low": "🟢"}
+                for _, _r in _sig.iterrows():
+                    st.markdown(
+                        f"{_pic.get(_r['priority'], '·')} `{_r['action']}`  ·  "
+                        f"_{_r['category'] or ''}_  ·  {_r['ts']}  \n"
+                        f"**{_r['title'] or ''}**  \n"
+                        f"{_r['rationale'] or ''}")
+                    st.divider()
