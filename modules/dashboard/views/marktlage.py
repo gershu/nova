@@ -1,4 +1,4 @@
-"""Page 6 — Marktlage.
+"""Marktlage.
 
 Konsumiert: ref_economic_series + mkt_economic_series (FRED-Daten).
 
@@ -31,7 +31,7 @@ st.title("🌡 Marktlage")
 
 if not table_exists("ref_economic_series") or not table_exists("mkt_economic_series"):
     st.warning("Economic-Series-Tabellen fehlen — fred_ingest noch nicht initialisiert?")
-    st.info("Init: `~/nova/workloads/lab_fred_ingest/run.sh init`")
+    st.info("Init: `python -m modules.fred_ingest init`")
     st.stop()
 
 
@@ -57,7 +57,7 @@ data = run_query("""
 """, (since,))
 if data.empty:
     st.warning("Keine Daten in den letzten 365 Tagen.")
-    st.info("Initialer Pull: `~/nova/workloads/lab_fred_ingest/run.sh fetch-all`")
+    st.info("Initialer Pull: `python -m modules.fred_ingest fetch-all`")
     st.stop()
 
 data["ts"] = pd.to_datetime(data["ts"])

@@ -1,7 +1,12 @@
-"""nova-lab Dashboard — Streamlit Single-Page-App + Sidebar.
+"""nova-lab Dashboard — Streamlit Multi-Page-App mit st.navigation.
 
-Pages werden automatisch aus pages/ geladen (Streamlit Multi-Page-App).
-Diese Datei ist nur Landing + globale Sidebar.
+Die Nav-Struktur (gruppiert in Sektionen) ist hier zentral definiert; die
+Seiten liegen in views/. app.py laeuft als Entrypoint bei jeder Interaktion:
+setzt die Page-Config, rendert die globale Sidebar und delegiert dann an die
+gewaehlte Seite.
+
+Neue Seite hinzufuegen: Datei in views/ anlegen + hier in st.navigation
+eintragen. Keine Datei-Praefixe / Umnummerieren noetig.
 """
 
 from __future__ import annotations
@@ -19,14 +24,12 @@ st.set_page_config(
 )
 
 
-# ---------- Sidebar (global state) ----------
+# ---------- Globale Sidebar (Quick-Status) ----------
 
 with st.sidebar:
     st.title("nova-lab")
     st.caption(f"DB: `{DB_PATH}`")
-
     st.divider()
-    # Quick-status: DB-Tabellen + zentrale Counts (kurzlebige Connection)
     try:
         with connection() as con:
             n_pos = con.execute(
@@ -43,30 +46,26 @@ with st.sidebar:
         st.warning(f"DB-Sanity-Check fehlgeschlagen: {e.__class__.__name__}")
 
 
-# ---------- Landing ----------
+# ---------- Navigation ----------
 
-st.title("📊 nova-lab Dashboard")
-st.markdown("""
-Single-User-Frontend fuer die nova-lab Portfolio-Daten. Read-only auf
-DuckDB; Daemons schreiben weiter parallel.
-
-**Navigation (Sidebar):**
-
-- **1 Overview** — Portfolio-Total in EUR + MTM-Trend + Positions-Tabelle
-- **2 Action Items** — priorisierte Sicht: aktive Setups + Portfolio-Alerts + CSP-Opportunities
-- **3 Composition** — Allokation, Top-15, Portfolio-Views, Korrelations-Matrix
-- **4 Tagesbriefing** — LLM-Briefing: Headline, Body, KPIs, Sentiment, History
-- **5 CSP Picks** — Cash-Secured-Put-Kandidaten aus screener_csp
-- **6 Alerts** — sig_alerts + LLM-Erklaerungen, Filter nach Regel/Sentiment/Zeitraum
-- **7 Marktlage** — VIX, Economic Indicators, Z-Scores, Korrelations-Matrix
-- **8 Decision Journal** — Feedback-Loop: Recommendations -> Entscheidung -> Outcome
-- **9 Allocation** — Ist-Allokation vs. Ziel-Baender + Drift (sig_allocation)
-- **10 Database** — Inventar aller Tabellen + Views mit Daten- + SQL-Inspektion
-
-Cross-Currency-Aggregation erfolgt in EUR. Native-Werte bleiben sichtbar.
-
-Alle Werte sind in der Native-Currency der Position. Kein FX-Reporting
-(noch nicht).
-
-Daten-Refresh: `F5` (oder Page-Wechsel) — DB wird neu gelesen, 60s Query-Cache.
-""")
+nav = st.navigation({
+    "Portfolio": [
+        st.Page("views/overview.py",        title="Overview",     icon="📈",
+                default=True),
+        st.Page("views/allocation.py",      title="Allokation",   icon="⚖️"),
+    ],
+    "Entscheidungs-Assistent": [
+        st.Page("views/tagesbriefing.py",   title="Tagesbriefing",    icon="📝"),
+        st.Page("views/action_items.py",    title="Action Items",     icon="🎯"),
+        st.Page("views/decision_journal.py", title="Decision Journal", icon="📓"),
+    ],
+    "Markt & Signale": [
+        st.Page("views/marktlage.py",       title="Marktlage",    icon="🌡"),
+        st.Page("views/alerts.py",          title="Alerts",       icon="🔔"),
+        st.Page("views/csp_picks.py",       title="CSP Picks",    icon="📞"),
+    ],
+    "System": [
+        st.Page("views/database.py",        title="Database",     icon="🗄"),
+    ],
+})
+nav.run()

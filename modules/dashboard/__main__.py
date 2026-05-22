@@ -6,8 +6,7 @@ Aufruf-Convention:
 Default: bind auf 0.0.0.0 fuer Tailscale-Erreichbarkeit. Bei lokal-only:
 --bind 127.0.0.1.
 
-Eigentlicher App-Code in app.py + pages/*. Multi-Page-Pattern (Streamlit
-findet pages/ automatisch).
+Eigentlicher App-Code in app.py + views/*; Navigation via st.navigation.
 """
 
 from __future__ import annotations

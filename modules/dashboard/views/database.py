@@ -1,4 +1,4 @@
-"""Page 10 — Database Browser (read-only).
+"""Database Browser (read-only).
 
 Inventar als klickbare Tabelle (single-row select). Zeilenauswahl
 oeffnet darunter die Detail-Ansicht mit zwei Tabs:

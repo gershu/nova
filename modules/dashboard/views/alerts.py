@@ -1,4 +1,4 @@
-"""Page 5 — Alert Monitor.
+"""Alert Monitor.
 
 Konsumiert: sig_alerts + sig_alert_explanations (LEFT JOIN auf gleichem PK-Shape).
 Default-Filter: nur Alerts auf Portfolio-Positionen (= ref_instrument_id in pos_holdings).

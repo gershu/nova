@@ -1,4 +1,4 @@
-"""Page 8 — Decision Journal.
+"""Decision Journal.
 
 Schliesst den Feedback-Loop des Entscheidungs-Assistenten: was hat der
 Recommendation-Layer vorgeschlagen (sig_recommendations) — und was wurde

@@ -1,4 +1,4 @@
-"""Page 4 — CSP Picks.
+"""CSP Picks.
 
 Konsumiert: list_watchlist_members WHERE watchlist_id = 'system_recommendations'
 AND added_by = 'screener_csp'.

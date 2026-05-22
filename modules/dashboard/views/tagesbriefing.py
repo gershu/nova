@@ -1,4 +1,4 @@
-"""Page 3 — Tagesbriefing.
+"""Tagesbriefing.
 
 Konsumiert: sig_portfolio_briefings.
 Zeigt das aktuellste LLM-erzeugte Portfolio-Briefing prominent (headline +

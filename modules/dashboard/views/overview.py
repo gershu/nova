@@ -1,4 +1,4 @@
-"""Page 1 — Portfolio Overview (EUR-Aggregat + Native pro Position).
+"""Portfolio Overview (EUR-Aggregat + Native pro Position).
 
 Konsumiert: v_mkt_holdings (liefert mtm_native, mtm_eur, pnl_eur,
 cost_total_eur, fx_rate_eur).

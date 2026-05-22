@@ -1,4 +1,4 @@
-"""Page 2 — Action Items.
+"""Action Items.
 
 Konsolidiert die verstreuten Signal-Quellen in eine priorisierte Sicht —
 die "Was liegt heute an"-Seite des Entscheidungs-Assistenten.
