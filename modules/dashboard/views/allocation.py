@@ -1,29 +1,33 @@
 """Allokation — Portfolio-Zusammensetzung in drei Tabs.
 
-  - Struktur : deskriptive Allokation (Currency / Asset-Type / Name),
-               Top-15, Konzentration (HHI), Positions-Korrelation.
+  - Struktur : deskriptive Allokation (Currency / Asset-Type), Treemap
+               (umschaltbar Name / Klasse), Top-15, Holdings nach Klasse.
   - vs. Ziel : Ist-Allokation gegen die Ziel-Baender aus config/allocation.yaml
                (sig_allocation, geschrieben vom taeglichen modules.allocation).
   - Views    : benutzerdefinierte Portfolio-Views (v_mkt_portfolio).
 
-Konsumiert: v_mkt_holdings, v_mkt_portfolio, mkt_quotes_daily, sig_allocation.
+Konsumiert: v_mkt_holdings, v_mkt_portfolio, sig_allocation sowie die
+Klassen-Zuordnung aus config/instrument_classes.yaml + config/allocation.yaml.
 Aggregation durchgehend in EUR (Stammwaehrung).
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+import pathlib
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import yaml
 
 from modules.dashboard.components.kpi import fmt_money
 from modules.dashboard.db import run_query, table_exists
 
 
 st.title("⚖️ Allokation")
+
+_CONFIG_DIR = pathlib.Path(__file__).resolve().parents[3] / "config"
 
 _STATUS_ICON = {
     "within": "🟢 im Band", "below": "🔴 unter Band",
@@ -33,6 +37,25 @@ _STATUS_COLOR = {
     "within": "#2e9e5b", "below": "#d6453d",
     "above": "#d6453d", "unclassified": "#9aa0a6",
 }
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_classification() -> tuple[dict, dict]:
+    """({ref_instrument_id: class_key}, {class_key: label}) aus den Config-YAMLs."""
+    cls_map: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    cf = _CONFIG_DIR / "instrument_classes.yaml"
+    if cf.is_file():
+        data = yaml.safe_load(cf.read_text()) or {}
+        for cls, ids in (data.get("classification") or {}).items():
+            for rid in (ids or []):
+                cls_map[rid] = cls
+    af = _CONFIG_DIR / "allocation.yaml"
+    if af.is_file():
+        data = yaml.safe_load(af.read_text()) or {}
+        for cls, spec in (data.get("target_allocation") or {}).items():
+            labels[cls] = (spec or {}).get("label", cls)
+    return cls_map, labels
 
 
 def _donut(series: pd.Series, title: str):
@@ -68,6 +91,8 @@ def render_struktur() -> None:
         st.warning("Portfolio leer.")
         return
 
+    cls_map, cls_labels = _load_classification()
+
     agg = (
         _mkt.groupby(
             ["ref_instrument_id", "symbol", "name", "asset_type", "currency"],
@@ -83,6 +108,9 @@ def render_struktur() -> None:
     )
     total_mv_eur = float(agg["mtm_eur"].sum(skipna=True))
     agg["weight"] = agg["mtm_eur"] / total_mv_eur if total_mv_eur > 0 else np.nan
+    agg["asset_class"] = agg["ref_instrument_id"].map(cls_map)
+    agg["class_label"] = agg["asset_class"].map(
+        lambda c: cls_labels.get(c, c) if isinstance(c, str) else "(ohne Klasse)")
 
     # --- KPIs ---
     weights = agg["weight"].dropna().sort_values(ascending=False)
@@ -102,7 +130,7 @@ def render_struktur() -> None:
 
     st.divider()
 
-    # --- Allokation: Donuts + Treemap ---
+    # --- Allokation: Donuts ---
     st.subheader("Allokation (EUR-Aggregat)")
     c1, c2 = st.columns(2)
     with c1:
@@ -116,6 +144,7 @@ def render_struktur() -> None:
         if fig: st.plotly_chart(fig, use_container_width=True)
         else:   st.info("Keine Asset-Type-Daten")
 
+    # --- by_name: Holdings konsolidiert ueber Multi-Listings ---
     by_name = (
         agg.assign(name=agg["name"].fillna("(unknown)"))
            .groupby("name", as_index=False)
@@ -127,20 +156,35 @@ def render_struktur() -> None:
                                 lambda s: ", ".join(sorted(set(s.dropna())))),
                 currencies  = ("currency",
                                 lambda s: ", ".join(sorted(set(s.dropna())))),
-                asset_type  = ("asset_type", "first"))
+                asset_type  = ("asset_type",  "first"),
+                class_label = ("class_label", "first"))
     )
     by_name["weight_pct"] = (by_name["mtm_eur"] / total_mv_eur * 100.0
                              if total_mv_eur > 0 else 0)
     by_name = by_name.sort_values("mtm_eur", ascending=False)
 
+    st.divider()
+
+    # --- Treemap (umschaltbar Name / Klasse) ---
+    st.subheader("Treemap")
+    mode = st.radio(
+        "Gruppierung", ["Holdings nach Name", "Holdings nach Klasse"],
+        horizontal=True, label_visibility="collapsed")
+
     if not by_name.empty and by_name["mtm_eur"].sum() > 0:
+        if mode == "Holdings nach Name":
+            path  = [px.Constant("Portfolio"), "asset_type", "name"]
+            title = ("Holdings nach Name (Asset-Type → Name, "
+                     "Flaeche = MV EUR, Farbe = PnL EUR)")
+        else:
+            path  = [px.Constant("Portfolio"), "class_label", "name"]
+            title = ("Holdings nach Klasse (Klasse → Name, "
+                     "Flaeche = MV EUR, Farbe = PnL EUR)")
         treemap = px.treemap(
-            by_name, path=[px.Constant("Portfolio"), "asset_type", "name"],
-            values="mtm_eur",
+            by_name, path=path, values="mtm_eur",
             custom_data=["weight_pct", "pnl_eur", "currencies"],
             color="pnl_eur", color_continuous_scale="RdYlGn",
-            color_continuous_midpoint=0,
-            title="Holdings nach Name (Asset-Type → Name, Flaeche = MV EUR, Farbe = PnL EUR)",
+            color_continuous_midpoint=0, title=title,
         )
         treemap.update_traces(
             textinfo="label+value+percent root",
@@ -154,6 +198,8 @@ def render_struktur() -> None:
         )
         treemap.update_layout(height=460, margin=dict(l=10, r=10, t=40, b=10))
         st.plotly_chart(treemap, use_container_width=True)
+    else:
+        st.info("Keine Positions mit MV > 0.")
 
     st.divider()
 
@@ -177,51 +223,41 @@ def render_struktur() -> None:
 
     st.divider()
 
-    # --- Korrelations-Matrix (90d Daily Returns) ---
-    st.subheader("Korrelation (90d Daily Returns)")
-    since = date.today() - timedelta(days=95)
-    ids   = agg["ref_instrument_id"].dropna().unique().tolist()
-    if len(ids) < 2:
-        st.info("Weniger als 2 Positions.")
-        return
-    placeholders = ",".join(["?"] * len(ids))
-    quote_hist = run_query(f"""
-        WITH ranked AS (
-            SELECT ref_instrument_id, ts, close, source,
-                   ROW_NUMBER() OVER (PARTITION BY ref_instrument_id, ts
-                                      ORDER BY CASE source WHEN 'ib' THEN 1 WHEN 'yfinance' THEN 2 ELSE 9 END) AS rk
-            FROM mkt_quotes_daily
-            WHERE ts >= ? AND ref_instrument_id IN ({placeholders})
-        )
-        SELECT ref_instrument_id, ts, close FROM ranked WHERE rk = 1
-    """, (since, *ids))
-    if quote_hist.empty:
-        st.info("Keine Quote-History in den letzten 90 Tagen.")
-        return
-    sym_map = dict(zip(agg["ref_instrument_id"], agg["symbol"]))
-    quote_hist["ts"] = pd.to_datetime(quote_hist["ts"])
-    wide = (quote_hist
-            .pivot(index="ts", columns="ref_instrument_id", values="close")
-            .sort_index())
-    rets = wide.pct_change().dropna(how="all")
-    valid_cols = [c for c in rets.columns if rets[c].notna().sum() >= 30]
-    if len(valid_cols) < 2:
-        st.info("Zu wenig Observations.")
-        return
-    corr = rets[valid_cols].corr().rename(columns=sym_map, index=sym_map)
-    tri = corr.where(np.triu(np.ones(corr.shape), k=1).astype(bool))
-    median_corr = float(tri.stack().median())
-    st.caption(
-        f"{len(valid_cols)} Positions × "
-        f"{int(rets[valid_cols].notna().sum().mean())} mean obs. "
-        f"Median pairwise corr: **{median_corr:.2f}**"
+    # --- Holdings nach Klasse (Tabelle mit Teilsummen) ---
+    st.subheader("Holdings nach Klasse")
+    cls_tot = (by_name.groupby("class_label")["mtm_eur"].sum()
+                      .sort_values(ascending=False))
+    rows: list[dict] = []
+    for cl in cls_tot.index:
+        members = (by_name[by_name["class_label"] == cl]
+                   .sort_values("mtm_eur", ascending=False))
+        for _, m in members.iterrows():
+            rows.append({"klasse": cl, "position": m["name"],
+                         "asset_type": m["asset_type"],
+                         "mtm_eur": m["mtm_eur"], "weight_pct": m["weight_pct"],
+                         "pnl_eur": m["pnl_eur"]})
+        rows.append({"klasse": cl, "position": "Σ Teilsumme", "asset_type": "",
+                     "mtm_eur": float(members["mtm_eur"].sum()),
+                     "weight_pct": float(members["weight_pct"].sum()),
+                     "pnl_eur": float(members["pnl_eur"].sum())})
+    rows.append({"klasse": "GESAMT", "position": "Σ Portfolio", "asset_type": "",
+                 "mtm_eur": float(by_name["mtm_eur"].sum()),
+                 "weight_pct": float(by_name["weight_pct"].sum()),
+                 "pnl_eur": float(by_name["pnl_eur"].sum())})
+    st.dataframe(
+        pd.DataFrame(rows), use_container_width=True, hide_index=True,
+        column_config={
+            "klasse":     st.column_config.TextColumn("Klasse"),
+            "position":   st.column_config.TextColumn("Position"),
+            "asset_type": st.column_config.TextColumn("Typ", width="small"),
+            "mtm_eur":    st.column_config.NumberColumn("MV (EUR)",  format="%.0f"),
+            "weight_pct": st.column_config.NumberColumn("Anteil %",  format="%.2f%%"),
+            "pnl_eur":    st.column_config.NumberColumn("PnL (EUR)", format="%.0f"),
+        },
     )
-    heat = px.imshow(corr.values, x=corr.columns, y=corr.index,
-                      color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-                      text_auto=".2f", aspect="auto")
-    heat.update_layout(height=max(380, len(corr) * 32),
-                        margin=dict(l=10, r=10, t=20, b=10))
-    st.plotly_chart(heat, use_container_width=True)
+    st.caption("Teilsummen je Klasse · Holdings nach Name gruppiert "
+               "(Multi-Listings konsolidiert). Klassen-Zuordnung aus "
+               "`config/instrument_classes.yaml`.")
 
 
 # ---------- Tab: vs. Ziel ----------

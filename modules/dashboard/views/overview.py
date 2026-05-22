@@ -285,38 +285,3 @@ st.dataframe(
         "valid_from":  st.column_config.DateColumn("seit",            format="YYYY-MM-DD"),
     },
 )
-
-st.divider()
-
-
-# ---------- Pivot-Tabelle ----------
-# Rows: name, symbol — Columns: currency, broker — Values: quantity,
-# px_close, mtm_eur, pnl_eur. Quelle ist v_mkt_holdings (mkt), nicht das
-# aggregierte agg — die Pivot aggregiert selbst.
-
-st.subheader("Pivot")
-
-pivot = pd.pivot_table(
-    mkt,
-    index=["name", "symbol"],
-    columns=["currency", "broker"],
-    values=["quantity", "px_close", "mtm_eur", "pnl_eur"],
-    aggfunc={
-        "quantity":  "sum",
-        "px_close":  "mean",   # Preis — Mittel statt Summe
-        "mtm_eur":   "sum",
-        "pnl_eur":   "sum",
-    },
-    observed=True,
-)
-# Spalten-Reihenfolge: Values gruppiert (quantity | px_close | mtm_eur | pnl_eur)
-pivot = pivot.reindex(
-    columns=["quantity", "px_close", "mtm_eur", "pnl_eur"], level=0,
-)
-
-if pivot.empty:
-    st.info("Keine Daten fuer die Pivot.")
-else:
-    st.dataframe(pivot.round(2), use_container_width=True)
-    st.caption("Rows: name / symbol · Columns: currency / broker · "
-                "Values: quantity (Σ), px_close (⌀), mtm_eur (Σ), pnl_eur (Σ).")
