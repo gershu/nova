@@ -1,0 +1,527 @@
+"""Thesis-Cockpit — Unternehmens-Analyse pro Name.
+
+Buendelt fuer ein einzelnes Instrument alle Bausteine, die fuer einen
+Buy-&-Hold- / CSP-Anlagestil die Kauf- bzw. Halte-Entscheidung stuetzen:
+Finanzkennzahlen, Wachstum & Momentum, Chart, Branchen-Einordnung
+(Dominanz), Earnings-Termin, News sowie Signale (Empfehlungen + Alerts).
+
+Read-only — konsumiert ref_fundamentals_latest, v_mkt_holdings,
+mkt_quotes_daily, ref_earnings_calendar, ref_sa_articles, sig_* sowie die
+Watchlists. Keine Schreibzugriffe.
+"""
+
+from __future__ import annotations
+
+from datetime import date, timedelta
+
+import pandas as pd
+import streamlit as st
+
+from modules.dashboard.components.format import de_dec, de_int
+from modules.dashboard.db import run_query, table_exists
+
+
+st.title("🔬 Thesis-Cockpit")
+st.caption("Eine Seite pro Name — die Bausteine deiner Kauf- und "
+           "Halte-Entscheidung an einem Ort.")
+
+
+# ---------- Formatierungs-Helfer ----------
+
+def _missing(x) -> bool:
+    return x is None or (isinstance(x, float) and pd.isna(x))
+
+
+def _ratio(x, places: int = 2) -> str:
+    """Verhaeltniszahl, deutsch:  23.455 -> '23,46'."""
+    return de_dec(x, places) if not _missing(x) else "—"
+
+
+def _pct(x, places: int = 1) -> str:
+    """Bruchteil -> Prozent:  0.36572 -> '36,6 %'."""
+    if _missing(x):
+        return "—"
+    return de_dec(float(x) * 100.0, places) + " %"
+
+
+def _pct_raw(x, places: int = 2) -> str:
+    """Bereits in Prozent geliefert:  3.83 -> '3,83 %'."""
+    if _missing(x):
+        return "—"
+    return de_dec(float(x), places) + " %"
+
+
+def _fmt_cap(v) -> str:
+    if _missing(v):
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e12:
+        return f"{de_dec(v / 1e12, 2)} Bio"
+    if abs(v) >= 1e9:
+        return f"{de_dec(v / 1e9, 1)} Mrd"
+    return f"{de_int(v / 1e6)} Mio"
+
+
+_FMT = {"ratio": _ratio, "pct": _pct, "pct_raw": _pct_raw}
+
+
+# Kennzahl-Gruppen: (Spalte, Label, Format-Art)
+_VALUATION = [
+    ("pe_ttm",     "KGV (TTM)",        "ratio"),
+    ("pe_forward", "KGV (Forward)",    "ratio"),
+    ("peg_ratio",  "PEG-Ratio",        "ratio"),
+    ("pb",         "Kurs / Buchwert",  "ratio"),
+    ("ps_ttm",     "Kurs / Umsatz",    "ratio"),
+    ("p_fcf",      "Kurs / FCF",       "ratio"),
+    ("ev_ebitda",  "EV / EBITDA",      "ratio"),
+    ("ev_sales",   "EV / Umsatz",      "ratio"),
+]
+_PROFIT = [
+    ("gross_margin",     "Bruttomarge",            "pct"),
+    ("operating_margin", "Operative Marge",        "pct"),
+    ("net_margin",       "Nettomarge",             "pct"),
+    ("fcf_margin",       "FCF-Marge",              "pct"),
+    ("roe",              "Eigenkapitalrendite",    "pct"),
+    ("roa",              "Gesamtkapitalrendite",   "pct"),
+    ("roic",             "ROIC",                   "pct"),
+]
+_LEVERAGE = [
+    ("debt_to_equity",     "Verschuldungsgrad",         "ratio"),
+    ("net_debt_to_ebitda", "Nettoschulden / EBITDA",    "ratio"),
+    ("current_ratio",      "Liquiditaetsgrad 3",        "ratio"),
+    ("quick_ratio",        "Liquiditaetsgrad 2",        "ratio"),
+    ("interest_coverage",  "Zinsdeckungsgrad",          "ratio"),
+]
+_CASHDIV = [
+    ("fcf_yield",          "FCF-Rendite",          "pct"),
+    ("dividend_yield",     "Dividendenrendite",    "pct_raw"),
+    ("payout_ratio",       "Ausschuettungsquote",  "pct"),
+    ("dividend_per_share", "Dividende je Aktie",   "ratio"),
+]
+_GROWTH = [
+    ("revenue_cagr_5y",  "Umsatz-CAGR (5 J)",     "pct"),
+    ("eps_cagr_5y",      "EPS-CAGR (5 J)",        "pct"),
+    ("fcf_cagr_5y",      "FCF-CAGR (5 J)",        "pct"),
+    ("dividend_cagr_5y", "Dividenden-CAGR (5 J)", "pct"),
+]
+
+
+# ---------- Universum waehlen ----------
+
+_WATCHLISTS = {
+    "Kaufkandidaten": "buy_candidates",
+    "CSP-Universe":   "csp_universe",
+    "Beobachtung":    "observation",
+    "Value-Picks":    "value_picks",
+}
+
+uni_choice = st.radio(
+    "Universum",
+    ["Portfolio", *_WATCHLISTS.keys(), "Alle (Fundamentaldaten)"],
+    horizontal=True,
+)
+
+if uni_choice == "Portfolio":
+    uni = run_query(
+        "SELECT ref_instrument_id, symbol, name, SUM(mtm_eur) AS sort_mv "
+        "FROM v_mkt_holdings GROUP BY 1, 2, 3 ORDER BY sort_mv DESC NULLS LAST")
+elif uni_choice == "Alle (Fundamentaldaten)":
+    uni = run_query(
+        "SELECT f.ref_instrument_id, i.symbol, i.name "
+        "FROM ref_fundamentals_latest f "
+        "LEFT JOIN ref_instruments i USING (ref_instrument_id) "
+        "ORDER BY i.symbol")
+else:
+    uni = run_query(
+        "SELECT m.ref_instrument_id, i.symbol, i.name "
+        "FROM list_watchlist_members m "
+        "LEFT JOIN ref_instruments i USING (ref_instrument_id) "
+        "WHERE m.watchlist_id = ? ORDER BY i.symbol",
+        (_WATCHLISTS[uni_choice],))
+
+if uni.empty:
+    st.info(f"Universum „{uni_choice}“ ist leer.")
+    st.stop()
+
+uni = uni.drop_duplicates("ref_instrument_id").reset_index(drop=True)
+_opts = uni["ref_instrument_id"].tolist()
+_label = {
+    r["ref_instrument_id"]: f"{r['symbol'] or r['ref_instrument_id']} — {r['name'] or ''}"
+    for _, r in uni.iterrows()
+}
+
+ref_id = st.selectbox(
+    f"Instrument ({len(_opts)} im Universum)",
+    _opts, format_func=lambda x: _label.get(x, x), key="thesis_instrument")
+
+_row_uni = uni[uni["ref_instrument_id"] == ref_id].iloc[0]
+symbol = _row_uni["symbol"] or ref_id
+name   = _row_uni["name"] or ""
+
+
+# ---------- Stammdaten laden ----------
+
+fund_all = run_query("SELECT * FROM ref_fundamentals_latest")
+fund = fund_all[fund_all["ref_instrument_id"] == ref_id]
+f = fund.iloc[0] if not fund.empty else None
+
+held = run_query(
+    "SELECT * FROM v_mkt_holdings WHERE ref_instrument_id = ?", (ref_id,))
+port_total = run_query("SELECT SUM(mtm_eur) AS t FROM v_mkt_holdings")
+port_mv = float(port_total["t"].iloc[0]) if not port_total.empty \
+    and pd.notna(port_total["t"].iloc[0]) else 0.0
+
+
+# ---------- Header ----------
+
+st.divider()
+st.subheader(f"{symbol} — {name}")
+
+sector   = (f["sector"]   if f is not None else None) or "—"
+industry = (f["industry"] if f is not None else None) or "—"
+_cap     = f["market_cap"] if f is not None else None
+_stand   = f["ts"] if f is not None else None
+st.caption(
+    f"🏷 {sector}  ·  {industry}  ·  Market Cap {_fmt_cap(_cap)} "
+    f"{(f['country'] or '') if f is not None else ''}"
+    + (f"  ·  Fundamentaldaten-Stand {str(_stand)[:10]}"
+       if _stand is not None else "  ·  keine Fundamentaldaten"))
+
+if held.empty:
+    st.caption("📌 Nicht im Portfolio — Beobachtung / Kandidat.")
+else:
+    qty   = float(held["quantity"].sum())
+    mv    = float(held["mtm_eur"].sum(skipna=True))
+    cost  = float(held["cost_total_eur"].sum(skipna=True))
+    pnl   = float(held["pnl_eur"].sum(skipna=True))
+    weight = (mv / port_mv * 100.0) if port_mv else None
+    h1, h2, h3, h4, h5 = st.columns(5)
+    h1.metric("Menge",            de_int(qty))
+    h2.metric("Marktwert (EUR)",  de_int(mv))
+    h3.metric("Einstand (EUR)",   de_int(cost))
+    h4.metric("Δ unreal. (EUR)",  de_int(pnl),
+              delta=f"{pnl / cost * 100:+.1f} %" if cost else None)
+    h5.metric("Portfolio-Gewicht",
+              f"{de_dec(weight, 1)} %" if weight is not None else "—",
+              help="Anteil am Gesamt-Marktwert (EUR).")
+
+
+# ---------- Thesis-Ampel ----------
+
+st.divider()
+st.markdown("##### Thesis-Ampel")
+
+# 1-Jahres-Kursrendite vorab fuer die Ampel
+_px_hist = run_query("""
+    WITH ranked AS (
+        SELECT ts, close, source,
+               ROW_NUMBER() OVER (PARTITION BY ts ORDER BY
+                   CASE source WHEN 'ib' THEN 1 WHEN 'yfinance' THEN 2
+                               ELSE 9 END) AS rk
+        FROM mkt_quotes_daily WHERE ref_instrument_id = ?
+    )
+    SELECT ts, close FROM ranked WHERE rk = 1 ORDER BY ts
+""", (ref_id,))
+
+_returns: dict[str, float] = {}
+_last_px = _last_dt = None
+if not _px_hist.empty:
+    _px_hist["ts"] = pd.to_datetime(_px_hist["ts"])
+    _s = _px_hist.set_index("ts")["close"].dropna()
+    if not _s.empty:
+        _last_px, _last_dt = float(_s.iloc[-1]), _s.index[-1]
+        for _k, _d in {"1 Mon": 30, "3 Mon": 91, "6 Mon": 182,
+                       "1 Jahr": 365, "3 Jahre": 1095}.items():
+            _prior = _s[_s.index <= _last_dt - timedelta(days=_d)]
+            if not _prior.empty and _prior.iloc[-1]:
+                _returns[_k] = _last_px / float(_prior.iloc[-1]) - 1.0
+
+a1, a2, a3, a4, a5 = st.columns(5)
+if f is not None:
+    a1.metric("Bewertung (KGV fwd)", _ratio(f["pe_forward"]),
+              help=f"PEG-Ratio: {_ratio(f['peg_ratio'])}")
+    a2.metric("Nettomarge", _pct(f["net_margin"]))
+    _roic = f["roic"] if not _missing(f["roic"]) else f["roe"]
+    a3.metric("Kapitalrendite",
+              _pct(f["roic"]) if not _missing(f["roic"]) else _pct(f["roe"]),
+              help="ROIC — falls leer, ersatzweise Eigenkapitalrendite.")
+    a4.metric("Schulden / EBITDA", _ratio(f["net_debt_to_ebitda"]),
+              help="Nettoverschuldung im Verhaeltnis zum EBITDA.")
+else:
+    for _c in (a1, a2, a3, a4):
+        _c.metric("—", "—")
+_r1y = _returns.get("1 Jahr")
+a5.metric("Kurs (1 Jahr)",
+          _ratio(_last_px) if _last_px is not None else "—",
+          delta=f"{_r1y * 100:+.1f} %" if _r1y is not None else None)
+
+
+# ---------- Tabs ----------
+
+t_kpi, t_growth, t_chart, t_peers, t_news, t_sig = st.tabs(
+    ["Kennzahlen", "Wachstum & Momentum", "Chart",
+     "Branche & Dominanz", "Termine & News", "Signale"])
+
+
+def _metric_table(group: list[tuple[str, str, str]],
+                   sector_df: pd.DataFrame) -> None:
+    """Rendert eine Kennzahl-Gruppe mit Sektor-Median-Vergleich."""
+    rows = []
+    for col, label, kind in group:
+        raw = f[col] if f is not None else None
+        med = sector_df[col].median() if (col in sector_df
+                                          and not sector_df.empty) else None
+        fmt = _FMT[kind]
+        marker = "—"
+        if not _missing(raw) and not _missing(med):
+            marker = "▲" if float(raw) > float(med) else (
+                     "▼" if float(raw) < float(med) else "=")
+        rows.append({
+            "Kennzahl":      label,
+            "Wert":          fmt(raw),
+            "Sektor-Median": fmt(med),
+            "vs.":           marker,
+        })
+    st.dataframe(
+        pd.DataFrame(rows), use_container_width=True, hide_index=True,
+        column_config={
+            "Kennzahl":      st.column_config.TextColumn("Kennzahl"),
+            "Wert":          st.column_config.TextColumn("Wert"),
+            "Sektor-Median": st.column_config.TextColumn("Sektor-Median"),
+            "vs.": st.column_config.TextColumn(
+                "vs.", width="small",
+                help="▲ ueber / ▼ unter / = auf Sektor-Median"),
+        },
+    )
+
+
+# --- Kennzahlen ---
+with t_kpi:
+    if f is None:
+        st.info("Keine Fundamentaldaten fuer dieses Instrument hinterlegt.")
+    else:
+        _sec = fund_all[fund_all["sector"] == f["sector"]] \
+            if not _missing(f["sector"]) else fund_all.iloc[0:0]
+        st.caption(f"Sektor-Median aus {len(_sec)} Unternehmen im Sektor "
+                   f"„{f['sector'] or '—'}“.")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Bewertung**")
+            _metric_table(_VALUATION, _sec)
+            st.markdown("**Verschuldung & Liquiditaet**")
+            _metric_table(_LEVERAGE, _sec)
+        with c2:
+            st.markdown("**Profitabilitaet**")
+            _metric_table(_PROFIT, _sec)
+            st.markdown("**Cash & Dividende**")
+            _metric_table(_CASHDIV, _sec)
+
+
+# --- Wachstum & Momentum ---
+with t_growth:
+    g1, g2 = st.columns(2)
+    with g1:
+        st.markdown("**Wachstum (5-Jahres-CAGR)**")
+        if f is None:
+            st.info("Keine Fundamentaldaten.")
+        else:
+            _grows = [{"Kennzahl": lbl, "Wert": _pct(f[col])}
+                      for col, lbl, _ in _GROWTH]
+            st.dataframe(pd.DataFrame(_grows), use_container_width=True,
+                         hide_index=True)
+            if all(_missing(f[c]) for c, _, _ in _GROWTH):
+                st.caption("⚠ 5-Jahres-CAGR-Felder sind in "
+                           "ref_fundamentals_latest noch nicht befuellt — "
+                           "Kurs-Momentum rechts dient als Ersatz.")
+    with g2:
+        st.markdown("**Kurs-Momentum (annualisiert nicht — Periodenrendite)**")
+        if not _returns:
+            st.info("Keine Kurshistorie.")
+        else:
+            _mom = [{"Zeitraum": k, "Rendite": f"{v * 100:+.1f} %"}
+                    for k, v in _returns.items()]
+            st.dataframe(pd.DataFrame(_mom), use_container_width=True,
+                         hide_index=True)
+            if not held.empty and pd.notna(held["valid_from"].min()):
+                st.caption(f"Im Bestand seit "
+                           f"{str(held['valid_from'].min())[:10]}.")
+
+
+# --- Chart ---
+with t_chart:
+    if _px_hist.empty:
+        st.info("Keine Kursdaten fuer dieses Instrument.")
+    else:
+        _tf = st.radio("Zeitfenster", ["90 Tage", "1 Jahr", "Max"],
+                       horizontal=True, key="thesis_chart_tf")
+        _days = {"90 Tage": 90, "1 Jahr": 365, "Max": 100_000}[_tf]
+        _cut = _px_hist["ts"].max() - pd.Timedelta(days=_days)
+        _view = _px_hist[_px_hist["ts"] >= _cut]
+        if _view.empty:
+            st.info("Keine Kursdaten im gewaehlten Fenster.")
+        else:
+            st.line_chart(_view.set_index("ts")["close"], height=340)
+            st.caption(f"{len(_view)} Handelstage · Schlusskurs.")
+
+
+# --- Branche & Dominanz ---
+with t_peers:
+    if f is None or _missing(f["sector"]):
+        st.info("Kein Sektor hinterlegt — keine Branchen-Einordnung moeglich.")
+    else:
+        peers = fund_all[fund_all["sector"] == f["sector"]].copy()
+        peers = peers.merge(
+            run_query("SELECT ref_instrument_id, symbol, name "
+                      "FROM ref_instruments"),
+            on="ref_instrument_id", how="left")
+        peers = peers.sort_values("market_cap", ascending=False,
+                                  na_position="last").reset_index(drop=True)
+        _rank = peers.index[peers["ref_instrument_id"] == ref_id]
+        _sec_cap = peers["market_cap"].sum(skipna=True)
+        _self_cap = float(f["market_cap"]) if not _missing(f["market_cap"]) \
+            else None
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Rang im Sektor",
+                  f"{int(_rank[0]) + 1} / {len(peers)}" if len(_rank)
+                  else f"— / {len(peers)}",
+                  help=f"Nach Market Cap, Sektor „{f['sector']}“.")
+        d2.metric("Sektor-Anteil",
+                  f"{de_dec(_self_cap / _sec_cap * 100, 1)} %"
+                  if _self_cap and _sec_cap else "—",
+                  help="Market Cap im Verhaeltnis zur Summe aller "
+                       "erfassten Sektor-Unternehmen.")
+        d3.metric("Market Cap", _fmt_cap(_self_cap))
+
+        _disp = peers[["ref_instrument_id", "symbol", "name", "market_cap",
+                       "pe_forward", "net_margin", "roic"]].copy()
+        _disp["net_margin"] = _disp["net_margin"] * 100.0
+        _disp["roic"]       = _disp["roic"] * 100.0
+
+        def _hl(r):
+            on = r["ref_instrument_id"] == ref_id
+            return ["background-color: #fff3cd" if on else ""] * len(r)
+
+        st.dataframe(
+            _disp.style.apply(_hl, axis=1).format({
+                "market_cap": _fmt_cap,
+                "pe_forward": lambda v: de_dec(v, 1) if not _missing(v) else "—",
+                "net_margin": lambda v: de_dec(v, 1) if not _missing(v) else "—",
+                "roic":       lambda v: de_dec(v, 1) if not _missing(v) else "—",
+            }),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "ref_instrument_id": None,
+                "symbol":     st.column_config.TextColumn("Symbol", width="small"),
+                "name":       st.column_config.TextColumn("Name"),
+                "market_cap": st.column_config.TextColumn("Market Cap"),
+                "pe_forward": st.column_config.TextColumn("KGV fwd", width="small"),
+                "net_margin": st.column_config.TextColumn("Nettom. %", width="small"),
+                "roic":       st.column_config.TextColumn("ROIC %", width="small"),
+            },
+        )
+        st.caption("Dominanz-Indikator: Rang + Sektor-Anteil messen die "
+                   "relative Groesse — fuer Marktfuehrerschaft zusaetzlich "
+                   "Margen und ROIC gegen die Peers lesen.")
+
+
+# --- Termine & News ---
+with t_news:
+    st.markdown("**Naechster Earnings-Termin**")
+    if not table_exists("ref_earnings_calendar"):
+        st.info("Keine Earnings-Kalender-Tabelle vorhanden.")
+    else:
+        _ec = run_query(
+            "SELECT earnings_date, source, fetched_at "
+            "FROM ref_earnings_calendar WHERE ref_instrument_id = ?", (ref_id,))
+        _valid = _ec[_ec["earnings_date"]
+                     > pd.Timestamp("2000-01-01")] if not _ec.empty \
+            else _ec
+        if _valid.empty:
+            st.info("Kein Earnings-Termin hinterlegt "
+                    "(Kalender deckt nur wenige Namen ab).")
+        else:
+            _ed = pd.to_datetime(_valid["earnings_date"].iloc[0]).date()
+            _delta = (_ed - date.today()).days
+            _when = (f"in {_delta} Tagen" if _delta > 0
+                     else ("heute" if _delta == 0
+                           else f"vor {abs(_delta)} Tagen"))
+            st.metric(f"{symbol} — Earnings", _ed.isoformat(), delta=_when,
+                      delta_color="off")
+            st.caption(f"Quelle: {_valid['source'].iloc[0]}.")
+
+    st.divider()
+    st.markdown("**News**")
+    if not table_exists("ref_sa_articles"):
+        st.info("Keine News-Tabellen vorhanden.")
+    else:
+        _news = run_query("""
+            SELECT a.ts, a.title, a.summary, a.url, a.source
+            FROM ref_sa_article_symbols s
+            JOIN ref_sa_articles a USING (article_id)
+            WHERE s.ref_instrument_id = ?
+            ORDER BY a.ts DESC LIMIT 20
+        """, (ref_id,))
+        if _news.empty:
+            st.info("Keine News zu diesem Instrument.")
+        else:
+            st.caption(f"{len(_news)} aktuellste Artikel.")
+            for _, _a in _news.iterrows():
+                _title = _a["title"] or "(ohne Titel)"
+                if _a["url"]:
+                    st.markdown(f"**[{_title}]({_a['url']})**")
+                else:
+                    st.markdown(f"**{_title}**")
+                st.caption(f"{_a['ts']}  ·  {_a['source'] or ''}")
+                if _a["summary"]:
+                    st.write(_a["summary"])
+                st.divider()
+
+
+# --- Signale ---
+with t_sig:
+    st.markdown("**Empfehlungen**")
+    if not table_exists("sig_recommendations"):
+        st.info("Keine Recommendation-Tabelle vorhanden.")
+    else:
+        _sig = run_query("""
+            SELECT ts, action, priority, category, title, rationale
+            FROM sig_recommendations WHERE ref_instrument_id = ?
+            ORDER BY ts DESC
+        """, (ref_id,))
+        if _sig.empty:
+            st.info("Keine Empfehlungen zu diesem Instrument.")
+        else:
+            _pic = {"high": "🔴", "medium": "🟠", "low": "🟢"}
+            for _, _r in _sig.iterrows():
+                st.markdown(
+                    f"{_pic.get(_r['priority'], '·')} `{_r['action']}`  ·  "
+                    f"_{_r['category'] or ''}_  ·  {_r['ts']}  \n"
+                    f"**{_r['title'] or ''}**  \n"
+                    f"{_r['rationale'] or ''}")
+                st.divider()
+
+    st.markdown("**Alerts**")
+    if not table_exists("sig_alerts"):
+        st.info("Keine Alert-Tabelle vorhanden.")
+    else:
+        _al = run_query("""
+            SELECT ts, rule_name, direction, trigger_value, threshold
+            FROM sig_alerts WHERE ref_instrument_id = ?
+            ORDER BY ts DESC LIMIT 50
+        """, (ref_id,))
+        if _al.empty:
+            st.info("Keine Alerts zu diesem Instrument.")
+        else:
+            st.dataframe(
+                _al.style.format({"trigger_value": de_dec,
+                                  "threshold": de_dec}),
+                use_container_width=True, hide_index=True,
+                column_config={
+                    "ts":            st.column_config.DateColumn("Datum"),
+                    "rule_name":     st.column_config.TextColumn("Regel"),
+                    "direction":     st.column_config.TextColumn("Richtung",
+                                                                 width="small"),
+                    "trigger_value": "Trigger",
+                    "threshold":     "Schwelle",
+                },
+            )
