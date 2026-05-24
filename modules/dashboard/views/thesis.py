@@ -15,6 +15,7 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from modules.dashboard.components.format import de_dec, de_int
@@ -60,6 +61,20 @@ def _fmt_cap(v) -> str:
     if abs(v) >= 1e9:
         return f"{de_dec(v / 1e9, 1)} Mrd"
     return f"{de_int(v / 1e6)} Mio"
+
+
+def _fmt_money_big(v, currency: str = "USD") -> str:
+    """GuV-Betrag, deutsch:  75200000000 -> '75,20 Mrd USD'."""
+    if _missing(v):
+        return "—"
+    a = abs(float(v))
+    if a >= 1e9:
+        s = f"{de_dec(v / 1e9, 2)} Mrd"
+    elif a >= 1e6:
+        s = f"{de_dec(v / 1e6, 0)} Mio"
+    else:
+        s = de_int(v)
+    return f"{s} {currency}".strip()
 
 
 _FMT = {"ratio": _ratio, "pct": _pct, "pct_raw": _pct_raw}
@@ -258,8 +273,8 @@ a5.metric("Kurs (1 Jahr)",
 
 # ---------- Tabs ----------
 
-t_kpi, t_growth, t_chart, t_peers, t_news, t_sig = st.tabs(
-    ["Kennzahlen", "Wachstum & Momentum", "Chart",
+t_kpi, t_growth, t_guv, t_chart, t_peers, t_news, t_sig = st.tabs(
+    ["Kennzahlen", "Wachstum & Momentum", "GuV-Sankey", "Chart",
      "Branche & Dominanz", "Termine & News", "Signale"])
 
 
@@ -345,6 +360,121 @@ with t_growth:
             if not held.empty and pd.notna(held["valid_from"].min()):
                 st.caption(f"Im Bestand seit "
                            f"{str(held['valid_from'].min())[:10]}.")
+
+
+# --- GuV-Sankey ---
+with t_guv:
+    if not table_exists("ref_income_statement"):
+        st.info("GuV-Daten noch nicht geladen. Modul einrichten:  \n"
+                "`python -m modules.sec_filings init`  \n"
+                f"`python -m modules.sec_filings fetch {symbol}`")
+    else:
+        _is = run_query("""
+            SELECT period_end, form_type, currency, revenue, cost_of_revenue,
+                   gross_profit, rd_expense, sga_expense, operating_expense,
+                   operating_income, other_income, pretax_income,
+                   tax_expense, net_income, filed_at
+            FROM ref_income_statement
+            WHERE ref_instrument_id = ?
+            ORDER BY period_end DESC LIMIT 1
+        """, (ref_id,))
+        if _is.empty:
+            st.info(f"Keine GuV fuer {symbol} hinterlegt — "
+                    f"`python -m modules.sec_filings fetch {symbol}` ausfuehren.")
+        else:
+            _r   = _is.iloc[0]
+            _cur = _r["currency"] or "USD"
+
+            def _g(col):
+                v = _r[col]
+                return None if _missing(v) else float(v)
+
+            _rev   = _g("revenue");           _cogs  = _g("cost_of_revenue")
+            _gross = _g("gross_profit");       _rd    = _g("rd_expense")
+            _sga   = _g("sga_expense");        _opex  = _g("operating_expense")
+            _opinc = _g("operating_income");   _other = _g("other_income")
+            _ptax  = _g("pretax_income");      _tax   = _g("tax_expense")
+            _net   = _g("net_income")
+
+            _GREEN, _RED, _GRAY = "#3B6D11", "#A32D2D", "#444441"
+            _GL = "rgba(99,153,34,0.45)"
+            _RL = "rgba(225,75,74,0.40)"
+
+            _labels: list[str] = []
+            _colors: list[str] = []
+            _idx: dict[str, int] = {}
+
+            def _node(key, name, val, color, *, force=False):
+                if val is None and not force:
+                    return
+                _idx[key] = len(_labels)
+                _labels.append(f"{name}<br>{_fmt_money_big(val, _cur)}")
+                _colors.append(color)
+
+            _node("rev",   "Umsatz",                _rev,   _GRAY, force=True)
+            _node("cogs",  "Herstellkosten",        _cogs,  _RED)
+            _node("gross", "Bruttogewinn",          _gross, _GREEN)
+            _node("opex",  "Betriebsaufwand",       _opex,  _RED)
+            _node("rd",    "F&E",                   _rd,    _RED)
+            _node("sga",   "Vertrieb & Verwaltung", _sga,   _RED)
+            _node("opinc", "Operatives Ergebnis",   _opinc, _GREEN)
+            _has_other = _other is not None and _other > 0
+            if _has_other:
+                _node("other", "Sonstiges Ergebnis", _other, _GREEN)
+            _has_ptax = _ptax is not None
+            if _has_ptax:
+                _node("ptax", "Vorsteuerergebnis", _ptax, _GREEN)
+            _node("tax", "Steuern",     _tax, _RED)
+            _node("net", "Nettogewinn", _net, _GREEN, force=True)
+
+            _S: list[int] = []
+            _T: list[int] = []
+            _V: list[float] = []
+            _LC: list[str] = []
+
+            def _link(a, b, val, color):
+                if val is None or val <= 0 or a not in _idx or b not in _idx:
+                    return
+                _S.append(_idx[a]); _T.append(_idx[b])
+                _V.append(val);     _LC.append(color)
+
+            _link("rev",   "cogs",  _cogs,  _RL)
+            _link("rev",   "gross", _gross, _GL)
+            _link("gross", "opex",  _opex,  _RL)
+            _link("gross", "opinc", _opinc, _GL)
+            _link("opex",  "rd",    _rd,    _RL)
+            _link("opex",  "sga",   _sga,   _RL)
+            if _has_ptax:
+                _link("opinc", "ptax", _opinc, _GL)
+                if _has_other:
+                    _link("other", "ptax", _other, _GL)
+                _link("ptax", "tax", _tax, _RL)
+                _link("ptax", "net", _net, _GL)
+            else:
+                _link("opinc", "tax", _tax, _RL)
+                _link("opinc", "net", _net, _GL)
+
+            if not _V:
+                st.info("GuV-Zeilen unvollstaendig — kein Sankey moeglich.")
+            else:
+                _fig = go.Figure(go.Sankey(
+                    arrangement="snap",
+                    node=dict(label=_labels, color=_colors,
+                              pad=24, thickness=16, line=dict(width=0)),
+                    link=dict(source=_S, target=_T, value=_V, color=_LC),
+                ))
+                _fig.update_layout(height=420, font_size=12,
+                                   margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(_fig, use_container_width=True)
+                st.caption(
+                    f"{_r['form_type'] or 'Filing'} · Berichtsperiode "
+                    f"{str(_r['period_end'])[:10]} · eingereicht "
+                    f"{str(_r['filed_at'])[:10]} · Quelle sec-api.io. "
+                    f"Betraege wie im Filing berichtet ({_cur}); "
+                    f"Bandbreite proportional zum Betrag.")
+                if any(v is None for v in (_rev, _gross, _opinc, _net)):
+                    st.caption("⚠ Einzelne Kernzeilen fehlten im XBRL und "
+                               "wurden ausgelassen.")
 
 
 # --- Chart ---
