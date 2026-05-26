@@ -274,7 +274,7 @@ a5.metric("Kurs (1 Jahr)",
 # ---------- Tabs ----------
 
 t_kpi, t_growth, t_guv, t_chart, t_peers, t_news, t_sig = st.tabs(
-    ["Kennzahlen", "Wachstum & Momentum", "GuV-Sankey", "Chart",
+    ["Kennzahlen", "Wachstum & Momentum", "Umsatz & GuV", "Chart",
      "Branche & Dominanz", "Termine & News", "Signale"])
 
 
@@ -362,56 +362,151 @@ with t_growth:
                            f"{str(held['valid_from'].min())[:10]}.")
 
 
-# --- GuV-Sankey ---
+# --- Umsatz & GuV ---
 with t_guv:
     if not table_exists("ref_income_statement"):
         st.info("GuV-Daten noch nicht geladen. Modul einrichten:  \n"
                 "`python -m modules.sec_filings init`  \n"
-                f"`python -m modules.sec_filings fetch {symbol}`")
+                f"`python -m modules.sec_filings fetch {symbol}`  \n"
+                f"`python -m modules.sec_filings backfill {symbol}`  (Historie)")
     else:
-        _is = run_query("""
+        _hist_is = run_query("""
             SELECT period_end, form_type, currency, revenue, cost_of_revenue,
                    gross_profit, rd_expense, sga_expense, operating_expense,
                    operating_income, other_income, pretax_income,
                    tax_expense, net_income, filed_at
             FROM ref_income_statement
             WHERE ref_instrument_id = ?
-            ORDER BY period_end DESC LIMIT 1
+            ORDER BY period_end
         """, (ref_id,))
-        if _is.empty:
+        if _hist_is.empty:
             st.info(f"Keine GuV fuer {symbol} hinterlegt — "
-                    f"`python -m modules.sec_filings fetch {symbol}` ausfuehren.")
+                    f"`python -m modules.sec_filings fetch {symbol}` "
+                    "ausfuehren.")
         else:
-            _r   = _is.iloc[0]
+            _hist_is["period_end"] = pd.to_datetime(_hist_is["period_end"])
+            _r   = _hist_is.iloc[-1]            # juengste Periode
             _cur = _r["currency"] or "USD"
 
-            # Segmente (Umsatz-Aufschluesselungen) fuer dieselbe Periode laden
-            _seg_rows: list[tuple[str, float]] = []
+            # Segmente: komplette Historie laden, daraus aktuelle Periode
+            _seg_hist = pd.DataFrame()
+            _seg_curr = pd.DataFrame()
             if table_exists("ref_revenue_segments"):
-                _seg = run_query("""
-                    SELECT axis, member_label, member, value
+                _seg_hist = run_query("""
+                    SELECT period_end, axis, member, member_label, value
                     FROM ref_revenue_segments
-                    WHERE ref_instrument_id = ? AND period_end = ?
-                    ORDER BY axis, value DESC
-                """, (ref_id, str(_r["period_end"])[:10]))
-                if not _seg.empty:
-                    from modules.sec_filings.client import (
-                        AXIS_LABELS as _AX_LBL, _humanize as _hum)
-                    _axes = list(dict.fromkeys(_seg["axis"].tolist()))
-                    _known = list(_AX_LBL.keys())
-                    _axes.sort(key=lambda a: (
-                        _known.index(a) if a in _known else 99, a))
-                    _opts = {_AX_LBL.get(a, _hum(a)): a for a in _axes}
-                    _chosen = (st.radio("Umsatz-Aufschluesselung",
-                                        list(_opts.keys()),
-                                        horizontal=True,
-                                        key=f"guv_axis_{ref_id}")
-                               if len(_opts) > 1 else list(_opts.keys())[0])
-                    _seg_axis = _opts[_chosen]
-                    _seg_rows = [(r["member_label"] or r["member"],
-                                  float(r["value"]))
-                                 for _, r in _seg[
-                                     _seg["axis"] == _seg_axis].iterrows()]
+                    WHERE ref_instrument_id = ?
+                    ORDER BY period_end, axis, value DESC
+                """, (ref_id,))
+                if not _seg_hist.empty:
+                    _seg_hist["period_end"] = pd.to_datetime(
+                        _seg_hist["period_end"])
+                    _seg_curr = _seg_hist[
+                        _seg_hist["period_end"] == _r["period_end"]]
+
+            # Gemeinsame Achsen-Auswahl fuer Bar-Chart + Sankey
+            _seg_axis = None
+            if not _seg_hist.empty:
+                from modules.sec_filings.client import (
+                    AXIS_LABELS as _AX_LBL, _humanize as _hum)
+                _axes = list(dict.fromkeys(_seg_hist["axis"].tolist()))
+                _known = list(_AX_LBL.keys())
+                _axes.sort(key=lambda a: (
+                    _known.index(a) if a in _known else 99, a))
+                _opts = {_AX_LBL.get(a, _hum(a)): a for a in _axes}
+                _chosen = (st.radio("Umsatz-Aufschluesselung",
+                                    list(_opts.keys()),
+                                    horizontal=True,
+                                    key=f"guv_axis_{ref_id}")
+                           if len(_opts) > 1 else list(_opts.keys())[0])
+                _seg_axis = _opts[_chosen]
+
+            # ===================================================
+            # Revenue Breakdown — Stacked Bar ueber alle Perioden
+            # ===================================================
+            st.markdown(f"##### Umsatz-Verlauf ({_cur})")
+            _PAL = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB",
+                    "#3B6D11", "#639922", "#97C459", "#C0DD97"]
+            if _seg_axis is not None:
+                _seg_sel = _seg_hist[_seg_hist["axis"] == _seg_axis].copy()
+                _periods = sorted(_seg_sel["period_end"].unique())
+                if _periods:
+                    _mem_totals = (_seg_sel.groupby("member_label")["value"]
+                                   .sum().sort_values(ascending=False))
+                    _members = _mem_totals.index.tolist()
+                    _pivot = (_seg_sel
+                              .pivot_table(index="period_end",
+                                           columns="member_label",
+                                           values="value",
+                                           aggfunc="first")
+                              .reindex(_periods)[_members])
+                    _rev_by_p = (_hist_is.set_index("period_end")["revenue"]
+                                 .reindex(_periods))
+                    _other = _rev_by_p - _pivot.sum(axis=1)
+
+                    _fig_bar = go.Figure()
+                    for _i, _m in enumerate(_members):
+                        _fig_bar.add_trace(go.Bar(
+                            name=_m, x=_pivot.index, y=_pivot[_m],
+                            marker_color=_PAL[_i % len(_PAL)],
+                            hovertemplate=(f"%{{x|%Y-%m-%d}}<br>{_m}: "
+                                           "%{y:,.0f}<extra></extra>"),
+                        ))
+                    if _other.notna().any() and (_other.fillna(0) > 1).any():
+                        _fig_bar.add_trace(go.Bar(
+                            name="Sonstige",
+                            x=_other.index, y=_other.values,
+                            marker_color="#B4B2A9",
+                            hovertemplate=("%{x|%Y-%m-%d}<br>Sonstige: "
+                                           "%{y:,.0f}<extra></extra>"),
+                        ))
+                    _fig_bar.update_layout(
+                        barmode="stack", height=380,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        legend=dict(orientation="h", y=-0.18),
+                        yaxis_title=f"Umsatz ({_cur})",
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(_fig_bar, use_container_width=True)
+                    if len(_periods) < 4:
+                        st.caption(
+                            f"Nur {len(_periods)} Periode(n) hinterlegt — "
+                            "mehr Historie via "
+                            f"`python -m modules.sec_filings backfill "
+                            f"{symbol} --quarters 20`.")
+                else:
+                    st.info("Keine Segment-Daten in dieser Achse.")
+            else:
+                # Keine Segmente — einfacher Umsatz-Verlauf
+                _fig_bar = go.Figure(go.Bar(
+                    x=_hist_is["period_end"],
+                    y=_hist_is["revenue"],
+                    marker_color=_PAL[0],
+                    hovertemplate=("%{x|%Y-%m-%d}<br>Umsatz: "
+                                   "%{y:,.0f}<extra></extra>"),
+                ))
+                _fig_bar.update_layout(
+                    height=380, margin=dict(l=10, r=10, t=10, b=10),
+                    yaxis_title=f"Umsatz ({_cur})")
+                st.plotly_chart(_fig_bar, use_container_width=True)
+                st.caption("Noch keine Segment-Aufschluesselung. Mehr "
+                           "Historie + Segmente via "
+                           f"`python -m modules.sec_filings backfill "
+                           f"{symbol} --quarters 20`.")
+
+            st.divider()
+
+            # ===================================================
+            # Sankey — Struktur der juengsten Periode
+            # ===================================================
+            st.markdown(
+                f"##### GuV-Struktur — {str(_r['period_end'])[:10]}")
+            _seg_rows: list[tuple[str, float]] = []
+            if _seg_axis is not None and not _seg_curr.empty:
+                _cur_ax = _seg_curr[_seg_curr["axis"] == _seg_axis]
+                _seg_rows = [(r["member_label"] or r["member"],
+                              float(r["value"]))
+                             for _, r in _cur_ax.iterrows()]
 
             def _g(col):
                 v = _r[col]

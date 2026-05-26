@@ -2,9 +2,11 @@
 
 Subcommands:
     init                  SQL-Schema anlegen (idempotent)
-    fetch <ticker>        Ein Symbol aktualisieren
+    fetch <ticker>        Juengstes Filing eines Symbols laden
     fetch-all [--since-days N]
                           Holdings + Watchlists aktualisieren (Daemon-Modus)
+    backfill <ticker> [--quarters N]
+                          Historie: letzte N Filings (10-Q + 10-K) laden
     show <ticker>         Gespeicherte GuV eines Symbols zeigen
 
 Environment:
@@ -30,7 +32,10 @@ from datetime import datetime, timezone
 
 import duckdb
 
-from .client import IncomeStatement, SecApiError, fetch_income
+from .client import (
+    IncomeStatement, SecApiError,
+    fetch_income, fetch_income_from_filing, find_filings,
+)
 
 
 DB_PATH = pathlib.Path(
@@ -278,6 +283,56 @@ def cmd_fetch_all(args) -> int:
         con.close()
 
 
+# ---------- backfill ----------
+
+def cmd_backfill(args) -> int:
+    """Historie: letzte N Filings (10-Q + 10-K) je Periode upserten."""
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        apply_schema(con)
+        resolved = _resolve(con, args.ticker)
+        if not resolved:
+            print(f"FEHLER: '{args.ticker}' nicht in ref_instruments.",
+                  file=sys.stderr)
+            return 64
+        ref_id, symbol = resolved
+        print(f"==> Backfill GuV-Historie fuer {symbol} ({ref_id})  —  "
+              f"bis zu {args.quarters} Filings")
+        try:
+            filings = find_filings(symbol, n=args.quarters)
+        except SecApiError as e:
+            print(f"✗ Query-API-Fehler: {e}", file=sys.stderr)
+            return 65
+        if not filings:
+            print("    Keine Filings gefunden.")
+            return 0
+
+        n_ok, n_skip, n_fail = 0, 0, 0
+        for f in filings:
+            tag = f"{f['period_of_report']} {f['form_type']:<5s}"
+            try:
+                inc = fetch_income_from_filing(f)
+            except SecApiError as e:
+                n_fail += 1
+                print(f"    ✗ {tag} FAIL: {e}", file=sys.stderr)
+                continue
+            if inc is None:
+                n_skip += 1
+                print(f"    · {tag} keine GuV-Sektion")
+                continue
+            inc.ref_instrument_id = ref_id
+            _upsert(con, inc)
+            n_seg = _upsert_segments(con, inc)
+            n_ok += 1
+            print(f"    ✓ {tag}  Revenue {inc.revenue:>15,.0f}  "
+                  f"({n_seg} seg)")
+            time.sleep(args.sleep)
+        print(f"\n==> {n_ok} OK · {n_skip} skipped · {n_fail} fail")
+        return 0 if n_fail == 0 else 1
+    finally:
+        con.close()
+
+
 # ---------- show ----------
 
 def cmd_show(args) -> int:
@@ -352,6 +407,14 @@ def main() -> int:
     p_all.add_argument("--sleep", type=float, default=0.4,
                        help="Pause zwischen API-Calls (Rate-Limit-Schoner)")
 
+    p_back = sub.add_parser("backfill",
+        help="Historie: letzte N Filings je Periode upserten")
+    p_back.add_argument("ticker")
+    p_back.add_argument("--quarters", type=int, default=20,
+        help="Wieviele juengste Filings (10-Q + 10-K) — default 20")
+    p_back.add_argument("--sleep", type=float, default=0.4,
+        help="Pause zwischen API-Calls (Rate-Limit-Schoner)")
+
     p_show = sub.add_parser("show", help="Gespeicherte GuV zeigen")
     p_show.add_argument("ticker")
 
@@ -365,6 +428,7 @@ def main() -> int:
         "init":      cmd_init,
         "fetch":     cmd_fetch,
         "fetch-all": cmd_fetch_all,
+        "backfill":  cmd_backfill,
         "show":      cmd_show,
     }
     return dispatch[args.cmd](args)

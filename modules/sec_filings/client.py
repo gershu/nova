@@ -121,22 +121,23 @@ def _api_key() -> str:
 
 # ---------- Filing-Suche ----------
 
-def find_latest_filing(
+def find_filings(
     ticker: str,
     *,
+    n: int = 1,
     forms: tuple[str, ...] = ("10-Q", "10-K"),
-) -> dict | None:
-    """Juengstes Filing (per filedAt) der gegebenen Form-Typen.
+) -> list[dict]:
+    """Bis zu N juengste Filings (per filedAt desc) der gegebenen Form-Typen.
 
-    Returns dict mit accession_no/form_type/period_of_report/filed_at/ticker
-    oder None, wenn der Name kein passendes EDGAR-Filing hat (z.B. ETFs,
+    Returns liste mit accession_no/form_type/period_of_report/filed_at/ticker.
+    Leere Liste, wenn der Name kein passendes EDGAR-Filing hat (z.B. ETFs,
     nicht US-gelistete Werte).
     """
     form_q = " OR ".join(f'formType:"{f}"' for f in forms)
     payload = {
         "query": f"ticker:{ticker} AND ({form_q})",
         "from":  "0",
-        "size":  "1",
+        "size":  str(max(1, int(n))),
         "sort":  [{"filedAt": {"order": "desc"}}],
     }
     try:
@@ -149,17 +150,23 @@ def find_latest_filing(
         raise SecApiError(
             f"Query-API HTTP {resp.status_code}: {resp.text[:200]}")
 
-    filings = (resp.json() or {}).get("filings", [])
-    if not filings:
-        return None
-    f = filings[0]
-    return {
+    return [{
         "accession_no":     f.get("accessionNo"),
         "form_type":        f.get("formType"),
         "period_of_report": f.get("periodOfReport"),
         "filed_at":         f.get("filedAt"),
         "ticker":           f.get("ticker"),
-    }
+    } for f in (resp.json() or {}).get("filings", [])]
+
+
+def find_latest_filing(
+    ticker: str,
+    *,
+    forms: tuple[str, ...] = ("10-Q", "10-K"),
+) -> dict | None:
+    """Juengstes einzelnes Filing — duenne Schale um find_filings."""
+    res = find_filings(ticker, n=1, forms=forms)
+    return res[0] if res else None
 
 
 def fetch_xbrl(accession_no: str) -> dict:
@@ -365,22 +372,19 @@ def map_income_statement(stmt: dict, period_end: str) -> IncomeStatement:
     return inc
 
 
-def fetch_income(ticker: str) -> IncomeStatement | None:
-    """End-to-End: juengstes Filing finden + GuV extrahieren.
+def fetch_income_from_filing(filing: dict) -> IncomeStatement | None:
+    """Aus einem konkreten Filing-Record (find_filings-Output) die GuV holen.
 
-    Returns None, wenn kein 10-Q/10-K existiert oder das Filing keine
-    verwertbare StatementsOfIncome-Sektion hat.
+    Returns None, wenn das Filing keine verwertbare StatementsOfIncome-Sektion
+    hat oder die Pflichtfelder fehlen.
     """
-    filing = find_latest_filing(ticker)
     if not filing or not filing.get("accession_no") \
             or not filing.get("period_of_report"):
         return None
-
     xbrl = fetch_xbrl(filing["accession_no"])
     stmt = xbrl.get("StatementsOfIncome") or {}
     if not stmt:
         return None
-
     inc = map_income_statement(stmt, filing["period_of_report"])
     inc.accession_no = filing["accession_no"]
     inc.form_type    = filing["form_type"]
@@ -390,3 +394,11 @@ def fetch_income(ticker: str) -> IncomeStatement | None:
     if inc.revenue is None and inc.net_income is None:
         return None
     return inc
+
+
+def fetch_income(ticker: str) -> IncomeStatement | None:
+    """End-to-End: juengstes Filing finden + GuV extrahieren."""
+    filing = find_latest_filing(ticker)
+    if not filing:
+        return None
+    return fetch_income_from_filing(filing)
