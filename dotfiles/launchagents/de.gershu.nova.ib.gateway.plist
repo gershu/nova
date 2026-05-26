@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab IB Gateway LaunchAgent.
+
+  WICHTIG: LaunchAgent (User-Kontext), NICHT LaunchDaemon — IB Gateway ist
+  eine GUI-App und braucht eine grafische Sitzung. Setup-Voraussetzung:
+  novaadm hat Auto-Login aktiviert (Systemeinstellungen → Benutzer → Anmelde-
+  Optionen). Details: docs/ibc_setup.md.
+
+  Initial-Setup:
+    cp ~/nova/dotfiles/launchagents/de.gershu.nova.ib.gateway.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) \
+       ~/Library/LaunchAgents/de.gershu.nova.ib.gateway.plist
+    launchctl kickstart -k gui/$(id -u)/de.gershu.nova.ib.gateway
+
+  Stop:    launchctl bootout gui/$(id -u)/de.gershu.nova.ib.gateway
+  Status:  launchctl print gui/$(id -u)/de.gershu.nova.ib.gateway
+
+  Logs: $HOME/Library/Logs/nova-ib-gateway.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.ib.gateway</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec /Users/novaadm/nova/scripts/ib_gateway_start.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Mindestens 60s zwischen Restart-Versuchen — verhindert API-Hammering
+         wenn Config kaputt oder IBKR temporaer down ist. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

@@ -1,0 +1,78 @@
+# nova-lab IBC-Config-Template — wird von scripts/ib_gateway_start.sh
+# zur Laufzeit per envsubst nach /tmp/nova-ibc-runtime.ini gerendert.
+# Die rendered Datei hat chmod 600 und liegt ausserhalb des Repos.
+#
+# Quelle der Defaults: https://github.com/IbcAlpha/IBC/blob/master/userguide.md
+# Nur die fuer headless-Gateway wichtigen Settings sind hier gesetzt; alles
+# andere bleibt auf IBC-Default.
+#
+# Platzhalter werden aus ~/.nova_env gefuellt:
+#   ${NOVA_IBKR_USERNAME}, ${NOVA_IBKR_PASSWORD}, ${NOVA_IBKR_MODE}
+#   ${NOVA_IB_API_PORT}
+
+# =============================================================================
+# Credentials & Mode
+# =============================================================================
+IbLoginId=${NOVA_IBKR_USERNAME}
+IbPassword=${NOVA_IBKR_PASSWORD}
+
+# 'live' oder 'paper' — bestimmt mit welchen IBKR-Servern Gateway redet.
+TradingMode=${NOVA_IBKR_MODE}
+
+# FIX-Mode nutzen wir nicht (das ist fuer institutionelle FIX-API-Accounts).
+FIX=no
+
+# =============================================================================
+# Login-Verhalten
+# =============================================================================
+# Read-Only-Login = nein, sonst keine Order/Cancel-Calls moeglich.
+ReadOnlyLogin=no
+
+# 'accept' = eingehende API-Verbindungen automatisch zulassen (sonst Dialog).
+AcceptIncomingConnectionAction=accept
+
+# Wenn schon eine Session laeuft: 'primary' = uebernehmen, 'manual' = fragen.
+ExistingSessionDetectedAction=primary
+
+# Diverse Disclaimer und Hinweis-Dialoge wegklicken.
+DismissPasswordExpiryWarning=yes
+DismissNSEComplianceNotice=yes
+
+# Bei 'no' verhindert Gateway "Blind-Trading" Modus — sicherer Default.
+AllowBlindTrading=no
+
+# =============================================================================
+# Daily Restart (IBKR trennt jede Nacht um Mitternacht-ET die Session)
+# =============================================================================
+# 'restart' = nach Auto-Logoff Gateway neu starten + automatisch wieder einloggen.
+AutoLogoffAction=restart
+
+# Optional: Uhrzeit fuer programmierten Restart (24h-Format, leer = aus).
+AutoRestartTime=
+
+# Optional: programmiertes Shutdown (leer = aus, Gateway laeuft 24/7).
+ClosedownAt=
+
+# =============================================================================
+# API-Port
+# =============================================================================
+# Default: 4001 (live) / 4002 (paper). Override hier optional.
+OverrideTwsApiPort=${NOVA_IB_API_PORT}
+
+# Read-Only-API: 'no' = volle API-Rechte (Order placen).
+ReadOnlyApi=no
+
+# Ueberfluessige Info-Popups in der Gateway-GUI unterdruecken.
+SuppressInfoMessages=yes
+
+# =============================================================================
+# Window-Verhalten
+# =============================================================================
+# Main-Window beim Start minimieren — wir wollen Gateway headless.
+MinimizeMainWindow=yes
+
+# =============================================================================
+# Logging
+# =============================================================================
+# IBC-Loglevel: error|warning|info|detail|debug
+LogLevel=info
