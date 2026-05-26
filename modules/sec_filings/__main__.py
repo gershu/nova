@@ -6,7 +6,9 @@ Subcommands:
     fetch-all [--since-days N]
                           Holdings + Watchlists aktualisieren (Daemon-Modus)
     backfill <ticker> [--quarters N]
-                          Historie: letzte N Filings (10-Q + 10-K) laden
+                          Historie eines Symbols: letzte N Filings laden
+    backfill-all [--quarters N] [--since-days N]
+                          Historie fuer Holdings + Watchlists
     show <ticker>         Gespeicherte GuV eines Symbols zeigen
 
 Environment:
@@ -285,8 +287,52 @@ def cmd_fetch_all(args) -> int:
 
 # ---------- backfill ----------
 
+def _backfill_one(con: duckdb.DuckDBPyConnection,
+                   ref_id: str, symbol: str,
+                   quarters: int, sleep_s: float,
+                   *, verbose: bool = True) -> tuple[int, int, int]:
+    """Backfill fuer ein Instrument. Returns (n_ok, n_skip, n_fail).
+
+    Geteilte Basis fuer cmd_backfill (ein Symbol) und cmd_backfill_all
+    (Holdings + Watchlists).
+    """
+    try:
+        filings = find_filings(symbol, n=quarters)
+    except SecApiError as e:
+        print(f"    ✗ {symbol:<8s} Query-API-Fehler: {e}", file=sys.stderr)
+        return (0, 0, 1)
+    if not filings:
+        if verbose:
+            print(f"    · {symbol:<8s} keine Filings")
+        return (0, 1, 0)
+
+    n_ok, n_skip, n_fail = 0, 0, 0
+    for f in filings:
+        tag = f"{f['period_of_report']} {f['form_type']:<5s}"
+        try:
+            inc = fetch_income_from_filing(f)
+        except SecApiError as e:
+            n_fail += 1
+            print(f"    ✗ {symbol:<8s} {tag} FAIL: {e}", file=sys.stderr)
+            continue
+        if inc is None:
+            n_skip += 1
+            if verbose:
+                print(f"    · {symbol:<8s} {tag} keine GuV-Sektion")
+            continue
+        inc.ref_instrument_id = ref_id
+        _upsert(con, inc)
+        n_seg = _upsert_segments(con, inc)
+        n_ok += 1
+        if verbose:
+            print(f"    ✓ {symbol:<8s} {tag}  "
+                  f"Revenue {inc.revenue:>15,.0f}  ({n_seg} seg)")
+        time.sleep(sleep_s)
+    return (n_ok, n_skip, n_fail)
+
+
 def cmd_backfill(args) -> int:
-    """Historie: letzte N Filings (10-Q + 10-K) je Periode upserten."""
+    """Historie: letzte N Filings (10-Q + 10-K) eines Symbols upserten."""
     con = duckdb.connect(str(DB_PATH))
     try:
         apply_schema(con)
@@ -298,37 +344,76 @@ def cmd_backfill(args) -> int:
         ref_id, symbol = resolved
         print(f"==> Backfill GuV-Historie fuer {symbol} ({ref_id})  —  "
               f"bis zu {args.quarters} Filings")
-        try:
-            filings = find_filings(symbol, n=args.quarters)
-        except SecApiError as e:
-            print(f"✗ Query-API-Fehler: {e}", file=sys.stderr)
-            return 65
-        if not filings:
-            print("    Keine Filings gefunden.")
-            return 0
-
-        n_ok, n_skip, n_fail = 0, 0, 0
-        for f in filings:
-            tag = f"{f['period_of_report']} {f['form_type']:<5s}"
-            try:
-                inc = fetch_income_from_filing(f)
-            except SecApiError as e:
-                n_fail += 1
-                print(f"    ✗ {tag} FAIL: {e}", file=sys.stderr)
-                continue
-            if inc is None:
-                n_skip += 1
-                print(f"    · {tag} keine GuV-Sektion")
-                continue
-            inc.ref_instrument_id = ref_id
-            _upsert(con, inc)
-            n_seg = _upsert_segments(con, inc)
-            n_ok += 1
-            print(f"    ✓ {tag}  Revenue {inc.revenue:>15,.0f}  "
-                  f"({n_seg} seg)")
-            time.sleep(args.sleep)
+        n_ok, n_skip, n_fail = _backfill_one(
+            con, ref_id, symbol, args.quarters, args.sleep)
         print(f"\n==> {n_ok} OK · {n_skip} skipped · {n_fail} fail")
         return 0 if n_fail == 0 else 1
+    finally:
+        con.close()
+
+
+# ---------- backfill-all ----------
+
+def cmd_backfill_all(args) -> int:
+    """Backfill ueber Holdings + Watchlists — Pendant zu fetch-all."""
+    run_id = (f"sec-bf-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+              f"-{uuid.uuid4().hex[:6]}")
+    started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        apply_schema(con)
+        targets = _targets(con)
+        if not targets:
+            print("Keine Ziel-Instrumente (Holdings/Watchlists leer).")
+            return 0
+
+        # Instrumente mit frischem Snapshot ueberspringen — fuer
+        # woechentliche Inkrement-Laeufe (--since-days 6 z.B.).
+        recent: set[str] = set()
+        if args.since_days > 0:
+            for (rid,) in con.execute(
+                "SELECT DISTINCT ref_instrument_id FROM ref_income_statement "
+                "WHERE fetched_at >= now() - INTERVAL (?) DAY",
+                [args.since_days],
+            ).fetchall():
+                recent.add(rid)
+
+        print(f"==> backfill-all: {len(targets)} Instrumente × bis zu "
+              f"{args.quarters} Filings  (run_id={run_id})")
+        if recent:
+            print(f"    {len(recent)} bereits frisch — werden uebersprungen "
+                  f"(--since-days {args.since_days}).")
+
+        total_ok, total_skip, total_fail = 0, 0, 0
+        n_inst_skip = 0
+        for ref_id, symbol in targets:
+            if ref_id in recent:
+                n_inst_skip += 1
+                continue
+            print(f"  → {symbol}")
+            n_ok, n_skip, n_fail = _backfill_one(
+                con, ref_id, symbol, args.quarters, args.sleep,
+                verbose=args.verbose)
+            total_ok   += n_ok
+            total_skip += n_skip
+            total_fail += n_fail
+            print(f"     {n_ok} OK · {n_skip} skipped · {n_fail} fail")
+
+        finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        status = ("ok" if total_fail == 0
+                  else ("partial" if total_ok > 0 else "fail"))
+        con.execute("""
+            INSERT INTO audit_sec_filings_runs
+              (run_id, started_at, finished_at, instrument_count,
+               rows_upserted, rows_skipped, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [run_id, started_at, finished_at, len(targets),
+              total_ok, total_skip, status])
+
+        print(f"\n==> Summary: {total_ok} Periodenzeilen upserted · "
+              f"{total_skip} skipped · {total_fail} fail · "
+              f"{n_inst_skip} Instrumente uebersprungen · status={status}")
+        return 0 if total_fail == 0 else 1
     finally:
         con.close()
 
@@ -408,12 +493,24 @@ def main() -> int:
                        help="Pause zwischen API-Calls (Rate-Limit-Schoner)")
 
     p_back = sub.add_parser("backfill",
-        help="Historie: letzte N Filings je Periode upserten")
+        help="Historie: letzte N Filings eines Symbols upserten")
     p_back.add_argument("ticker")
     p_back.add_argument("--quarters", type=int, default=20,
         help="Wieviele juengste Filings (10-Q + 10-K) — default 20")
     p_back.add_argument("--sleep", type=float, default=0.4,
         help="Pause zwischen API-Calls (Rate-Limit-Schoner)")
+
+    p_back_all = sub.add_parser("backfill-all",
+        help="Historie fuer Holdings + Watchlists (Pendant zu fetch-all)")
+    p_back_all.add_argument("--quarters", type=int, default=20,
+        help="Wieviele juengste Filings je Symbol — default 20")
+    p_back_all.add_argument("--since-days", type=int, default=0,
+        help="Instrumente mit Snapshot juenger als N Tage skippen "
+             "(default 0 = nichts skippen, alle backfillen)")
+    p_back_all.add_argument("--sleep", type=float, default=0.4,
+        help="Pause zwischen API-Calls")
+    p_back_all.add_argument("--verbose", action="store_true",
+        help="Jede Periode einzeln loggen statt nur Summary je Symbol")
 
     p_show = sub.add_parser("show", help="Gespeicherte GuV zeigen")
     p_show.add_argument("ticker")
@@ -425,11 +522,12 @@ def main() -> int:
         return 64
 
     dispatch = {
-        "init":      cmd_init,
-        "fetch":     cmd_fetch,
-        "fetch-all": cmd_fetch_all,
-        "backfill":  cmd_backfill,
-        "show":      cmd_show,
+        "init":         cmd_init,
+        "fetch":        cmd_fetch,
+        "fetch-all":    cmd_fetch_all,
+        "backfill":     cmd_backfill,
+        "backfill-all": cmd_backfill_all,
+        "show":         cmd_show,
     }
     return dispatch[args.cmd](args)
 
