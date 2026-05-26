@@ -16,18 +16,21 @@ Ziel-Endpunkt nach erfolgreichem Setup: **IB Gateway auf `127.0.0.1:4001`**
    [IBKR](https://www.interactivebrokers.com/en/index.php?f=14099#tws-software),
    *Gateway Latest*. Installations­ziel z. B.
    `/Applications/IB Gateway 10.30/`.
-3. **IBC** — manuelle Installation von den GitHub-Releases (kein
-   Homebrew-Tap). Aktuelle Version unter
-   [github.com/IbcAlpha/IBC/releases](https://github.com/IbcAlpha/IBC/releases)
-   nachsehen, dann:
+3. **IBC** — manuelle Installation von den GitHub-Releases (keinen
+   Homebrew-Tap gibt es nicht). Auto-Discovery der aktuellen
+   macOS-Release-URL über die GitHub-API, dann download + unzip:
    ```sh
    mkdir -p ~/ibc && cd ~/ibc
-   # Version anpassen!
-   curl -L -o ibc.zip \
-     "https://github.com/IbcAlpha/IBC/releases/latest/download/IBCMacos-3.21.2.zip"
+   url=$(curl -s https://api.github.com/repos/IbcAlpha/IBC/releases/latest \
+         | grep -o 'https://[^"]*IBCMacos[^"]*\.zip' | head -1)
+   echo "Lade: $url"
+   curl -L -o ibc.zip "$url"
    unzip ibc.zip
    chmod +x scripts/*.sh
    ```
+   Fallback bei Problemen: auf
+   [github.com/IbcAlpha/IBC/releases](https://github.com/IbcAlpha/IBC/releases)
+   den `IBCMacos-X.Y.Z.zip`-Link aus dem obersten Release manuell kopieren.
    Installations­pfad wird in `~/.nova_env` als `NOVA_IBC_PATH` hinterlegt
    (typisch `$HOME/ibc`).
 4. **(Optional) Auto-Login für novaadm.** IB Gateway ist eine GUI-App und
