@@ -385,6 +385,34 @@ with t_guv:
             _r   = _is.iloc[0]
             _cur = _r["currency"] or "USD"
 
+            # Segmente (Umsatz-Aufschluesselungen) fuer dieselbe Periode laden
+            _seg_rows: list[tuple[str, float]] = []
+            if table_exists("ref_revenue_segments"):
+                _seg = run_query("""
+                    SELECT axis, member_label, member, value
+                    FROM ref_revenue_segments
+                    WHERE ref_instrument_id = ? AND period_end = ?
+                    ORDER BY axis, value DESC
+                """, (ref_id, str(_r["period_end"])[:10]))
+                if not _seg.empty:
+                    from modules.sec_filings.client import (
+                        AXIS_LABELS as _AX_LBL, _humanize as _hum)
+                    _axes = list(dict.fromkeys(_seg["axis"].tolist()))
+                    _known = list(_AX_LBL.keys())
+                    _axes.sort(key=lambda a: (
+                        _known.index(a) if a in _known else 99, a))
+                    _opts = {_AX_LBL.get(a, _hum(a)): a for a in _axes}
+                    _chosen = (st.radio("Umsatz-Aufschluesselung",
+                                        list(_opts.keys()),
+                                        horizontal=True,
+                                        key=f"guv_axis_{ref_id}")
+                               if len(_opts) > 1 else list(_opts.keys())[0])
+                    _seg_axis = _opts[_chosen]
+                    _seg_rows = [(r["member_label"] or r["member"],
+                                  float(r["value"]))
+                                 for _, r in _seg[
+                                     _seg["axis"] == _seg_axis].iterrows()]
+
             def _g(col):
                 v = _r[col]
                 return None if _missing(v) else float(v)
@@ -412,6 +440,10 @@ with t_guv:
                 _colors.append(color)
 
             _node("rev",   "Umsatz",                _rev,   _GRAY, force=True)
+            # Segment-Knoten (Umsatz-Quellen, fliessen in 'Umsatz')
+            _SEG_FILL = "#0F6E56"
+            for _i, (_lbl, _val) in enumerate(_seg_rows):
+                _node(f"s{_i}", _lbl, _val, _SEG_FILL)
             _node("cogs",  "Herstellkosten",        _cogs,  _RED)
             _node("gross", "Bruttogewinn",          _gross, _GREEN)
             _node("opex",  "Betriebsaufwand",       _opex,  _RED)
@@ -438,6 +470,10 @@ with t_guv:
                 _S.append(_idx[a]); _T.append(_idx[b])
                 _V.append(val);     _LC.append(color)
 
+            # Segment -> Umsatz (linke Auffaecherung)
+            _SL = "rgba(29,158,117,0.45)"
+            for _i, (_, _val) in enumerate(_seg_rows):
+                _link(f"s{_i}", "rev", _val, _SL)
             _link("rev",   "cogs",  _cogs,  _RL)
             _link("rev",   "gross", _gross, _GL)
             _link("gross", "opex",  _opex,  _RL)

@@ -117,6 +117,36 @@ def _upsert(con: duckdb.DuckDBPyConnection, inc: IncomeStatement) -> None:
     )
 
 
+def _upsert_segments(con: duckdb.DuckDBPyConnection,
+                      inc: IncomeStatement) -> int:
+    """Segment-Zeilen (instrument, period) komplett neu setzen.
+
+    Delete-then-insert ist hier sauberer als per-Member-Upsert: wenn eine
+    Achse oder ein Member im neuen Filing wegfaellt, soll die alte Zeile
+    auch weg.
+    """
+    if not inc.ref_instrument_id or not inc.period_end:
+        return 0
+    con.execute(
+        "DELETE FROM ref_revenue_segments "
+        "WHERE ref_instrument_id = ? AND period_end = ?",
+        [inc.ref_instrument_id, inc.period_end],
+    )
+    if not inc.segments:
+        return 0
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for seg in inc.segments:
+        con.execute("""
+            INSERT INTO ref_revenue_segments
+                (ref_instrument_id, period_end, axis, member, member_label,
+                 value, currency, source, fetched_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'sec-api.io', ?)
+        """, [inc.ref_instrument_id, inc.period_end, seg["axis"],
+              seg["member"], seg.get("member_label"), seg["value"],
+              inc.currency or "USD", now])
+    return len(inc.segments)
+
+
 def _resolve(con: duckdb.DuckDBPyConnection,
              ticker: str) -> tuple[str, str] | None:
     """ticker -> (ref_instrument_id, symbol) ueber ref_instruments."""
@@ -151,8 +181,10 @@ def cmd_fetch(args) -> int:
             return 0
         inc.ref_instrument_id = ref_id
         _upsert(con, inc)
+        n_seg = _upsert_segments(con, inc)
         print(f"    ✓ {inc.form_type} per {inc.period_end} · "
-              f"Revenue {inc.revenue} · Net {inc.net_income}")
+              f"Revenue {inc.revenue} · Net {inc.net_income} · "
+              f"{n_seg} Segment-Zeilen")
         for w in inc.warnings:
             print(f"      ⚠ {w}")
         return 0
@@ -224,8 +256,10 @@ def cmd_fetch_all(args) -> int:
                 continue
             inc.ref_instrument_id = ref_id
             _upsert(con, inc)
+            n_seg = _upsert_segments(con, inc)
             n_up += 1
-            print(f"    ✓ {symbol:<8s} {inc.form_type} per {inc.period_end}")
+            print(f"    ✓ {symbol:<8s} {inc.form_type} per {inc.period_end}"
+                  f"  ({n_seg} seg)")
             time.sleep(args.sleep)
 
         finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -278,6 +312,22 @@ def cmd_show(args) -> int:
                 print(f"  {k:<20s} {v:>20,.0f}")
             else:
                 print(f"  {k:<20s} {v}")
+
+        # Segmente nach Achse gruppiert anzeigen
+        period_end = row[0]
+        segs = con.execute("""
+            SELECT axis, member_label, value FROM ref_revenue_segments
+            WHERE ref_instrument_id = ? AND period_end = ?
+            ORDER BY axis, value DESC
+        """, [ref_id, period_end]).fetchall()
+        if segs:
+            print(f"\n  Umsatz-Aufschluesselungen ({len(segs)} Zeilen):")
+            cur_axis = None
+            for axis, label, val in segs:
+                if axis != cur_axis:
+                    print(f"\n    [{axis}]")
+                    cur_axis = axis
+                print(f"      {label:<32s} {val:>20,.0f}")
         return 0
     finally:
         con.close()

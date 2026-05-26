@@ -16,6 +16,7 @@ und value (String). Dimensionierte Segment-Fakten tragen zusaetzlich einen
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -60,6 +61,22 @@ _TAX     = ["IncomeTaxExpenseBenefit"]
 _NET     = ["NetIncomeLoss", "ProfitLoss"]
 
 
+# Achsen, die KEINE echte Disaggregation sind, sondern Konsolidierungs-
+# bzw. Eliminations-Qualifier. Werden bei der Segment-Extraktion ignoriert.
+_CONSOLIDATION_AXES = {
+    "srt:ConsolidationItemsAxis",
+    "us-gaap:ConsolidationItemsAxis",
+}
+
+# Bekannte Achsen mit menschenlesbaren Labels — fuer den Sankey-Selector.
+# Unbekannte Achsen werden ueber _humanize() formatiert.
+AXIS_LABELS = {
+    "us-gaap:StatementBusinessSegmentsAxis": "Reportable Segments",
+    "srt:ProductOrServiceAxis":              "Produkt / Service",
+    "srt:StatementGeographicalAxis":         "Geografie",
+}
+
+
 @dataclass
 class IncomeStatement:
     """GuV-Kernzeilen eines Filings — Betraege in Berichtswaehrung."""
@@ -82,6 +99,11 @@ class IncomeStatement:
     pretax_income:     float | None = None
     tax_expense:       float | None = None
     net_income:        float | None = None
+
+    # Umsatz-Disaggregationen, je dict: {axis, member, member_label, value}.
+    # Eine Periode kann mehrere Achsen liefern (Reportable Segments,
+    # Produkt-Linie, Geografie). Der Sankey-Tab waehlt visuell.
+    segments: list[dict] = field(default_factory=list)
 
     warnings: list[str] = field(default_factory=list)
 
@@ -194,6 +216,119 @@ def _pick(stmt: dict, concepts: list[str],
     return None, None
 
 
+def _humanize(qname: str) -> str:
+    """XBRL-QName -> menschenlesbarer Name.
+
+      'nvda:ComputeAndNetworkingSegmentMember' -> 'Compute And Networking'
+      'us-gaap:StatementBusinessSegmentsAxis'  -> 'Statement Business Segments'
+    """
+    s = qname.split(":")[-1] if ":" in qname else qname
+    for suf in ("Member", "Segment", "Axis"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+    s = re.sub(r"(?<!^)(?=[A-Z])", " ", s)
+    return s.strip()
+
+
+def _normalize_members(seg) -> list[tuple[str, str]]:
+    """Robust: (dimension, member)-Tupel aus seg-Objekt extrahieren.
+
+    Unterstuetzt drei Shapes:
+      - Apple:  {'dimension': '...', 'value': '...'}
+      - NVIDIA: {'explicitMember': {'dimension':'...','$t':'...'}}
+      - NVIDIA: {'explicitMember': [{...}, {...}]}    (multi-dim)
+    """
+    if not seg:
+        return []
+    if isinstance(seg, list):
+        out: list[tuple[str, str]] = []
+        for s in seg:
+            out.extend(_normalize_members(s))
+        return out
+    if not isinstance(seg, dict):
+        return []
+    # Apple-Shape — Dimension + Wert direkt im seg-Dict.
+    if "dimension" in seg and ("$t" in seg or "value" in seg):
+        dim = seg.get("dimension")
+        mem = seg.get("$t") or seg.get("value")
+        return [(dim, mem)] if dim and mem else []
+    # NVIDIA-Shape — unter explicitMember.
+    em = seg.get("explicitMember")
+    if em is None:
+        return []
+    items = em if isinstance(em, list) else [em]
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        dim = it.get("dimension")
+        mem = it.get("$t") or it.get("value")
+        if dim and mem:
+            out.append((dim, mem))
+    return out
+
+
+def extract_revenue_segments(stmt: dict, period_end: str,
+                              period_months: int | None = 3) -> list[dict]:
+    """Saubere Ein-Achsen-Aufschluesselungen des Umsatzes.
+
+    Strategie:
+      - Auf den Revenue-Concepts alle dimensionierten Fakten sammeln.
+      - Consolidation-Qualifier (z.B. srt:ConsolidationItemsAxis) ignorieren.
+      - Nur Fakten mit GENAU EINER verbleibenden Achse aufnehmen
+        (cross-tabulierte Werte rausfiltern — die sind Schnittpunkte).
+      - Periode == period_end, Dauer passend zu period_months.
+      - Pro (Achse, Member) den ersten Treffer nehmen (XBRL dedupliziert
+        durch Member-Eindeutigkeit ohnehin).
+
+    Returns: [{axis, member, member_label, value}, ...].
+    """
+    # Erlaubte Dauer-Spanne in Tagen.
+    if period_months == 12:
+        dur_min, dur_max = 330, 400
+    else:                                  # default: Quartal
+        dur_min, dur_max = 60, 100
+
+    seen: dict[tuple[str, str], dict] = {}
+    for concept in _REVENUE:
+        for fct in stmt.get(concept, []) or []:
+            seg = fct.get("segment")
+            if not seg:
+                continue
+            members = _normalize_members(seg)
+            real = [(d, m) for d, m in members
+                    if d not in _CONSOLIDATION_AXES]
+            if len(real) != 1:
+                continue                   # 0 = nur Total, >1 = cross-tab
+            dim, mem = real[0]
+            p = fct.get("period") or {}
+            if p.get("endDate") != period_end:
+                continue
+            start = p.get("startDate")
+            if start:
+                try:
+                    dur = (date.fromisoformat(p["endDate"])
+                           - date.fromisoformat(start)).days
+                except ValueError:
+                    continue
+                if not (dur_min <= dur <= dur_max):
+                    continue
+            try:
+                v = float(fct["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            key = (dim, mem)
+            if key in seen:
+                continue
+            seen[key] = {
+                "axis":         dim,
+                "member":       mem,
+                "member_label": _humanize(mem),
+                "value":        v,
+            }
+    return list(seen.values())
+
+
 def map_income_statement(stmt: dict, period_end: str) -> IncomeStatement:
     """StatementsOfIncome-dict -> IncomeStatement mit GuV-Kernzeilen."""
     inc = IncomeStatement(period_end=period_end)
@@ -250,6 +385,8 @@ def fetch_income(ticker: str) -> IncomeStatement | None:
     inc.accession_no = filing["accession_no"]
     inc.form_type    = filing["form_type"]
     inc.filed_at     = filing["filed_at"]
+    inc.segments     = extract_revenue_segments(
+        stmt, filing["period_of_report"], inc.period_months)
     if inc.revenue is None and inc.net_income is None:
         return None
     return inc
