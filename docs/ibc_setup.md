@@ -16,13 +16,20 @@ Ziel-Endpunkt nach erfolgreichem Setup: **IB Gateway auf `127.0.0.1:4001`**
    [IBKR](https://www.interactivebrokers.com/en/index.php?f=14099#tws-software),
    *Gateway Latest*. Installations­ziel z. B.
    `/Applications/IB Gateway 10.30/`.
-3. **IBC**. Auf macOS empfehle ich die Homebrew-Variante:
+3. **IBC** — manuelle Installation von den GitHub-Releases (kein
+   Homebrew-Tap). Aktuelle Version unter
+   [github.com/IbcAlpha/IBC/releases](https://github.com/IbcAlpha/IBC/releases)
+   nachsehen, dann:
    ```sh
-   brew tap IbcAlpha/ibc
-   brew install ibc
+   mkdir -p ~/ibc && cd ~/ibc
+   # Version anpassen!
+   curl -L -o ibc.zip \
+     "https://github.com/IbcAlpha/IBC/releases/latest/download/IBCMacos-3.21.2.zip"
+   unzip ibc.zip
+   chmod +x scripts/*.sh
    ```
    Installations­pfad wird in `~/.nova_env` als `NOVA_IBC_PATH` hinterlegt
-   (typisch `/opt/homebrew/opt/ibc`).
+   (typisch `$HOME/ibc`).
 4. **(Optional) Auto-Login für novaadm.** IB Gateway ist eine GUI-App und
    funktioniert *zuverlässiger* mit einer aktiven Aqua-Session. Wir wählen
    trotzdem den system-LaunchDaemon-Pfad (Variante ohne Auto-Login),
@@ -45,7 +52,7 @@ export NOVA_IBKR_MODE="live"          # oder 'paper'
 export NOVA_IB_API_PORT="4001"        # 4002 für paper
 
 # Pfade zu IBC und IB Gateway
-export NOVA_IBC_PATH="/opt/homebrew/opt/ibc"
+export NOVA_IBC_PATH="$HOME/ibc"
 export NOVA_IB_GATEWAY_PATH="/Applications/IB Gateway 10.30"
 export NOVA_IB_GATEWAY_VER="10.30"    # nur die Versionsnummer
 
