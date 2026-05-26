@@ -56,14 +56,16 @@ Anschließend: `chmod 600 ~/.nova_env`.
 
 ## Installation des LaunchAgents
 
+Wichtig: alle drei Befehle als `novaadm` ausführen (nicht via `sudo`, nicht
+als anderer SSH-User), sonst meckert `launchctl` mit „Domain does not
+support specified action".
+
 ```sh
 cd ~/nova
-cp dotfiles/launchagents/de.gershu.nova.ib.gateway.plist \
-   ~/Library/LaunchAgents/
+cp dotfiles/launchagents/de.gershu.nova.ib.gateway.plist ~/Library/LaunchAgents/
 
-# Erst-Bootstrap (lädt + startet)
-launchctl bootstrap gui/$(id -u) \
-   ~/Library/LaunchAgents/de.gershu.nova.ib.gateway.plist
+# Erst-Bootstrap (lädt + startet) — Domain UND Service-Pfad in einer Zeile.
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.gershu.nova.ib.gateway.plist
 launchctl kickstart -k gui/$(id -u)/de.gershu.nova.ib.gateway
 ```
 
