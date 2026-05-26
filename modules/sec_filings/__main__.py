@@ -201,24 +201,46 @@ def cmd_fetch(args) -> int:
 
 # ---------- fetch-all ----------
 
-def _targets(con: duckdb.DuckDBPyConnection) -> list[tuple[str, str]]:
-    """(ref_instrument_id, symbol) fuer Holdings + Watchlist-Members."""
-    wl = ", ".join(f"'{w}'" for w in _WATCHLISTS)
+def _targets(con: duckdb.DuckDBPyConnection,
+              watchlist: str | None = None) -> list[tuple[str, str]]:
+    """(ref_instrument_id, symbol)-Liste fuer die Ziel-Auswahl.
+
+    Standard (watchlist=None): Holdings + die default-Watchlists
+    (_WATCHLISTS — buy_candidates, csp_universe).
+
+    Wenn `watchlist` gesetzt: NUR Members dieser einen Watchlist, ohne
+    Holdings — fuer kuratierte Universen wie 'quality_universe'.
+    """
     skip = ", ".join(f"'{a}'" for a in _SKIP_ASSET_TYPES)
-    rows = con.execute(f"""
-        WITH universe AS (
-            SELECT DISTINCT ref_instrument_id FROM v_mkt_holdings
-            UNION
-            SELECT DISTINCT ref_instrument_id FROM list_watchlist_members
-            WHERE watchlist_id IN ({wl})
-        )
-        SELECT i.ref_instrument_id, i.symbol
-        FROM universe u
-        JOIN ref_instruments i USING (ref_instrument_id)
-        WHERE i.symbol IS NOT NULL
-          AND (i.asset_type IS NULL OR upper(i.asset_type) NOT IN ({skip}))
-        ORDER BY i.symbol
-    """).fetchall()
+    if watchlist:
+        rows = con.execute(f"""
+            SELECT i.ref_instrument_id, i.symbol
+            FROM list_watchlist_members m
+            JOIN ref_instruments i USING (ref_instrument_id)
+            WHERE m.watchlist_id = ?
+              AND i.symbol IS NOT NULL
+              AND (i.asset_type IS NULL
+                   OR upper(i.asset_type) NOT IN ({skip}))
+            ORDER BY i.symbol
+        """, [watchlist]).fetchall()
+    else:
+        wl = ", ".join(f"'{w}'" for w in _WATCHLISTS)
+        rows = con.execute(f"""
+            WITH universe AS (
+                SELECT DISTINCT ref_instrument_id FROM v_mkt_holdings
+                UNION
+                SELECT DISTINCT ref_instrument_id
+                FROM list_watchlist_members
+                WHERE watchlist_id IN ({wl})
+            )
+            SELECT i.ref_instrument_id, i.symbol
+            FROM universe u
+            JOIN ref_instruments i USING (ref_instrument_id)
+            WHERE i.symbol IS NOT NULL
+              AND (i.asset_type IS NULL
+                   OR upper(i.asset_type) NOT IN ({skip}))
+            ORDER BY i.symbol
+        """).fetchall()
     return [(r[0], r[1]) for r in rows]
 
 
@@ -229,7 +251,7 @@ def cmd_fetch_all(args) -> int:
     con = duckdb.connect(str(DB_PATH))
     try:
         apply_schema(con)
-        targets = _targets(con)
+        targets = _targets(con, getattr(args, "watchlist", None))
         if not targets:
             print("Keine Ziel-Instrumente (Holdings/Watchlists leer).")
             return 0
@@ -362,7 +384,7 @@ def cmd_backfill_all(args) -> int:
     con = duckdb.connect(str(DB_PATH))
     try:
         apply_schema(con)
-        targets = _targets(con)
+        targets = _targets(con, getattr(args, "watchlist", None))
         if not targets:
             print("Keine Ziel-Instrumente (Holdings/Watchlists leer).")
             return 0
@@ -491,6 +513,9 @@ def main() -> int:
                        help="Symbole mit Snapshot juenger als N Tage skippen")
     p_all.add_argument("--sleep", type=float, default=0.4,
                        help="Pause zwischen API-Calls (Rate-Limit-Schoner)")
+    p_all.add_argument("--watchlist", default=None,
+        help="Nur Members einer einzelnen Watchlist (z.B. quality_universe) "
+             "statt Holdings + Default-Watchlists")
 
     p_back = sub.add_parser("backfill",
         help="Historie: letzte N Filings eines Symbols upserten")
@@ -511,6 +536,9 @@ def main() -> int:
         help="Pause zwischen API-Calls")
     p_back_all.add_argument("--verbose", action="store_true",
         help="Jede Periode einzeln loggen statt nur Summary je Symbol")
+    p_back_all.add_argument("--watchlist", default=None,
+        help="Nur Members einer einzelnen Watchlist (z.B. quality_universe) "
+             "statt Holdings + Default-Watchlists")
 
     p_show = sub.add_parser("show", help="Gespeicherte GuV zeigen")
     p_show.add_argument("ticker")
