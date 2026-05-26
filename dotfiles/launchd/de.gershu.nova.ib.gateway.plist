@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab IB Gateway LaunchDaemon (system-Kontext, headless).
+
+  Variante ohne Auto-Login: laeuft als system-Daemon, UserName=novaadm,
+  startet ueber scripts/install_daemon.sh. IB Gateway initialisiert seinen
+  API-Server auch ohne grafische Session — die GUI-Komponente bleibt
+  unsichtbar, der Port 4001 / 4002 ist trotzdem erreichbar.
+
+  Caveat: manche IBC-Versionen weigern sich ohne WindowServer komplett.
+  Falls Gateway nicht startet, ist Auto-Login fuer novaadm der saubere
+  Weg (siehe docs/ibc_setup.md).
+
+  Initial-Setup:
+    sudo scripts/install_daemon.sh lab.ib.gateway
+
+  Logs:    /Users/novaadm/Library/Logs/nova-ib-gateway.log
+  Status:  sudo launchctl print system/de.gershu.nova.ib.gateway
+  Stop:    sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.ib.gateway.plist
+  Restart: sudo launchctl kickstart -k system/de.gershu.nova.ib.gateway
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.ib.gateway</string>
+
+    <!-- Daemon laeuft als novaadm — sonst findet IBC weder ~/.nova_env
+         noch den Pfad zur User-spezifischen Gateway-Settings-Datei. -->
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-lc</string>
+        <string>exec /Users/novaadm/nova/scripts/ib_gateway_start.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Mindestens 60s zwischen Restart-Versuchen — verhindert
+         API-Hammering bei kaputter Config oder waehrend IBKR-Wartung. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

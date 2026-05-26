@@ -23,12 +23,14 @@ Ziel-Endpunkt nach erfolgreichem Setup: **IB Gateway auf `127.0.0.1:4001`**
    ```
    Installations­pfad wird in `~/.nova_env` als `NOVA_IBC_PATH` hinterlegt
    (typisch `/opt/homebrew/opt/ibc`).
-4. **Auto-Login für novaadm**. Weil IB Gateway eine GUI-App ist und der
-   LaunchAgent in der User-Sitzung läuft, muss `novaadm` beim Boot
-   automatisch eingeloggt sein:
+4. **(Optional) Auto-Login für novaadm.** IB Gateway ist eine GUI-App und
+   funktioniert *zuverlässiger* mit einer aktiven Aqua-Session. Wir wählen
+   trotzdem den system-LaunchDaemon-Pfad (Variante ohne Auto-Login),
+   weil nova-hub typisch headless betrieben wird. Falls Gateway in dieser
+   Variante nicht stabil startet, ist Auto-Login der Plan B:
    *Systemeinstellungen → Benutzer & Gruppen → Anmelde-Optionen →
-   Automatische Anmeldung: novaadm*. Auf macOS 13+ mit FileVault muss
-   die Auto-Login-Schlüsselablage konfiguriert sein (siehe Apple-Doku).
+   Automatische Anmeldung: novaadm*. Bei aktivem FileVault muss die
+   Schlüsselablage zusätzlich konfiguriert werden.
 
 ## Env-Vars in `~/.nova_env`
 
@@ -54,29 +56,27 @@ export IB_GATEWAY_PORT="4001"
 
 Anschließend: `chmod 600 ~/.nova_env`.
 
-## Installation des LaunchAgents
+## Installation des system-LaunchDaemons
 
-Wichtig: alle drei Befehle als `novaadm` ausführen (nicht via `sudo`, nicht
-als anderer SSH-User), sonst meckert `launchctl` mit „Domain does not
-support specified action".
+Die Plist liegt unter `dotfiles/launchd/de.gershu.nova.ib.gateway.plist` und
+wird via dem gemeinsamen Repo-Installer eingerichtet — analog zu allen
+anderen nova-Daemons.
 
 ```sh
 cd ~/nova
-cp dotfiles/launchagents/de.gershu.nova.ib.gateway.plist ~/Library/LaunchAgents/
-
-# Erst-Bootstrap (lädt + startet) — Domain UND Service-Pfad in einer Zeile.
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/de.gershu.nova.ib.gateway.plist
-launchctl kickstart -k gui/$(id -u)/de.gershu.nova.ib.gateway
+sudo scripts/install_daemon.sh lab.ib.gateway
 ```
 
-Ab jetzt startet Gateway automatisch bei jedem Login von `novaadm` (mit
-Auto-Login: bei jedem Boot).
+Das Script kopiert die Plist nach `/Library/LaunchDaemons/`, läd sie ins
+`system/`-Domain (`launchctl bootstrap`) und startet sie. Der Daemon
+läuft als `UserName=novaadm` (im Plist hart gesetzt), nicht als root —
+so findet IBC `~/.nova_env`, IB-Gateway-Settings und User-Cache.
 
 ## Verifikation
 
 ```sh
-# 1. LaunchAgent läuft?
-launchctl print gui/$(id -u)/de.gershu.nova.ib.gateway | head -20
+# 1. Daemon läuft?
+sudo launchctl print system/de.gershu.nova.ib.gateway | head -20
 
 # 2. Gateway-Prozess sichtbar?
 pgrep -fl "ibgateway"
@@ -85,7 +85,7 @@ pgrep -fl "ibgateway"
 bash ~/nova/scripts/check_ib_gateway.sh --verbose
 
 # 4. Log lesen
-tail -f ~/Library/Logs/nova-ib-gateway.log
+tail -f /Users/novaadm/Library/Logs/nova-ib-gateway.log
 ```
 
 Bei erfolgreichem Start steht im Log u. a. `Login has completed` und der
@@ -97,17 +97,23 @@ cd ~/nova && python -m modules.fundamentals probe-ib
 
 ## Steuerung im Alltag
 
-| Operation         | Befehl                                                          |
-|-------------------|-----------------------------------------------------------------|
-| Status            | `launchctl print gui/$(id -u)/de.gershu.nova.ib.gateway`        |
-| Restart           | `launchctl kickstart -k gui/$(id -u)/de.gershu.nova.ib.gateway` |
-| Stop              | `launchctl bootout  gui/$(id -u)/de.gershu.nova.ib.gateway`     |
-| Re-load nach Edit | `bootout` + `bootstrap` der plist neu                           |
-| Manueller Test    | `bash ~/nova/scripts/ib_gateway_start.sh` (vordergrund)         |
-| Log live          | `tail -f ~/Library/Logs/nova-ib-gateway.log`                    |
+| Operation         | Befehl                                                                                       |
+|-------------------|----------------------------------------------------------------------------------------------|
+| Status            | `sudo launchctl print system/de.gershu.nova.ib.gateway`                                       |
+| Restart           | `sudo launchctl kickstart -k system/de.gershu.nova.ib.gateway`                                |
+| Stop              | `sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.ib.gateway.plist`        |
+| Re-install        | `sudo scripts/install_daemon.sh lab.ib.gateway` (idempotent)                                  |
+| Manueller Test    | als novaadm: `bash ~/nova/scripts/ib_gateway_start.sh` (Vordergrund, blockiert)               |
+| Log live          | `tail -f /Users/novaadm/Library/Logs/nova-ib-gateway.log`                                     |
 
 ## Troubleshooting
 
+- **Gateway startet als system-Daemon nicht (kein WindowServer).** Manche
+  IBC-/Gateway-Versionen weigern sich ohne eine aktive Aqua-Session
+  komplett. Symptom im Log: Gateway-Prozess crasht sofort beim Start,
+  ThrottleInterval-Restart-Loop. Fix: Auto-Login für novaadm aktivieren
+  (siehe Voraussetzungen oben), Plist als LaunchAgent in
+  `~/Library/LaunchAgents/` betreiben statt als system-Daemon.
 - **Port 4001 nicht offen, Gateway-Prozess läuft trotzdem.** Meist
   Login-Probleme: falsche Credentials, 2FA aktiviert (IBC kann 2FA nicht
   bedienen — in der IBKR-Account-Verwaltung „Trusted IP" für nova-hub
@@ -116,15 +122,12 @@ cd ~/nova && python -m modules.fundamentals probe-ib
 - **Tägliche Disconnects gegen Mitternacht ET.** Erwartet — IBKR
   zwingt jeden Tag einen Neulogin. IBC handhabt das via
   `AutoLogoffAction=restart`. Falls Gateway nicht wieder hochkommt,
-  prüfe ob `ThrottleInterval` im LaunchAgent zu lang ist (60 s ok) oder
+  prüfe ob `ThrottleInterval` zu lang ist (60 s ok) oder
   ob IBC einen Dialog nicht erkennt — dann IBC updaten.
 - **„IB Gateway not found at …"** im Wrapper-Log: `NOVA_IB_GATEWAY_PATH`
   und `NOVA_IB_GATEWAY_VER` in `~/.nova_env` müssen zur tatsächlich
   installierten Version passen. Nach einem IBKR-Update der App den
   Versionsstring anpassen.
-- **GUI-Fenster taucht trotzdem auf.** Erwartet, weil Gateway eine GUI-App
-  ist. Wir setzen `MinimizeMainWindow=yes`, das Fenster sollte minimiert
-  im Dock liegen. Maximierung bricht nichts.
 - **2FA-Pflicht.** IBC kann keine 2FA-Tokens. Lösung über IBKRs Optionen
   in *Account Management*:
     - „IB Key" Mobile-Auth ausschalten oder
@@ -138,8 +141,8 @@ cd ~/nova && python -m modules.fundamentals probe-ib
 - Beim Start rendert der Wrapper eine Runtime-Config in
   `/tmp/nova-ibc-runtime.ini` mit `chmod 600`. Sie bleibt liegen, bis der
   nächste Start sie überschreibt — bei Bedarf manuell löschen.
-- LaunchAgent läuft als `novaadm`, nicht als root — Prozess-Berechtigungen
-  sind so eng wie möglich.
+- Der system-Daemon läuft als `novaadm` (via `UserName`-Key im plist),
+  nicht als root — Prozess-Berechtigungen sind so eng wie möglich.
 
 ## Bezug zu anderen Modulen
 
