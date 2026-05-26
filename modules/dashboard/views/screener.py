@@ -19,6 +19,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 
 import pandas as pd
@@ -239,7 +240,7 @@ if selected_run:
                     if st.button(f"Analyse für {sym} anstossen",
                                   key=f"sk_analyze_{ref_id}",
                                   type="primary"):
-                        cmd = ["python", "-m", "modules.screener",
+                        cmd = [sys.executable, "-m", "modules.screener",
                                "analyze", sym, "--run-id", selected_run]
                         if _no_news:
                             cmd.append("--no-news")
@@ -277,7 +278,7 @@ if selected_run:
                         st.markdown(f"**Moat:** {cit['moat_assessment']}")
                     if st.button("Neu analysieren",
                                   key=f"sk_reanalyze_{ref_id}"):
-                        cmd = ["python", "-m", "modules.screener",
+                        cmd = [sys.executable, "-m", "modules.screener",
                                "analyze", sym, "--run-id", selected_run]
                         ok, out = _run_subprocess(
                             cmd, f"Neu-Analyse {sym} …", timeout_s=900)
@@ -401,7 +402,7 @@ with st.expander("⚙️ Parameter tunen + neuen Lauf starten", expanded=False):
                 mode="w", suffix=".json", delete=False) as f:
             json.dump(params, f)
             tmp_path = f.name
-        cmd = ["python", "-m", "modules.screener", "screen",
+        cmd = [sys.executable, "-m", "modules.screener", "screen",
                "--params-file", tmp_path]
         ok, out = _run_subprocess(cmd, "Screen laeuft …", timeout_s=180)
         try:
