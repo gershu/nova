@@ -16,14 +16,14 @@
     sudo scripts/install_daemon.sh lab.ib.gateway
 
   Logs:    /Users/novaadm/Library/Logs/nova-ib-gateway.log
-  Status:  sudo launchctl print system/de.gershu.nova.ib.gateway
-  Stop:    sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.ib.gateway.plist
-  Restart: sudo launchctl kickstart -k system/de.gershu.nova.ib.gateway
+  Status:  sudo launchctl print system/de.gershu.nova.lab.ib.gateway
+  Stop:    sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.lab.ib.gateway.plist
+  Restart: sudo launchctl kickstart -k system/de.gershu.nova.lab.ib.gateway
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>de.gershu.nova.ib.gateway</string>
+    <string>de.gershu.nova.lab.ib.gateway</string>
 
     <!-- Daemon laeuft als novaadm — sonst findet IBC weder ~/.nova_env
          noch den Pfad zur User-spezifischen Gateway-Settings-Datei. -->

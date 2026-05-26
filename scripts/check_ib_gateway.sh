@@ -39,7 +39,7 @@ fi
 # Nicht erreichbar
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "[ib-precheck ${ts}] FEHLER: IB Gateway ${HOST}:${PORT} nicht erreichbar." >&2
-echo "[ib-precheck ${ts}] Pruefe: launchctl print system/de.gershu.nova.ib.gateway" >&2
+echo "[ib-precheck ${ts}] Pruefe: sudo launchctl print system/de.gershu.nova.lab.ib.gateway" >&2
 
 if [[ "${SKIP_IF_NO}" == "0" ]]; then
   echo "[ib-precheck ${ts}] NOVA_SKIP_IF_NO_IB=0 -> ignoriere Failure, weiter." >&2

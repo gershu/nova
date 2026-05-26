@@ -58,7 +58,7 @@ Anschließend: `chmod 600 ~/.nova_env`.
 
 ## Installation des system-LaunchDaemons
 
-Die Plist liegt unter `dotfiles/launchd/de.gershu.nova.ib.gateway.plist` und
+Die Plist liegt unter `dotfiles/launchd/de.gershu.nova.lab.ib.gateway.plist` und
 wird via dem gemeinsamen Repo-Installer eingerichtet — analog zu allen
 anderen nova-Daemons.
 
@@ -76,7 +76,7 @@ so findet IBC `~/.nova_env`, IB-Gateway-Settings und User-Cache.
 
 ```sh
 # 1. Daemon läuft?
-sudo launchctl print system/de.gershu.nova.ib.gateway | head -20
+sudo launchctl print system/de.gershu.nova.lab.ib.gateway | head -20
 
 # 2. Gateway-Prozess sichtbar?
 pgrep -fl "ibgateway"
@@ -99,9 +99,9 @@ cd ~/nova && python -m modules.fundamentals probe-ib
 
 | Operation         | Befehl                                                                                       |
 |-------------------|----------------------------------------------------------------------------------------------|
-| Status            | `sudo launchctl print system/de.gershu.nova.ib.gateway`                                       |
-| Restart           | `sudo launchctl kickstart -k system/de.gershu.nova.ib.gateway`                                |
-| Stop              | `sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.ib.gateway.plist`        |
+| Status            | `sudo launchctl print system/de.gershu.nova.lab.ib.gateway`                                       |
+| Restart           | `sudo launchctl kickstart -k system/de.gershu.nova.lab.ib.gateway`                                |
+| Stop              | `sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.lab.ib.gateway.plist`        |
 | Re-install        | `sudo scripts/install_daemon.sh lab.ib.gateway` (idempotent)                                  |
 | Manueller Test    | als novaadm: `bash ~/nova/scripts/ib_gateway_start.sh` (Vordergrund, blockiert)               |
 | Log live          | `tail -f /Users/novaadm/Library/Logs/nova-ib-gateway.log`                                     |
