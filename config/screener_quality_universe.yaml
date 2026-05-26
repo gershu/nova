@@ -1,0 +1,278 @@
+# nova-lab Screener-Quality-Universum — 100 Qualitäts-Compounder.
+#
+# Auswahl-Prinzip:
+#   - Dominante Marktposition im jeweiligen Segment (oft Marktführer/Duopol).
+#   - Profitabilität bereits etabliert (kein "Wachstum-um-jeden-Preis").
+#   - Verständliches Geschäftsmodell (Stefan-Kompetenzkreis).
+#   - Mix aus Quality-Value (etabliert, defensiv) und Quality-Growth
+#     (säkulares Tailwind, hohe Margen, expandierend).
+#
+# Sektor-Tilt:                       Bewusst ausgespart:
+#   Tech/Semis    34 Namen            - Energie/Öl & Gas (zyklisch, kein Moat)
+#   Healthcare    21                  - Versorger / Utilities
+#   Financials    15                  - REITs (kein Compounder-Profil)
+#   Consumer Disc 10                  - Reine Banken außer JPM (zyklisch)
+#   Consumer Staples 8                - Auto-OEMs, Airlines (zyklisch)
+#   Industrials    8                  - China-Listings (Regulierungs-Risiko)
+#   Comm Services  3                  - Crypto-/Fintech-Spekulationen
+#   Materials      1
+#
+# Pflege:
+#   - Stefan reviewt + ergänzt/streicht. Quartalsweise Sanity-Check empfohlen
+#     (Index-Komitees ändern S&P 500 ~5-10× p.a.).
+#   - Symbol-Format = US-Ticker (yfinance-kompatibel). ADRs sind als
+#     US-Notierung in USD geführt (ASML, TSM, NVO, SAP, ARM…).
+#   - Format kompatibel zu config/universe_sp500.yaml; zusätzlich pro Eintrag
+#     ein 'note'-Feld mit der Auswahl-Begründung (eine Zeile).
+#
+# Init-Flow (nach Review):
+#   1. modules.screener init  → seedet ref_instruments + Watchlist
+#      'quality_universe'.
+#   2. lab.fundamentals (wöchentlich) nimmt sie automatisch in den
+#      Fundamentals-Snapshot.
+#   3. python -m modules.sec_filings backfill-all --watchlist
+#      quality_universe --quarters 20  → GuV-Historie.
+
+universe: quality_universe
+last_updated: '2026-05-26'
+
+symbols:
+  # ===========================================
+  # Technology — Mega-Cap-Plattformen
+  # ===========================================
+  - {symbol: MSFT,  name: 'Microsoft Corporation',         sector: Technology,
+     note: 'Cloud (Azure) + Productivity (M365) + AI (OpenAI/Copilot) — Dreifach-Moat'}
+  - {symbol: AAPL,  name: 'Apple Inc.',                    sector: Technology,
+     note: 'Premium-Hardware + Service-Flywheel; iOS-Ökosystem-Lock-in'}
+  - {symbol: NVDA,  name: 'NVIDIA Corporation',            sector: Technology,
+     note: 'AI/GPU-Marktführer; CUDA-Software-Moat'}
+  - {symbol: GOOGL, name: 'Alphabet Inc. Class A',         sector: 'Communication Services',
+     note: 'Search-Quasi-Monopol + Cloud + YouTube + Waymo-Optionalität'}
+  - {symbol: META,  name: 'Meta Platforms Inc.',           sector: 'Communication Services',
+     note: 'Social-Werbe-Duopol + Reels-Wachstum + Llama/AI-Infra'}
+  - {symbol: AMZN,  name: 'Amazon.com Inc.',               sector: 'Consumer Discretionary',
+     note: 'E-Commerce-Marktführer + AWS-Cloud-Marktführer'}
+  - {symbol: AVGO,  name: 'Broadcom Inc.',                 sector: Technology,
+     note: 'Custom-Silicon für Hyperscaler + VMware-Software'}
+  - {symbol: ORCL,  name: 'Oracle Corporation',            sector: Technology,
+     note: 'DB-Quasi-Monopol; OCI-Cloud-Aufholjagd mit AI-Workloads'}
+
+  # Technology — Enterprise- & Application-Software
+  - {symbol: ADBE,  name: 'Adobe Inc.',                    sector: Technology,
+     note: 'Creative-Cloud-Marktführer + Marketing-Cloud (Experience)'}
+  - {symbol: CRM,   name: 'Salesforce Inc.',               sector: Technology,
+     note: 'CRM-SaaS-Marktführer; AI-Agentforce-Roadmap'}
+  - {symbol: NOW,   name: 'ServiceNow Inc.',               sector: Technology,
+     note: 'IT/HR-Workflow-Plattform; Enterprise-Workflow-Standard'}
+  - {symbol: INTU,  name: 'Intuit Inc.',                   sector: Technology,
+     note: 'QuickBooks + TurboTax-Quasi-Monopol + Credit Karma'}
+  - {symbol: SAP,   name: 'SAP SE (ADR)',                  sector: Technology,
+     note: 'Enterprise-ERP-Marktführer; S/4HANA-Cloud-Migration'}
+  - {symbol: WDAY,  name: 'Workday Inc.',                  sector: Technology,
+     note: 'HCM-SaaS-Marktführer im Enterprise-Segment'}
+  - {symbol: DDOG,  name: 'Datadog Inc.',                  sector: Technology,
+     note: 'Observability/APM-Marktführer (Cloud-native)'}
+  - {symbol: SHOP,  name: 'Shopify Inc.',                  sector: Technology,
+     note: 'E-Commerce-Plattform für SMB; AI-Tooling-Roadmap'}
+  - {symbol: SNPS,  name: 'Synopsys Inc.',                 sector: Technology,
+     note: 'EDA-Duopol mit Cadence; Chip-Design-Standard'}
+  - {symbol: CDNS,  name: 'Cadence Design Systems',        sector: Technology,
+     note: 'EDA-Duopol mit Synopsys; AI-Chip-Design-Profiteur'}
+
+  # Technology — Cybersecurity
+  - {symbol: PANW,  name: 'Palo Alto Networks',            sector: Technology,
+     note: 'Cybersec-Plattform-Konsolidierer (NGFW + SASE + XDR)'}
+  - {symbol: CRWD,  name: 'CrowdStrike Holdings',          sector: Technology,
+     note: 'Endpoint-Cybersec-Marktführer; Falcon-Plattform'}
+  - {symbol: FTNT,  name: 'Fortinet Inc.',                 sector: Technology,
+     note: 'Cyber-Networking-Sec mit eigenem Silicon-ASIC-Kostenvorteil'}
+  - {symbol: ZS,    name: 'Zscaler Inc.',                  sector: Technology,
+     note: 'Zero-Trust Cloud-Security; SASE-First-Architektur'}
+
+  # Technology — Semiconductors & Equipment
+  - {symbol: TSM,   name: 'Taiwan Semiconductor (ADR)',    sector: Technology,
+     note: 'Foundry-Quasi-Monopol für Leading-Edge-Nodes'}
+  - {symbol: ASML,  name: 'ASML Holding',                  sector: Technology,
+     note: 'EUV-Lithografie-Monopol'}
+  - {symbol: AMD,   name: 'Advanced Micro Devices',        sector: Technology,
+     note: 'CPU + GPU-Challenger zu Intel/NVIDIA; MI-Roadmap'}
+  - {symbol: QCOM,  name: 'QUALCOMM Inc.',                 sector: Technology,
+     note: 'Mobile-Modem-Marktführer; Auto/AIoT-Diversifikation'}
+  - {symbol: TXN,   name: 'Texas Instruments',             sector: Technology,
+     note: 'Analog-Semi-Marktführer; Industrial-Cycle-Exponent'}
+  - {symbol: MU,    name: 'Micron Technology',             sector: Technology,
+     note: 'Memory-Oligopol (DRAM/NAND); HBM für AI'}
+  - {symbol: ADI,   name: 'Analog Devices',                sector: Technology,
+     note: 'High-Performance-Analog-Semi'}
+  - {symbol: AMAT,  name: 'Applied Materials',             sector: Technology,
+     note: 'Semi-Equipment-Marktführer (Deposition, Implant)'}
+  - {symbol: KLAC,  name: 'KLA Corporation',               sector: Technology,
+     note: 'Wafer-Inspection-Quasi-Monopol'}
+  - {symbol: LRCX,  name: 'Lam Research',                  sector: Technology,
+     note: 'Etch + Deposition Semi-Equipment'}
+  - {symbol: MRVL,  name: 'Marvell Technology',            sector: Technology,
+     note: 'Data-Center-Networking-Silicon (Optical/DSP)'}
+  - {symbol: ANET,  name: 'Arista Networks',               sector: Technology,
+     note: 'Hyperscaler-Switching-Marktführer; AI-Networking-Profiteur'}
+
+  # ===========================================
+  # Healthcare — Pharma & Biotech
+  # ===========================================
+  - {symbol: LLY,   name: 'Eli Lilly',                     sector: Healthcare,
+     note: 'GLP-1 (Mounjaro/Zepbound) + Onkologie-Pipeline; Innovations-Leader'}
+  - {symbol: NVO,   name: 'Novo Nordisk (ADR)',            sector: Healthcare,
+     note: 'GLP-1-Marktführer (Ozempic/Wegovy); GLP-1-Duopol mit LLY'}
+  - {symbol: UNH,   name: 'UnitedHealth Group',            sector: Healthcare,
+     note: 'US-Healthcare-Insurance #1 + Optum-Services'}
+  - {symbol: JNJ,   name: 'Johnson & Johnson',             sector: Healthcare,
+     note: 'Diversified Pharma + MedTech; Defensive'}
+  - {symbol: ABBV,  name: 'AbbVie Inc.',                   sector: Healthcare,
+     note: 'Immunology (Skyrizi/Rinvoq) + Aesthetics (Botox)'}
+  - {symbol: MRK,   name: 'Merck & Co.',                   sector: Healthcare,
+     note: 'Keytruda-Onkologie-Franchise (Patent-Klippe 2028 Risiko)'}
+  - {symbol: PFE,   name: 'Pfizer Inc.',                   sector: Healthcare,
+     note: 'Diversified Pharma; Post-Covid-Reset-Story'}
+  - {symbol: VRTX,  name: 'Vertex Pharmaceuticals',        sector: Healthcare,
+     note: 'Cystic-Fibrosis-Monopol + Casgevy (Gene-Edit)'}
+  - {symbol: REGN,  name: 'Regeneron Pharmaceuticals',     sector: Healthcare,
+     note: 'Eylea (Augenheilkunde) + Dupixent-Partner mit Sanofi'}
+  - {symbol: AMGN,  name: 'Amgen Inc.',                    sector: Healthcare,
+     note: 'Biotech-Veteran; Repatha + Onkologie'}
+  - {symbol: BMY,   name: 'Bristol-Myers Squibb',          sector: Healthcare,
+     note: 'Onkologie + Cardiovascular; Patent-Klippen-Sorge'}
+  - {symbol: GILD,  name: 'Gilead Sciences',               sector: Healthcare,
+     note: 'HIV-Marktführer + Onkologie-Pipeline'}
+
+  # Healthcare — Devices, Tools, Insurance
+  - {symbol: ISRG,  name: 'Intuitive Surgical',            sector: Healthcare,
+     note: 'da-Vinci-OP-Roboter-Marktführer (>80% Share)'}
+  - {symbol: TMO,   name: 'Thermo Fisher Scientific',      sector: Healthcare,
+     note: 'Life-Sciences-Tools-Marktführer'}
+  - {symbol: DHR,   name: 'Danaher Corp.',                 sector: Healthcare,
+     note: 'Bioprocessing + Diagnostics; Danaher-Business-System'}
+  - {symbol: ABT,   name: 'Abbott Laboratories',           sector: Healthcare,
+     note: 'Diversified MedTech + CGM (FreeStyle Libre)'}
+  - {symbol: ZTS,   name: 'Zoetis Inc.',                   sector: Healthcare,
+     note: 'Animal-Health-Marktführer; säkularer Pet-Trend'}
+  - {symbol: SYK,   name: 'Stryker Corp.',                 sector: Healthcare,
+     note: 'Orthopädie + Mako-Robotik'}
+  - {symbol: MDT,   name: 'Medtronic plc',                 sector: Healthcare,
+     note: 'Diversified MedTech; Cardiovascular + Diabetic'}
+  - {symbol: BSX,   name: 'Boston Scientific',             sector: Healthcare,
+     note: 'Electrophysiology (Pulsed-Field-Ablation) + MedTech'}
+  - {symbol: ELV,   name: 'Elevance Health',               sector: Healthcare,
+     note: 'Health-Insurance #2; Anthem-BlueCross-Lizenz'}
+
+  # ===========================================
+  # Consumer Staples
+  # ===========================================
+  - {symbol: COST,  name: 'Costco Wholesale',              sector: 'Consumer Staples',
+     note: 'Membership-Warehouse-Marktführer; einzigartiges Geschäftsmodell'}
+  - {symbol: WMT,   name: 'Walmart Inc.',                  sector: 'Consumer Staples',
+     note: 'Retail-Mega + E-Commerce-Aufholjagd; Walmart+ Membership'}
+  - {symbol: PG,    name: 'Procter & Gamble',              sector: 'Consumer Staples',
+     note: 'CPG-Branding (Tide, Pampers, Gillette); Pricing-Power'}
+  - {symbol: KO,    name: 'Coca-Cola',                     sector: 'Consumer Staples',
+     note: 'Markenkraft (Buffett-Holding); globale Distribution'}
+  - {symbol: PEP,   name: 'PepsiCo',                       sector: 'Consumer Staples',
+     note: 'Snacks (Frito-Lay) + Beverages-Diversifikation'}
+  - {symbol: MDLZ,  name: 'Mondelez International',        sector: 'Consumer Staples',
+     note: 'Snacks (Oreo, Cadbury); Schwellenmarkt-Expansion'}
+  - {symbol: PM,    name: 'Philip Morris International',   sector: 'Consumer Staples',
+     note: 'Tabak + IQOS (Reduced-Risk-Wachstum); kein US-Geschäft'}
+  - {symbol: CL,    name: 'Colgate-Palmolive',             sector: 'Consumer Staples',
+     note: 'Oral-Care-Marktführer global'}
+
+  # ===========================================
+  # Consumer Discretionary
+  # ===========================================
+  - {symbol: HD,    name: 'Home Depot',                    sector: 'Consumer Discretionary',
+     note: 'Home-Improvement #1; Pro-Customer-Wachstum'}
+  - {symbol: LOW,   name: 'Lowe''s Companies',             sector: 'Consumer Discretionary',
+     note: 'Home-Improvement #2; DIY-fokussiert'}
+  - {symbol: TJX,   name: 'TJX Companies',                 sector: 'Consumer Discretionary',
+     note: 'Off-Price-Retail-Marktführer (Marshalls, T.J.Maxx)'}
+  - {symbol: ROST,  name: 'Ross Stores',                   sector: 'Consumer Discretionary',
+     note: 'Off-Price-Retail; gleiches Modell wie TJX'}
+  - {symbol: NKE,   name: 'Nike Inc.',                     sector: 'Consumer Discretionary',
+     note: 'Sport-Marke #1; Turn-around nach DTC-Reset'}
+  - {symbol: MCD,   name: 'McDonalds',                     sector: 'Consumer Discretionary',
+     note: 'Franchise-Quick-Service-Marktführer'}
+  - {symbol: SBUX,  name: 'Starbucks',                     sector: 'Consumer Discretionary',
+     note: 'Premium-Coffee-Marke; Turn-around unter Niccol'}
+  - {symbol: CMG,   name: 'Chipotle Mexican Grill',        sector: 'Consumer Discretionary',
+     note: 'Fast-Casual-Marktführer; Throughput-Story'}
+  - {symbol: BKNG,  name: 'Booking Holdings',              sector: 'Consumer Discretionary',
+     note: 'Online-Travel-Marktführer (Booking.com, Priceline, Kayak)'}
+  - {symbol: ORLY,  name: 'O''Reilly Automotive',          sector: 'Consumer Discretionary',
+     note: 'Auto-Parts-Retailer; DIY + DIFM'}
+
+  # ===========================================
+  # Communication Services (non-Tech)
+  # ===========================================
+  - {symbol: NFLX,  name: 'Netflix Inc.',                  sector: 'Communication Services',
+     note: 'Streaming-Marktführer; Profitabilitäts-Inflection'}
+  - {symbol: DIS,   name: 'Walt Disney Co.',               sector: 'Communication Services',
+     note: 'IP-Library + Themepark + Streaming (Hulu/Disney+)'}
+  - {symbol: TMUS,  name: 'T-Mobile US',                   sector: 'Communication Services',
+     note: 'Mobile-Carrier mit Wachstum + Free-Cash-Flow-Story'}
+
+  # ===========================================
+  # Financials
+  # ===========================================
+  - {symbol: V,     name: 'Visa Inc.',                     sector: Financials,
+     note: 'Payments-Duopol; globales Schienensystem'}
+  - {symbol: MA,    name: 'Mastercard Inc.',               sector: Financials,
+     note: 'Payments-Duopol mit Visa'}
+  - {symbol: JPM,   name: 'JPMorgan Chase',                sector: Financials,
+     note: 'US-Bank-Marktführer (Dimon); Universal Banking'}
+  - {symbol: 'BRK.B', name: 'Berkshire Hathaway Class B',  sector: Financials,
+     note: 'Buffett-Konglomerat + Versicherungs-Float + Apple-Stake'}
+  - {symbol: BLK,   name: 'BlackRock Inc.',                sector: Financials,
+     note: 'Asset-Management-Marktführer; iShares-ETF-Franchise'}
+  - {symbol: SPGI,  name: 'S&P Global',                    sector: Financials,
+     note: 'Index/Ratings-Duopol (S&P 500 IP)'}
+  - {symbol: MCO,   name: 'Moody''s Corp.',                sector: Financials,
+     note: 'Ratings-Duopol mit S&P Global'}
+  - {symbol: ICE,   name: 'Intercontinental Exchange',     sector: Financials,
+     note: 'Exchange + Mortgage-Tech; NYSE-Eigentümer'}
+  - {symbol: CME,   name: 'CME Group',                     sector: Financials,
+     note: 'Futures-Exchange-Quasi-Monopol US (Zins, Commodities)'}
+  - {symbol: MSCI,  name: 'MSCI Inc.',                     sector: Financials,
+     note: 'Index-Provider (EM, ACWI); ESG-Datenfranchise'}
+  - {symbol: BX,    name: 'Blackstone Inc.',               sector: Financials,
+     note: 'Alternative-Asset-Marktführer (PE, Real Estate, Credit)'}
+  - {symbol: KKR,   name: 'KKR & Co.',                     sector: Financials,
+     note: 'Alt-Assets #2 hinter Blackstone'}
+  - {symbol: PGR,   name: 'Progressive Corp.',             sector: Financials,
+     note: 'Auto-Insurance-Marktführer; Telematik-Datenvorteil'}
+  - {symbol: MMC,   name: 'Marsh & McLennan',              sector: Financials,
+     note: 'Insurance-Brokerage #1 (Marsh, Mercer, Oliver Wyman)'}
+  - {symbol: AON,   name: 'Aon plc',                       sector: Financials,
+     note: 'Insurance-Brokerage #2 hinter Marsh'}
+
+  # ===========================================
+  # Industrials
+  # ===========================================
+  - {symbol: RTX,   name: 'RTX Corp.',                     sector: Industrials,
+     note: 'Defense + Aerospace (Pratt & Whitney, Raytheon)'}
+  - {symbol: HON,   name: 'Honeywell International',       sector: Industrials,
+     note: 'Industrial-Konglomerat (Aero, Materials, Building Tech)'}
+  - {symbol: CAT,   name: 'Caterpillar Inc.',              sector: Industrials,
+     note: 'Bauwirtschaft + Bergbau-Equipment'}
+  - {symbol: DE,    name: 'Deere & Co.',                   sector: Industrials,
+     note: 'Landtech-Marktführer; Precision-Ag-Tech'}
+  - {symbol: UNP,   name: 'Union Pacific',                 sector: Industrials,
+     note: 'Schienen-Duopol West-USA mit BNSF'}
+  - {symbol: ETN,   name: 'Eaton Corp.',                   sector: Industrials,
+     note: 'Electrification-Bauer; Data-Center-Power-Profiteur'}
+  - {symbol: VRT,   name: 'Vertiv Holdings',               sector: Industrials,
+     note: 'Data-Center-Cooling + Power; AI-Build-out-Profiteur'}
+  - {symbol: WM,    name: 'Waste Management',              sector: Industrials,
+     note: 'Müllentsorgung-Compounder; quasi-monopolistische Routen'}
+
+  # ===========================================
+  # Materials
+  # ===========================================
+  - {symbol: LIN,   name: 'Linde plc',                     sector: 'Basic Materials',
+     note: 'Industrial-Gases-Quasi-Monopol; Wasserstoff-Optionalität'}
