@@ -9,6 +9,9 @@ Subcommands:
         Persistiert nach sig_screen_runs + sig_screen_picks.
     show [--run-id ID] [--limit N]
         Picks eines Runs (default: letzter Run) anzeigen.
+    analyze SYMBOL [--run-id ID] [--model NAME] [--no-news]
+        Stufe 3 (on-demand): laed Pick + 10-K-Texte + News, ruft lokales
+        LLM, persistiert Thesis in sig_screen_thesis. Laufzeit-unkritisch.
 
 Environment:
     LAB_DB_PATH        optional — default ~/nova_data/lab.duckdb
@@ -338,6 +341,217 @@ def cmd_show(args) -> int:
         con.close()
 
 
+# ---------- analyze ----------
+
+def _load_pick(con: duckdb.DuckDBPyConnection,
+                ref_id: str, run_id: str | None) -> tuple[str, dict] | None:
+    """(run_id, pick-row-dict) aus letztem oder gegebenem Run."""
+    if run_id is None:
+        row = con.execute("""
+            SELECT p.run_id FROM sig_screen_picks p
+            JOIN sig_screen_runs r ON r.run_id = p.run_id
+            WHERE p.ref_instrument_id = ?
+            ORDER BY r.ts DESC LIMIT 1
+        """, [ref_id]).fetchone()
+        if not row:
+            return None
+        run_id = row[0]
+    pick = con.execute("""
+        SELECT * FROM sig_screen_picks
+        WHERE run_id = ? AND ref_instrument_id = ?
+    """, [run_id, ref_id]).df()
+    if pick.empty:
+        return None
+    return run_id, pick.iloc[0].to_dict()
+
+
+def _latest_10k_acc(con: duckdb.DuckDBPyConnection,
+                     ref_id: str) -> tuple[str, str] | None:
+    """(accession_no, period_end) des juengsten 10-K. Fallback auf 10-Q."""
+    for form in ("10-K", "10-Q"):
+        row = con.execute("""
+            SELECT accession_no, period_end FROM ref_income_statement
+            WHERE ref_instrument_id = ? AND form_type = ?
+              AND accession_no IS NOT NULL
+            ORDER BY period_end DESC LIMIT 1
+        """, [ref_id, form]).fetchone()
+        if row and row[0]:
+            return (row[0], str(row[1])[:10])
+    return None
+
+
+def _recent_news(con: duckdb.DuckDBPyConnection,
+                  ref_id: str, n: int = 12) -> list[dict]:
+    df = con.execute("""
+        SELECT a.ts, a.title, a.summary, a.url
+        FROM ref_sa_article_symbols s
+        JOIN ref_sa_articles a USING (article_id)
+        WHERE s.ref_instrument_id = ?
+        ORDER BY a.ts DESC LIMIT ?
+    """, [ref_id, n]).df()
+    if df.empty:
+        return []
+    df["ts"] = df["ts"].astype(str)
+    return df.to_dict(orient="records")
+
+
+def cmd_analyze(args) -> int:
+    """Stufe-3-LLM-Bewertung fuer ein Symbol (on-demand)."""
+    # Lazy-Import: extractor + analyzer haben requests/llm-Dependencies.
+    from modules.sec_filings.extractor import (
+        find_filing_url, fetch_section,
+    )
+    from modules.sec_filings.client import SecApiError
+    from .analyzer import (
+        AnalyzerInput, build_prompt, call_llm, parse_response,
+        SYSTEM_PROMPT,
+    )
+
+    # Symbol auf ref_instrument_id mappen.
+    con_ro = duckdb.connect(str(DB_PATH), read_only=True)
+    try:
+        row = con_ro.execute(
+            "SELECT ref_instrument_id, symbol, name FROM ref_instruments "
+            "WHERE upper(symbol) = upper(?) LIMIT 1", [args.symbol],
+        ).fetchone()
+    finally:
+        con_ro.close()
+    if not row:
+        print(f"FEHLER: '{args.symbol}' nicht in ref_instruments.",
+              file=sys.stderr)
+        return 64
+    ref_id, symbol, name = row
+
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        apply_schema(con)
+
+        # 1. Pick aus Screener-Run laden.
+        loaded = _load_pick(con, ref_id, args.run_id)
+        if not loaded:
+            print(f"FEHLER: kein Screener-Pick fuer {symbol} gefunden. "
+                  "Erst 'screen' laufen lassen.", file=sys.stderr)
+            return 64
+        run_id, pick = loaded
+        print(f"==> analyze {symbol} (ref={ref_id})  run={run_id}")
+
+        # 2. Texte aus dem juengsten 10-K (Fallback 10-Q).
+        business = risk = mda = ""
+        filing_form, filing_period = None, None
+        acc = _latest_10k_acc(con, ref_id)
+        if acc:
+            acc_no, filing_period = acc
+            filing_form = "10-K" if con.execute(
+                "SELECT form_type FROM ref_income_statement "
+                "WHERE accession_no=?", [acc_no]).fetchone()[0] == "10-K" \
+                else "10-Q"
+            print(f"    Filing: {filing_form} per {filing_period} "
+                  f"(acc={acc_no})")
+            try:
+                filing_url = find_filing_url(acc_no)
+                if filing_url:
+                    print(f"    Extractor-URL: {filing_url}")
+                    # 10-K: Item 1/1A/7 ; 10-Q: part1item2 fuer MD&A.
+                    if filing_form == "10-K":
+                        business = fetch_section(filing_url, "1")
+                        risk     = fetch_section(filing_url, "1A")
+                        mda      = fetch_section(filing_url, "7")
+                    else:
+                        mda      = fetch_section(filing_url, "part1item2")
+                    print(f"    Texte:  Item1={len(business)}c  "
+                          f"Item1A={len(risk)}c  MD&A={len(mda)}c")
+                else:
+                    print("    WARN: keine Filing-URL gefunden.")
+            except SecApiError as e:
+                print(f"    WARN: Extractor-Fehler: {e}", file=sys.stderr)
+        else:
+            print("    WARN: kein 10-K/10-Q hinterlegt — Texte werden "
+                  "uebersprungen.")
+
+        # 3. News.
+        news = [] if args.no_news else _recent_news(con, ref_id)
+        print(f"    News: {len(news)} Items")
+
+        # 4. Prompt bauen.
+        metrics = json.loads(pick["metrics_json"]) if pick.get(
+            "metrics_json") else {}
+        crit_detail = json.loads(pick["criteria_detail_json"]) if pick.get(
+            "criteria_detail_json") else []
+        trends = json.loads(pick["trend_flags_json"]) if pick.get(
+            "trend_flags_json") else {}
+
+        inp = AnalyzerInput(
+            symbol=symbol, name=name, sector=pick.get("sector"),
+            market_cap=pick.get("market_cap"),
+            metrics=metrics, criteria_detail=crit_detail, trends=trends,
+            axis_scores={
+                "quality_score":   pick.get("quality_score"),
+                "growth_score":    pick.get("growth_score"),
+                "value_score":     pick.get("value_score"),
+                "composite_score": pick.get("composite_score"),
+            },
+            business_text=business, risk_text=risk, mda_text=mda,
+            news_items=news, filing_form=filing_form,
+            filing_period=filing_period,
+        )
+        prompt = build_prompt(inp)
+        print(f"    Prompt:  {len(prompt):,} chars")
+
+        # 5. LLM-Call.
+        print(f"    LLM-Call (Modell: {args.model or 'default'}) ...")
+        try:
+            resp = call_llm(prompt, system=SYSTEM_PROMPT, model=args.model)
+        except Exception as e:  # noqa: BLE001
+            print(f"FEHLER: LLM-Call: {e}", file=sys.stderr)
+            return 65
+        print(f"    LLM done in {resp.duration_s:.1f}s "
+              f"({resp.eval_count} tok, {resp.tps:.1f} tok/s)")
+
+        # 6. Parsen + persistieren.
+        parsed = parse_response(resp.text)
+        if "_parse_error" in parsed:
+            print(f"    WARN: parse-error: {parsed['_parse_error']}",
+                  file=sys.stderr)
+        ts = datetime.now(timezone.utc).replace(tzinfo=None)
+        con.execute("""
+            INSERT INTO sig_screen_thesis
+              (run_id, ref_instrument_id, ts, llm_model, verdict,
+               growth_score_llm, value_score_llm, conviction_score,
+               thesis_text, risks_json, citations_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [run_id, ref_id, ts, resp.model,
+              parsed.get("verdict"),
+              parsed.get("growth_score_llm"),
+              parsed.get("value_score_llm"),
+              parsed.get("conviction_score"),
+              parsed.get("thesis_text"),
+              json.dumps(parsed.get("risks", []), default=str),
+              json.dumps({"classification": parsed.get("classification"),
+                          "moat_assessment": parsed.get("moat_assessment"),
+                          "warnings": parsed.get("_warn", [])},
+                         default=str)])
+
+        # 7. Kurz-Anzeige.
+        print()
+        print(f"==> Verdikt: {parsed.get('verdict', '?')}  "
+              f"Conviction: {parsed.get('conviction_score', '?')}  "
+              f"Klasse: {parsed.get('classification', '?')}")
+        print(f"    Growth-Score: {parsed.get('growth_score_llm', '?')}  "
+              f"Value-Score: {parsed.get('value_score_llm', '?')}")
+        if parsed.get("thesis_text"):
+            print(f"\n    Thesis: {parsed['thesis_text']}")
+        if parsed.get("risks"):
+            print(f"\n    Risiken:")
+            for r in parsed["risks"]:
+                print(f"      - {r.get('risk', '?')}  "
+                      f"[{r.get('citation', '?')}]")
+        if parsed.get("moat_assessment"):
+            print(f"\n    Moat: {parsed['moat_assessment']}")
+        return 0
+    finally:
+        con.close()
+
+
 # ---------- main ----------
 
 def main() -> int:
@@ -361,13 +575,28 @@ def main() -> int:
         help="Spezifischer Run (default: juengster)")
     p_show.add_argument("--limit", type=int, default=30)
 
+    p_an = sub.add_parser("analyze",
+        help="Stufe 3 (on-demand): LLM-Bewertung mit 10-K-Auszuegen")
+    p_an.add_argument("symbol")
+    p_an.add_argument("--run-id", default=None,
+        help="Spezifischer Run (default: juengster mit Pick)")
+    p_an.add_argument("--model", default=None,
+        help="Ollama-Modell (default: ENV LLM_DEFAULT_MODEL bzw. qwen2.5:14b)")
+    p_an.add_argument("--no-news", action="store_true",
+        help="News-Block weglassen (kuerzerer Prompt)")
+
     args = p.parse_args()
     if args.cmd != "init" and not DB_PATH.is_file():
         print(f"FEHLER: DB nicht gefunden: {DB_PATH}. 'init' zuerst.",
               file=sys.stderr)
         return 64
 
-    dispatch = {"init": cmd_init, "screen": cmd_screen, "show": cmd_show}
+    dispatch = {
+        "init":    cmd_init,
+        "screen":  cmd_screen,
+        "show":    cmd_show,
+        "analyze": cmd_analyze,
+    }
     return dispatch[args.cmd](args)
 
 
