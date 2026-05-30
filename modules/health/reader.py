@@ -87,7 +87,9 @@ def _age_hours(ts) -> float | None:
         ts = datetime(ts.year, ts.month, ts.day)
     elif isinstance(ts, datetime) and ts.tzinfo is not None:
         ts = ts.replace(tzinfo=None)
-    return (_now() - ts).total_seconds() / 3600.0
+    # Negative Alter (Zeit in der Zukunft) auf 0 klemmen — passiert bei
+    # Timezone-Restungenauigkeit zwischen UTC und Local-Naive-Stempeln.
+    return max(0.0, (_now() - ts).total_seconds() / 3600.0)
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:

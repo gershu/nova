@@ -33,7 +33,7 @@ daemons:
     title: Portfolio Ingest (IB)
     group: market_data
     schedule: "Daily 22:30 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     audit_table: audit_ingest_runs
     status_column: status
     metric_column: rows_inserted
@@ -42,7 +42,7 @@ daemons:
     title: FX-Kurse
     group: market_data
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: mkt_fx_daily
     timestamp_column: ts
 
@@ -50,7 +50,7 @@ daemons:
     title: FRED Economic Series
     group: market_data
     schedule: "Daily 22:30 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     audit_table: audit_fred_ingest_runs
     status_column: status
     metric_column: rows_inserted
@@ -87,7 +87,7 @@ daemons:
     title: Markt-Monitor (Regime)
     group: market_signals
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_market_setups
     timestamp_column: ts
 
@@ -95,7 +95,7 @@ daemons:
     title: Portfolio-Monitor (Alerts)
     group: market_signals
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_alerts
     timestamp_column: ts
 
@@ -103,7 +103,7 @@ daemons:
     title: Setup-Detection
     group: market_signals
     schedule: "Daily 23:00 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_market_setups
     timestamp_column: ts
 
@@ -111,7 +111,7 @@ daemons:
     title: Allokations-Drift
     group: market_signals
     schedule: "Daily 23:10 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_allocation
     timestamp_column: ts
 
@@ -119,7 +119,7 @@ daemons:
     title: CSP-Screener
     group: market_signals
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     # Output liegt in Watchlist-Members (kein eigener sig-Table) ->
     # Fallback auf Log-Mtime, wenn vorhanden.
     log_path: /Users/novaadm/Library/Logs/nova-lab-screener_csp.log
@@ -139,7 +139,7 @@ daemons:
     title: LLM Recommendations
     group: llm
     schedule: "Daily 23:15 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_recommendations
     timestamp_column: ts
 
@@ -147,7 +147,7 @@ daemons:
     title: LLM Alert-Explainer
     group: llm
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_alert_explanations
     timestamp_column: ts
 
@@ -155,7 +155,7 @@ daemons:
     title: Portfolio-Briefing
     group: llm
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_portfolio_briefings
     timestamp_column: ts
 
@@ -166,7 +166,7 @@ daemons:
     title: Daily Digest
     group: publishing
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     # Output ist Markdown in Obsidian-Vault — Log-Mtime als Proxy.
     log_path: /Users/novaadm/Library/Logs/nova-lab-digest.log
 
@@ -174,7 +174,7 @@ daemons:
     title: Obsidian-Publisher
     group: publishing
     schedule: "Daily"
-    stale_after_hours: 26
+    stale_after_hours: 30
     log_path: /Users/novaadm/Library/Logs/nova-lab-obsidian.log
 
   # ===========================================
@@ -191,14 +191,15 @@ daemons:
     title: IB Gateway (via IBC)
     group: long_running
     schedule: "Permanent"
-    process_check: "ibgateway"
+    # KEIN process_check — Gateway laeuft als 'java'-Prozess, port lauscht
+    # ist die belastbare Aussage.
     port_check: 4001
 
   - label: ollama
     title: Ollama (LLM-Server)
     group: long_running
     schedule: "Permanent"
-    process_check: "ollama"
+    # Port-only — process kann je nach Wrapper anders heissen
     port_check: 11434
 
   - label: caffeinate
@@ -214,6 +215,6 @@ daemons:
     title: Health-Check (self)
     group: meta
     schedule: "Daily 06:00 UTC"
-    stale_after_hours: 26
+    stale_after_hours: 30
     primary_table: sig_health_snapshots
     timestamp_column: ts
