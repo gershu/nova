@@ -198,10 +198,13 @@ def _ts_col_exists(con, table, col):
 
 
 def _guess_log_path(label: str) -> str | None:
-    """Konvention: /Users/novaadm/Library/Logs/nova-<label-dotted-by-dash>.log."""
-    candidate = pathlib.Path(
-        f"/Users/novaadm/Library/Logs/nova-{label.replace('.', '-')}.log")
-    return str(candidate)
+    """Konvention: /Users/novaadm/Library/Logs/nova-<label>.log
+
+    Beide Punkte UND Underscores werden zu Bindestrichen (LaunchDaemon-
+    Wrapper-Konvention auf nova-hub).
+    """
+    name = label.replace(".", "-").replace("_", "-")
+    return f"/Users/novaadm/Library/Logs/nova-{name}.log"
 
 
 def cmd_run(args) -> int:

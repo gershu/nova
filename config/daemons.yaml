@@ -121,8 +121,8 @@ daemons:
     schedule: "Daily"
     stale_after_hours: 30
     # Output liegt in Watchlist-Members (kein eigener sig-Table) ->
-    # Fallback auf Log-Mtime, wenn vorhanden.
-    log_path: /Users/novaadm/Library/Logs/nova-lab-screener_csp.log
+    # Fallback auf Log-Mtime.
+    log_path: /Users/novaadm/Library/Logs/nova-lab-screener-csp.log
 
   - label: lab.screener_value
     title: Value-Screener
@@ -177,6 +177,13 @@ daemons:
     stale_after_hours: 30
     log_path: /Users/novaadm/Library/Logs/nova-lab-obsidian.log
 
+  - label: obsidian.pull
+    title: Obsidian-Pull (stefan_mac)
+    group: publishing
+    schedule: "Daily"
+    stale_after_hours: 30
+    log_path: /Users/novaadm/Library/Logs/nova-obsidian-pull.log
+
   # ===========================================
   # long_running
   # ===========================================
@@ -202,11 +209,8 @@ daemons:
     # Port-only — process kann je nach Wrapper anders heissen
     port_check: 11434
 
-  - label: caffeinate
-    title: Caffeinate (no-sleep)
-    group: long_running
-    schedule: "Permanent"
-    process_check: "caffeinate"
+  # caffeinate hier bewusst weggelassen — Mac mini geht eh nicht
+  # in Standby. Falls jemals doch noetig, einfach Eintrag anlegen.
 
   # ===========================================
   # meta
