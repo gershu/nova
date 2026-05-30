@@ -177,12 +177,10 @@ daemons:
     stale_after_hours: 30
     log_path: /Users/novaadm/Library/Logs/nova-lab-obsidian.log
 
-  - label: obsidian.pull
-    title: Obsidian-Pull (stefan_mac)
-    group: publishing
-    schedule: "Daily"
-    stale_after_hours: 30
-    log_path: /Users/novaadm/Library/Logs/nova-obsidian-pull.log
+  # obsidian.pull bewusst nicht hier — laeuft als stefan_mac-User-Agent,
+  # Log liegt in /Users/stefan_mac/Library/Logs/, novaadm hat dort keinen
+  # Lesezugriff. Cross-User-Check waere ein eigenes Feature (launchctl
+  # print shellen, oder spezifischer Read-Permission auf das eine Log).
 
   # ===========================================
   # long_running

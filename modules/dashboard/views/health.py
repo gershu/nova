@@ -114,17 +114,21 @@ for grp in df_all["group"].drop_duplicates().tolist():
     st.subheader(group_titles.get(grp, grp.replace("_", " ").title()))
 
     display = grp_df[["title", "schedule", "overall",
-                       "last_run_ts", "age_hours", "metric"]].copy()
+                       "last_run_ts", "age_hours",
+                       "metric", "detail"]].copy()
     display["overall"]    = display["overall"].map(_GLYPH)
     display["last_run_ts"] = display["last_run_ts"].map(_fmt_ts)
     display["age_hours"]   = display["age_hours"].map(_fmt_age)
+    # metric (Erfolgs-Output) bevorzugt, sonst detail (Fehler-/Hinweis-Text).
+    display["Metric / Hinweis"] = display["metric"].fillna("") \
+        .where(display["metric"].notna(), display["detail"].fillna(""))
+    display = display.drop(columns=["metric", "detail"])
     display.rename(columns={
         "title":       "Daemon",
         "schedule":    "Schedule",
         "overall":     "Status",
         "last_run_ts": "Letzter Lauf",
         "age_hours":   "Alter",
-        "metric":      "Metric / Hinweis",
     }, inplace=True)
 
     # Selection für Detail
