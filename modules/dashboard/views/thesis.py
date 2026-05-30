@@ -559,11 +559,70 @@ with t_guv:
                            f"`python -m modules.sec_filings backfill "
                            f"{symbol} --quarters 20`.")
 
+            # ===================================================
+            # Margen-Trend — Ergebnisqualitaet ueber die Perioden
+            # ===================================================
+            _mt = (_hist_is[_hist_is["_ptype"] == _ptype_sel]
+                   .sort_values("period_end").copy())
+            if len(_mt) >= 2:
+                _rev_s = _mt["revenue"].astype(float)
+
+                def _mg(col):
+                    s = _mt[col].astype(float) / _rev_s * 100.0
+                    s[_rev_s <= 0] = float("nan")
+                    return s
+
+                _ptx_s = _mt["pretax_income"].astype(float)
+                _eff_tax = _mt["tax_expense"].astype(float) / _ptx_s * 100.0
+                _eff_tax[_ptx_s <= 0] = float("nan")
+
+                st.markdown("##### Margen-Trend")
+                _figm = go.Figure()
+                for _name, _ser, _col in [
+                    ("Bruttomarge",     _mg("gross_profit"),     "#0F6E56"),
+                    ("Operative Marge", _mg("operating_income"), "#1D9E75"),
+                    ("Nettomarge",      _mg("net_income"),       "#5DCAA5"),
+                    ("F&E-Quote",       _mg("rd_expense"),       "#A32D2D"),
+                    ("Steuerquote",     _eff_tax,                "#B4862B"),
+                ]:
+                    _figm.add_trace(go.Scatter(
+                        x=_mt["period_end"], y=_ser, name=_name,
+                        mode="lines+markers",
+                        line=dict(color=_col, width=2), connectgaps=False,
+                        hovertemplate=(f"%{{x|%Y-%m-%d}}<br>{_name}: "
+                                       "%{y:.1f}%<extra></extra>"),
+                    ))
+                _figm.update_layout(
+                    height=320, margin=dict(l=10, r=10, t=10, b=10),
+                    legend=dict(orientation="h", y=-0.2),
+                    yaxis_title="%", hovermode="x unified")
+                st.plotly_chart(_figm, use_container_width=True)
+                st.caption("Margen = Anteil am Umsatz; Steuerquote = "
+                           "Steuern / Vorsteuerergebnis (effektiv). "
+                           "Stabile bzw. steigende Margen = hoehere "
+                           "Ergebnisqualitaet.")
+
             st.divider()
 
             # ===================================================
-            # Sankey — Struktur der juengsten Periode
+            # Sankey — GuV-Struktur einer waehlbaren Periode
             # ===================================================
+            _per_df = _hist_is.sort_values("period_end")
+            _per_opts = list(_per_df["period_end"])
+
+            def _per_lbl(ts):
+                _row = _per_df[_per_df["period_end"] == ts].iloc[0]
+                return f"{str(ts)[:10]} · {_row['_ptype']}"
+
+            _sel_per = st.selectbox(
+                "Periode (Sankey)", _per_opts,
+                index=len(_per_opts) - 1, format_func=_per_lbl,
+                key=f"guv_sankey_per_{ref_id}")
+            _r = _per_df[_per_df["period_end"] == _sel_per].iloc[0]
+            _seg_curr = (
+                _seg_hist[_seg_hist["period_end"] == _sel_per]
+                if not _seg_hist.empty else pd.DataFrame())
+
             st.markdown(
                 f"##### GuV-Struktur — {str(_r['period_end'])[:10]}")
             _seg_rows: list[tuple[str, float]] = []
