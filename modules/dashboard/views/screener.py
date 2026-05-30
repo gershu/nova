@@ -176,117 +176,17 @@ if selected_run:
             },
         )
 
-        # --- Detail-Panel auf Zeilen-Auswahl ---
+        # --- Zeilen-Klick: Sprung ins Thesis-Cockpit ---
+        # Hard-Cut-Refactor: kein eigenes Detail-Panel mehr hier, der
+        # vollstaendige per-Name-Blick (Kennzahlen + GuV + Chart + Branche
+        # + Termine + Signale + Screener-Tab mit Kriterien/Thesis) lebt
+        # zentral im Thesis-Cockpit. So vermeiden wir doppelte Pflege.
         _sel = _evt.selection["rows"]
         if _sel:
             _row = picks.iloc[_sel[0]]
-            ref_id = _row["ref_instrument_id"]
-            sym    = _row["symbol"]
-
-            st.divider()
-            st.subheader(f"🔎 {sym} — {_row['name']}")
-
-            t_crit, t_metrics, t_thesis = st.tabs(
-                ["Kriterien", "Metriken", "LLM-Thesis"])
-
-            with t_crit:
-                crits = json.loads(_row["criteria_detail_json"] or "[]")
-                if not crits:
-                    st.caption("Keine Kriterien-Details gespeichert.")
-                else:
-                    df_c = pd.DataFrame([{
-                        "Achse":     c["axis"],
-                        "Kriterium": c["name"],
-                        "Wert": (de_dec(c["value"], 4)
-                                  if c["value"] is not None else "—"),
-                        "Schwelle":  c["threshold"],
-                        "Status":    "✓" if c["passed"] else "✗",
-                    } for c in crits])
-                    st.dataframe(df_c, use_container_width=True,
-                                 hide_index=True)
-                trends = json.loads(_row["trend_flags_json"] or "{}")
-                if trends:
-                    st.markdown("**Trends (Stufe 2)**")
-                    st.write({k: v for k, v in trends.items()
-                              if isinstance(v, bool)})
-
-            with t_metrics:
-                metrics = json.loads(_row["metrics_json"] or "{}")
-                if metrics:
-                    df_m = pd.DataFrame([
-                        {"Metric": k, "Wert": v}
-                        for k, v in metrics.items()
-                    ])
-                    st.dataframe(df_m, use_container_width=True,
-                                 hide_index=True)
-
-            with t_thesis:
-                thesis_row = run_query("""
-                    SELECT ts, llm_model, verdict, growth_score_llm,
-                           value_score_llm, conviction_score,
-                           thesis_text, risks_json, citations_json
-                    FROM sig_screen_thesis
-                    WHERE run_id = ? AND ref_instrument_id = ?
-                    ORDER BY ts DESC LIMIT 1
-                """, (selected_run, ref_id))
-
-                if thesis_row.empty:
-                    st.info("Noch keine LLM-Thesis fuer diesen Pick. "
-                            "Klick unten, um sie zu erstellen — Laufzeit "
-                            "1–3 Minuten (Sec-API + lokales LLM).")
-                    _no_news = st.checkbox(
-                        "News-Block weglassen (schneller)",
-                        value=False, key=f"sk_nonews_{ref_id}")
-                    if st.button(f"Analyse für {sym} anstossen",
-                                  key=f"sk_analyze_{ref_id}",
-                                  type="primary"):
-                        cmd = [sys.executable, "-m", "modules.screener",
-                               "analyze", sym, "--run-id", selected_run]
-                        if _no_news:
-                            cmd.append("--no-news")
-                        ok, out = _run_subprocess(
-                            cmd, f"LLM analysiert {sym} …", timeout_s=900)
-                        st.code(out[-3000:] or "(kein Output)",
-                                language="text")
-                        if ok:
-                            st.success("Thesis erstellt.")
-                            st.cache_data.clear()
-                            st.rerun()
-                        else:
-                            st.error("Analyse fehlgeschlagen — Log siehe oben.")
-                else:
-                    t = thesis_row.iloc[0]
-                    st.caption(f"{t['ts']} · {t['llm_model']}")
-                    v1, v2, v3 = st.columns(3)
-                    v1.metric("Verdikt", t["verdict"] or "—")
-                    v2.metric("Conviction",
-                              f"{t['conviction_score']:.0f}"
-                              if pd.notna(t['conviction_score']) else "—")
-                    cit = json.loads(t["citations_json"] or "{}")
-                    v3.metric("Klassifikation",
-                              cit.get("classification") or "—")
-                    if t["thesis_text"]:
-                        st.markdown(f"**Thesis:** {t['thesis_text']}")
-                    risks = json.loads(t["risks_json"] or "[]")
-                    if risks:
-                        st.markdown("**Risiken:**")
-                        for r in risks:
-                            st.markdown(
-                                f"- {r.get('risk', '?')}  "
-                                f"_({r.get('citation', '?')})_")
-                    if cit.get("moat_assessment"):
-                        st.markdown(f"**Moat:** {cit['moat_assessment']}")
-                    if st.button("Neu analysieren",
-                                  key=f"sk_reanalyze_{ref_id}"):
-                        cmd = [sys.executable, "-m", "modules.screener",
-                               "analyze", sym, "--run-id", selected_run]
-                        ok, out = _run_subprocess(
-                            cmd, f"Neu-Analyse {sym} …", timeout_s=900)
-                        st.code(out[-3000:] or "(kein Output)",
-                                language="text")
-                        if ok:
-                            st.cache_data.clear()
-                            st.rerun()
+            st.session_state["thesis_instrument"] = _row["ref_instrument_id"]
+            st.session_state["thesis_universe"]   = "Alle (Fundamentaldaten)"
+            st.switch_page("views/thesis.py")
 
 
 # ---------- 3. Parameter-Tuning + Run starten ----------

@@ -134,6 +134,7 @@ uni_choice = st.radio(
     "Universum",
     ["Portfolio", *_WATCHLISTS.keys(), "Alle (Fundamentaldaten)"],
     horizontal=True,
+    key="thesis_universe",
 )
 
 if uni_choice == "Portfolio":
@@ -273,9 +274,9 @@ a5.metric("Kurs (1 Jahr)",
 
 # ---------- Tabs ----------
 
-t_kpi, t_growth, t_guv, t_chart, t_peers, t_news, t_sig = st.tabs(
+t_kpi, t_growth, t_guv, t_chart, t_peers, t_news, t_sig, t_screen = st.tabs(
     ["Kennzahlen", "Wachstum & Momentum", "Umsatz & GuV", "Chart",
-     "Branche & Dominanz", "Termine & News", "Signale"])
+     "Branche & Dominanz", "Termine & News", "Signale", "Screener"])
 
 
 def _metric_table(group: list[tuple[str, str, str]],
@@ -786,3 +787,9 @@ with t_sig:
                     "threshold":     "Schwelle",
                 },
             )
+
+
+# --- Screener ---
+with t_screen:
+    from modules.dashboard.views import _screener_detail
+    _screener_detail.render(ref_id, symbol)
