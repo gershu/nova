@@ -30,6 +30,13 @@ set -euo pipefail
 # PATH defensiv setzen (LaunchAgent-Kontext hat oft kein homebrew).
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 
+# X11-Env-Vars hart entfernen: wenn der User XQuartz installiert hat,
+# exportiert seine Login-Shell DISPLAY auf den XQuartz-Socket. Java sieht
+# das und waehlt den X11-AWT-Toolkit statt des nativen Cocoa-Toolkits;
+# dann scheitert AWT-Init und Java exits mit 1 ohne Stderr. Erzwingen,
+# dass Java die native macOS-GUI nimmt.
+unset DISPLAY XAUTHORITY AWT_TOOLKIT
+
 # ---------- Pflicht-Vars pruefen ----------
 required=(NOVA_IBKR_USERNAME NOVA_IBKR_PASSWORD NOVA_IBKR_MODE
           NOVA_IB_API_PORT NOVA_IBC_PATH NOVA_IB_GATEWAY_PATH
