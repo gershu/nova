@@ -25,10 +25,13 @@
     <key>Label</key>
     <string>de.gershu.nova.lab.ib.gateway</string>
 
-    <!-- Daemon laeuft als novaadm — sonst findet IBC weder ~/.nova_env
-         noch den Pfad zur User-spezifischen Gateway-Settings-Datei. -->
+    <!-- Daemon laeuft als stefan_mac, NICHT novaadm: IB Gateway ist eine
+         GUI-Java-App und initialisiert seinen AWT/Aqua-Stack gegen einen
+         WindowServer. stefan_mac ist auf nova-hub permanent eingeloggt
+         (fuer Obsidian), novaadm hat keine GUI-Session. Bewusste Ausnahme
+         der „alle Daemons unter novaadm"-Konvention. -->
     <key>UserName</key>
-    <string>novaadm</string>
+    <string>stefan_mac</string>
 
     <key>GroupName</key>
     <string>staff</string>
@@ -52,17 +55,17 @@
     <integer>60</integer>
 
     <key>StandardOutPath</key>
-    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+    <string>/Users/stefan_mac/Library/Logs/nova-ib-gateway.log</string>
 
     <key>StandardErrorPath</key>
-    <string>/Users/novaadm/Library/Logs/nova-ib-gateway.log</string>
+    <string>/Users/stefan_mac/Library/Logs/nova-ib-gateway.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
-        <string>/Users/novaadm</string>
+        <string>/Users/stefan_mac</string>
     </dict>
 
     <key>WorkingDirectory</key>
