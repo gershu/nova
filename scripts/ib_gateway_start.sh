@@ -52,14 +52,24 @@ if [[ ! -f "${TEMPLATE}" ]]; then
   exit 65
 fi
 
-GATEWAY_START="${NOVA_IBC_PATH}/scripts/gatewaystart.sh"
-if [[ ! -x "${GATEWAY_START}" ]]; then
-  # Brew installiert IBC oft direkt nach libexec — Alternativpfad versuchen.
-  GATEWAY_START="${NOVA_IBC_PATH}/libexec/scripts/gatewaystart.sh"
-fi
-if [[ ! -x "${GATEWAY_START}" ]]; then
-  echo "[ib-gateway-start] FEHLER: gatewaystart.sh nicht ausfuehrbar unter "\
-       "${NOVA_IBC_PATH}." >&2
+# IBC-Start-Script finden. macOS-Distribution hat:
+#   displaybannerandlaunch.sh — User-Wrapper (mit ASCII-Banner)
+#   ibcstart.sh               — Worker-Script (gleiche Argumente)
+# Reihenfolge: erst Banner-Wrapper bevorzugen, dann den Worker.
+IBC_START=""
+for cand in \
+    "${NOVA_IBC_PATH}/scripts/displaybannerandlaunch.sh" \
+    "${NOVA_IBC_PATH}/scripts/ibcstart.sh" \
+    "${NOVA_IBC_PATH}/libexec/scripts/displaybannerandlaunch.sh" \
+    "${NOVA_IBC_PATH}/libexec/scripts/ibcstart.sh"; do
+  if [[ -x "$cand" ]]; then
+    IBC_START="$cand"
+    break
+  fi
+done
+if [[ -z "${IBC_START}" ]]; then
+  echo "[ib-gateway-start] FEHLER: weder displaybannerandlaunch.sh noch" \
+       "ibcstart.sh ausfuehrbar unter ${NOVA_IBC_PATH}/scripts/." >&2
   exit 65
 fi
 
@@ -77,24 +87,25 @@ envsubst '${NOVA_IBKR_USERNAME} ${NOVA_IBKR_PASSWORD} ${NOVA_IBKR_MODE} ${NOVA_I
   < "${TEMPLATE}" > "${RUNTIME_INI}"
 chmod 600 "${RUNTIME_INI}"
 
-echo "[ib-gateway-start] $(date -u +%FT%TZ) "\
-     "rendered ${RUNTIME_INI} (chmod 600), starting IBC..."
+echo "[ib-gateway-start] $(date -u +%FT%TZ) rendered ${RUNTIME_INI} (chmod 600)"
 echo "[ib-gateway-start] mode=${NOVA_IBKR_MODE} port=${NOVA_IB_API_PORT}"
 echo "[ib-gateway-start] gateway=${NOVA_IB_GATEWAY_PATH}"
 echo "[ib-gateway-start] ibc=${NOVA_IBC_PATH}"
+echo "[ib-gateway-start] start=${IBC_START}"
 
 # ---------- IBC starten ----------
-# Argumente von gatewaystart.sh (Stand IBC 3.x):
-#   -inline           : Output ins gleiche Terminal/Logfile
-#   --gateway-vsn=X.Y : Gateway-Version (IBC braucht das, weil es den
-#                       Versions-Subpfad in der App selbst kennt)
-#   --tws-path=PATH   : Pfad zum Applications-Verzeichnis (NICHT zur .app
-#                       selbst, sondern zum Parent — bei uns /Applications)
-#   --ibc-ini=FILE    : unsere gerenderte Runtime-Config
-#   --mode=live|paper
-exec "${GATEWAY_START}" \
-  -inline \
-  "--gateway-vsn=${NOVA_IB_GATEWAY_VER}" \
-  "--tws-path=$(dirname "${NOVA_IB_GATEWAY_PATH}")" \
+# Argumente fuer ibcstart.sh / displaybannerandlaunch.sh (IBC 3.x):
+#   <version>             positional: Gateway-/TWS-Version (z.B. 10.30)
+#   --gateway             nutze Gateway statt TWS
+#   --mode=live|paper     Trading-Modus
+#   --ibc-ini=FILE        Pfad zur IBC-Runtime-Config
+#   --tws-path=DIR        Verzeichnis, das die IB Gateway App enthaelt
+#                         (NICHT die .app selbst, sondern der Parent —
+#                         bei uns typisch /Applications)
+#   --ibc-path=DIR        Pfad zur IBC-Installation
+exec "${IBC_START}" "${NOVA_IB_GATEWAY_VER}" \
+  --gateway \
+  "--mode=${NOVA_IBKR_MODE}" \
   "--ibc-ini=${RUNTIME_INI}" \
-  "--mode=${NOVA_IBKR_MODE}"
+  "--tws-path=$(dirname "${NOVA_IB_GATEWAY_PATH}")" \
+  "--ibc-path=${NOVA_IBC_PATH}"
