@@ -1,40 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  nova-lab IB Gateway LaunchDaemon (system-Kontext, headless).
+  nova-lab IB Gateway LaunchAgent — laeuft in stefan_mac's GUI-Session.
 
-  Variante ohne Auto-Login: laeuft als system-Daemon, UserName=novaadm,
-  startet ueber scripts/install_daemon.sh. IB Gateway initialisiert seinen
-  API-Server auch ohne grafische Session — die GUI-Komponente bleibt
-  unsichtbar, der Port 4001 / 4002 ist trotzdem erreichbar.
+  Gateway ist eine GUI-Java-App und braucht WindowServer-Zugriff. Das geht
+  NICHT mit einem system-Daemon (egal welcher UserName-Key gesetzt ist —
+  Aqua haengt am gui/UID-Domain, nicht am Prozess-Owner). Deshalb:
+  LaunchAgent unter stefan_mac, der auf nova-hub permanent eingeloggt ist.
 
-  Caveat: manche IBC-Versionen weigern sich ohne WindowServer komplett.
-  Falls Gateway nicht startet, ist Auto-Login fuer novaadm der saubere
-  Weg (siehe docs/ibc_setup.md).
+  Initial-Setup (als stefan_mac, mit aktiver GUI-Session):
+    cp ~/Path/to/nova/dotfiles/launchd/de.gershu.nova.lab.ib.gateway.plist \
+       ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) \
+       ~/Library/LaunchAgents/de.gershu.nova.lab.ib.gateway.plist
+    launchctl kickstart -k gui/$(id -u)/de.gershu.nova.lab.ib.gateway
 
-  Initial-Setup:
-    sudo scripts/install_daemon.sh lab.ib.gateway
-
-  Logs:    /Users/novaadm/Library/Logs/nova-ib-gateway.log
-  Status:  sudo launchctl print system/de.gershu.nova.lab.ib.gateway
-  Stop:    sudo launchctl bootout system /Library/LaunchDaemons/de.gershu.nova.lab.ib.gateway.plist
-  Restart: sudo launchctl kickstart -k system/de.gershu.nova.lab.ib.gateway
+  Logs:    /Users/stefan_mac/Library/Logs/nova-ib-gateway.log
+  Status:  launchctl print gui/$(id -u)/de.gershu.nova.lab.ib.gateway
+  Stop:    launchctl bootout gui/$(id -u)/de.gershu.nova.lab.ib.gateway
+  Restart: launchctl kickstart -k gui/$(id -u)/de.gershu.nova.lab.ib.gateway
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>de.gershu.nova.lab.ib.gateway</string>
 
-    <!-- Daemon laeuft als stefan_mac, NICHT novaadm: IB Gateway ist eine
-         GUI-Java-App und initialisiert seinen AWT/Aqua-Stack gegen einen
-         WindowServer. stefan_mac ist auf nova-hub permanent eingeloggt
-         (fuer Obsidian), novaadm hat keine GUI-Session. Bewusste Ausnahme
-         der „alle Daemons unter novaadm"-Konvention. -->
-    <key>UserName</key>
-    <string>stefan_mac</string>
+    <!-- KEIN UserName/GroupName-Key: LaunchAgents laufen automatisch als
+         der User, in dessen gui/UID-Domain sie geladen werden. -->
 
-    <key>GroupName</key>
-    <string>staff</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -68,7 +61,10 @@
         <string>/Users/stefan_mac</string>
     </dict>
 
+    <!-- WorkingDirectory auf stefan_mac's Home — IBC's mktemp/Session-ID
+         braucht ein beschreibbares CWD. /Users/novaadm/nova ginge nicht,
+         da stefan_mac dort nur Lese-/Exec-Rechte hat. -->
     <key>WorkingDirectory</key>
-    <string>/Users/novaadm/nova</string>
+    <string>/Users/stefan_mac</string>
 </dict>
 </plist>

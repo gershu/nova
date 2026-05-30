@@ -78,7 +78,9 @@ if [[ ! -d "${NOVA_IB_GATEWAY_PATH}" ]]; then
 fi
 
 # ---------- Runtime-Config rendern ----------
-RUNTIME_INI="/tmp/nova-ibc-runtime.ini"
+# Per-User-Pfad, damit User-Wechsel der Plist (z.B. novaadm <-> stefan_mac)
+# keine 'Permission denied' beim Ueberschreiben ergibt.
+RUNTIME_INI="/tmp/nova-ibc-runtime-$(id -u).ini"
 # Variablen-Liste begrenzen, damit envsubst nicht Zufalls-${...} in IBC-Comments
 # expandiert.
 envsubst '${NOVA_IBKR_USERNAME} ${NOVA_IBKR_PASSWORD} ${NOVA_IBKR_MODE} ${NOVA_IB_API_PORT}' \
