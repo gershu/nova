@@ -1,0 +1,219 @@
+# nova-lab Daemon-Manifest — Quelle der Wahrheit fuer den Health-Check.
+#
+# Pflege: bei neuem Daemon hier nachtragen, sonst taucht er im Status nicht
+# auf. Die meisten Felder sind optional; check_strategy waehlt automatisch:
+#   - hat audit_table  -> Audit-Mode (status + metric aus dem juengsten Run)
+#   - hat primary_table -> Latest-Row-Mode (max(timestamp), kein Status)
+#   - hat process_check oder port_check -> Service-Mode (pgrep/lsof)
+#   - hat log_path -> Log-Mtime-Mode (Fallback fuer File-Output-Daemons)
+#
+# stale_after_hours: was als „nicht mehr aktuell" gilt. Bei Daily-Daemons
+# typisch 26 (Tag + Puffer), bei Weekly 170 (Woche + Puffer), bei Long-
+# Running irrelevant (Service-Mode prueft Prozess, nicht Alter).
+
+groups:
+  - id: market_data
+    title: Markt- & Stammdaten
+  - id: market_signals
+    title: Signale & Trigger
+  - id: llm
+    title: LLM-Outputs
+  - id: publishing
+    title: Veroeffentlichung
+  - id: long_running
+    title: Dauerlaeufer
+  - id: meta
+    title: Meta / Self-Check
+
+daemons:
+  # ===========================================
+  # market_data
+  # ===========================================
+  - label: lab.ingest
+    title: Portfolio Ingest (IB)
+    group: market_data
+    schedule: "Daily 22:30 UTC"
+    stale_after_hours: 26
+    audit_table: audit_ingest_runs
+    status_column: status
+    metric_column: rows_inserted
+
+  - label: lab.ingest.fx
+    title: FX-Kurse
+    group: market_data
+    schedule: "Daily"
+    stale_after_hours: 26
+    primary_table: mkt_fx_daily
+    timestamp_column: ts
+
+  - label: lab.fred_ingest
+    title: FRED Economic Series
+    group: market_data
+    schedule: "Daily 22:30 UTC"
+    stale_after_hours: 26
+    audit_table: audit_fred_ingest_runs
+    status_column: status
+    metric_column: rows_inserted
+
+  - label: lab.news_sa
+    title: Seeking-Alpha-News
+    group: market_data
+    schedule: "Daily"
+    stale_after_hours: 30
+    audit_table: audit_news_sa_runs
+    status_column: status
+
+  - label: lab.fundamentals
+    title: Fundamentaldaten
+    group: market_data
+    schedule: "Weekly Sun 22:00 UTC"
+    stale_after_hours: 170
+    primary_table: ref_fundamentals_latest
+    timestamp_column: fetched_at
+
+  - label: lab.sec_filings
+    title: SEC Filings (GuV + Segmente)
+    group: market_data
+    schedule: "Weekly Sun 21:30 UTC"
+    stale_after_hours: 170
+    audit_table: audit_sec_filings_runs
+    status_column: status
+    metric_column: rows_upserted
+
+  # ===========================================
+  # market_signals
+  # ===========================================
+  - label: lab.market_monitor
+    title: Markt-Monitor (Regime)
+    group: market_signals
+    schedule: "Daily"
+    stale_after_hours: 26
+    primary_table: sig_market_setups
+    timestamp_column: ts
+
+  - label: lab.monitor
+    title: Portfolio-Monitor (Alerts)
+    group: market_signals
+    schedule: "Daily"
+    stale_after_hours: 26
+    primary_table: sig_alerts
+    timestamp_column: ts
+
+  - label: lab.setup
+    title: Setup-Detection
+    group: market_signals
+    schedule: "Daily 23:00 UTC"
+    stale_after_hours: 26
+    primary_table: sig_market_setups
+    timestamp_column: ts
+
+  - label: lab.allocation
+    title: Allokations-Drift
+    group: market_signals
+    schedule: "Daily 23:10 UTC"
+    stale_after_hours: 26
+    primary_table: sig_allocation
+    timestamp_column: ts
+
+  - label: lab.screener_csp
+    title: CSP-Screener
+    group: market_signals
+    schedule: "Daily"
+    stale_after_hours: 26
+    # Output liegt in Watchlist-Members (kein eigener sig-Table) ->
+    # Fallback auf Log-Mtime, wenn vorhanden.
+    log_path: /Users/novaadm/Library/Logs/nova-lab-screener_csp.log
+
+  - label: lab.screener_value
+    title: Value-Screener
+    group: market_signals
+    schedule: "Weekly Sun 22:30 UTC"
+    stale_after_hours: 170
+    audit_table: audit_value_screener_runs
+    status_column: status
+
+  # ===========================================
+  # llm
+  # ===========================================
+  - label: lab.recommendations
+    title: LLM Recommendations
+    group: llm
+    schedule: "Daily 23:15 UTC"
+    stale_after_hours: 26
+    primary_table: sig_recommendations
+    timestamp_column: ts
+
+  - label: lab.alert_explainer
+    title: LLM Alert-Explainer
+    group: llm
+    schedule: "Daily"
+    stale_after_hours: 26
+    primary_table: sig_alert_explanations
+    timestamp_column: ts
+
+  - label: lab.portfolio_briefing
+    title: Portfolio-Briefing
+    group: llm
+    schedule: "Daily"
+    stale_after_hours: 26
+    primary_table: sig_portfolio_briefings
+    timestamp_column: ts
+
+  # ===========================================
+  # publishing
+  # ===========================================
+  - label: lab.digest
+    title: Daily Digest
+    group: publishing
+    schedule: "Daily"
+    stale_after_hours: 26
+    # Output ist Markdown in Obsidian-Vault — Log-Mtime als Proxy.
+    log_path: /Users/novaadm/Library/Logs/nova-lab-digest.log
+
+  - label: lab.obsidian
+    title: Obsidian-Publisher
+    group: publishing
+    schedule: "Daily"
+    stale_after_hours: 26
+    log_path: /Users/novaadm/Library/Logs/nova-lab-obsidian.log
+
+  # ===========================================
+  # long_running
+  # ===========================================
+  - label: lab.dashboard
+    title: Dashboard (Streamlit)
+    group: long_running
+    schedule: "Permanent"
+    process_check: "streamlit"
+    port_check: 8501
+
+  - label: lab.ib.gateway
+    title: IB Gateway (via IBC)
+    group: long_running
+    schedule: "Permanent"
+    process_check: "ibgateway"
+    port_check: 4001
+
+  - label: ollama
+    title: Ollama (LLM-Server)
+    group: long_running
+    schedule: "Permanent"
+    process_check: "ollama"
+    port_check: 11434
+
+  - label: caffeinate
+    title: Caffeinate (no-sleep)
+    group: long_running
+    schedule: "Permanent"
+    process_check: "caffeinate"
+
+  # ===========================================
+  # meta
+  # ===========================================
+  - label: lab.health
+    title: Health-Check (self)
+    group: meta
+    schedule: "Daily 06:00 UTC"
+    stale_after_hours: 26
+    primary_table: sig_health_snapshots
+    timestamp_column: ts

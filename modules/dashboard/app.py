@@ -67,6 +67,7 @@ nav = st.navigation({
         st.Page("views/csp_picks.py",       title="CSP Picks",    icon="📞"),
     ],
     "System": [
+        st.Page("views/health.py",          title="Daemon-Health", icon="🩺"),
         st.Page("views/database.py",        title="Database",     icon="🗄"),
     ],
 })
