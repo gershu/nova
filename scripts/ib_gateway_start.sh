@@ -109,12 +109,27 @@ echo "[ib-gateway-start] start=${IBC_START}"
 #   --tws-path=DIR              Verzeichnis, das die IB Gateway App enthaelt
 #                               (NICHT die .app, sondern der Parent — typisch
 #                               /Applications)
-#   --tws-settings-path=DIR     Settings-Dir; default waere $HOME/Jts, das
-#                               existiert auf nova-hub fuer novaadm nicht.
-#                               Wir spiegeln dort stefan_mac's gepflegte
-#                               Settings (Layout, akzeptierte Disclaimer).
+#   --tws-settings-path=DIR     Settings-Dir. WICHTIG: keine Leerzeichen im
+#                               Pfad! IBC's ibcstart.sh quotet das Argument
+#                               in einigen internen Steps nicht durchgaengig
+#                               (z.B. -DjtsConfigDir=...), und Java exits dann
+#                               beim Klassen-Load mit Exit 1, weil die Pfad-
+#                               Teile als Klassen-/Argumentnamen interpretiert
+#                               werden. Wir nutzen ${HOME}/Jts (IBKRs eigene
+#                               Konvention) und seeden dort einmalig die
+#                               bestehenden Library-Settings.
 #   --ibc-path=DIR              Pfad zur IBC-Installation
-TWS_SETTINGS="${HOME}/Library/Application Support/IB Gateway ${NOVA_IB_GATEWAY_VER}"
+TWS_SETTINGS="${HOME}/Jts"
+if [[ ! -d "${TWS_SETTINGS}" ]]; then
+  legacy_settings="${HOME}/Library/Application Support/IB Gateway ${NOVA_IB_GATEWAY_VER}"
+  if [[ -d "${legacy_settings}" ]]; then
+    cp -R "${legacy_settings}" "${TWS_SETTINGS}"
+    echo "[ib-gateway-start] seeded ${TWS_SETTINGS} from legacy settings"
+  else
+    mkdir -p "${TWS_SETTINGS}"
+    echo "[ib-gateway-start] created fresh ${TWS_SETTINGS}"
+  fi
+fi
 exec "${IBC_START}" "${NOVA_IB_GATEWAY_VER}" \
   --gateway \
   "--mode=${NOVA_IBKR_MODE}" \
