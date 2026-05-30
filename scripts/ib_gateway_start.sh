@@ -92,18 +92,24 @@ echo "[ib-gateway-start] ibc=${NOVA_IBC_PATH}"
 echo "[ib-gateway-start] start=${IBC_START}"
 
 # ---------- IBC starten ----------
-# Argumente fuer ibcstart.sh / displaybannerandlaunch.sh (IBC 3.x):
-#   <version>             positional: Gateway-/TWS-Version (z.B. 10.30)
-#   --gateway             nutze Gateway statt TWS
-#   --mode=live|paper     Trading-Modus
-#   --ibc-ini=FILE        Pfad zur IBC-Runtime-Config
-#   --tws-path=DIR        Verzeichnis, das die IB Gateway App enthaelt
-#                         (NICHT die .app selbst, sondern der Parent —
-#                         bei uns typisch /Applications)
-#   --ibc-path=DIR        Pfad zur IBC-Installation
+# Argumente fuer ibcstart.sh (IBC 3.x):
+#   <version>                   positional: Gateway-Version (z.B. 10.46)
+#   --gateway                   nutze Gateway statt TWS
+#   --mode=live|paper           Trading-Modus
+#   --ibc-ini=FILE              Pfad zur IBC-Runtime-Config
+#   --tws-path=DIR              Verzeichnis, das die IB Gateway App enthaelt
+#                               (NICHT die .app, sondern der Parent — typisch
+#                               /Applications)
+#   --tws-settings-path=DIR     Settings-Dir; default waere $HOME/Jts, das
+#                               existiert auf nova-hub fuer novaadm nicht.
+#                               Wir spiegeln dort stefan_mac's gepflegte
+#                               Settings (Layout, akzeptierte Disclaimer).
+#   --ibc-path=DIR              Pfad zur IBC-Installation
+TWS_SETTINGS="${HOME}/Library/Application Support/IB Gateway ${NOVA_IB_GATEWAY_VER}"
 exec "${IBC_START}" "${NOVA_IB_GATEWAY_VER}" \
   --gateway \
   "--mode=${NOVA_IBKR_MODE}" \
   "--ibc-ini=${RUNTIME_INI}" \
   "--tws-path=$(dirname "${NOVA_IB_GATEWAY_PATH}")" \
+  "--tws-settings-path=${TWS_SETTINGS}" \
   "--ibc-path=${NOVA_IBC_PATH}"
