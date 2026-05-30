@@ -653,13 +653,19 @@ with t_guv:
             if not _V:
                 st.info("GuV-Zeilen unvollstaendig — kein Sankey moeglich.")
             else:
+                # Hoehe an Knotenzahl koppeln, damit Labels nicht ueberlappen
+                _n_nodes = len(_labels)
+                _sankey_h = min(900, max(440, _n_nodes * 46))
                 _fig = go.Figure(go.Sankey(
                     arrangement="snap",
+                    textfont=dict(color="#10231A", size=13, weight=600,
+                                  family="Arial, sans-serif"),
                     node=dict(label=_labels, color=_colors,
-                              pad=24, thickness=16, line=dict(width=0)),
+                              pad=26, thickness=16,
+                              line=dict(color="white", width=1)),
                     link=dict(source=_S, target=_T, value=_V, color=_LC),
                 ))
-                _fig.update_layout(height=420, font_size=12,
+                _fig.update_layout(height=_sankey_h,
                                    margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(_fig, use_container_width=True)
                 st.caption(
