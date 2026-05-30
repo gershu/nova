@@ -422,6 +422,28 @@ with t_guv:
                            if len(_opts) > 1 else list(_opts.keys())[0])
                 _seg_axis = _opts[_chosen]
 
+            # Periodentyp-Filter — trennt 10-Q (Quartal) von 10-K (Jahr),
+            # damit nicht Quartals- und Jahreswerte auf derselben Achse
+            # gemischt werden.
+            def _ptype(ft) -> str:
+                s = str(ft or "").upper()
+                if s.startswith("10-K"):
+                    return "Jahr"
+                if s.startswith("10-Q"):
+                    return "Quartal"
+                return "Sonstige"
+
+            _hist_is["_ptype"] = _hist_is["form_type"].map(_ptype)
+            _ptype_by_period = dict(zip(_hist_is["period_end"],
+                                        _hist_is["_ptype"]))
+            _avail_ptypes = [t for t in ("Quartal", "Jahr")
+                             if (_hist_is["_ptype"] == t).any()]
+            _ptype_sel = (
+                st.radio("Periode", _avail_ptypes, horizontal=True,
+                         key=f"guv_ptype_{ref_id}")
+                if len(_avail_ptypes) > 1
+                else (_avail_ptypes[0] if _avail_ptypes else "Quartal"))
+
             # ===================================================
             # Revenue Breakdown — Stacked Bar ueber alle Perioden
             # ===================================================
@@ -430,6 +452,8 @@ with t_guv:
                     "#3B6D11", "#639922", "#97C459", "#C0DD97"]
             if _seg_axis is not None:
                 _seg_sel = _seg_hist[_seg_hist["axis"] == _seg_axis].copy()
+                _seg_sel = _seg_sel[_seg_sel["period_end"].map(
+                    _ptype_by_period).eq(_ptype_sel)]
                 _periods = sorted(_seg_sel["period_end"].unique())
                 if _periods:
                     _mem_totals = (_seg_sel.groupby("member_label")["value"]
@@ -479,9 +503,10 @@ with t_guv:
                     st.info("Keine Segment-Daten in dieser Achse.")
             else:
                 # Keine Segmente — einfacher Umsatz-Verlauf
+                _hist_p = _hist_is[_hist_is["_ptype"] == _ptype_sel]
                 _fig_bar = go.Figure(go.Bar(
-                    x=_hist_is["period_end"],
-                    y=_hist_is["revenue"],
+                    x=_hist_p["period_end"],
+                    y=_hist_p["revenue"],
                     marker_color=_PAL[0],
                     hovertemplate=("%{x|%Y-%m-%d}<br>Umsatz: "
                                    "%{y:,.0f}<extra></extra>"),
