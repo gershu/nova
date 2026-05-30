@@ -52,15 +52,13 @@ if [[ ! -f "${TEMPLATE}" ]]; then
   exit 65
 fi
 
-# IBC-Start-Script finden. macOS-Distribution hat:
-#   displaybannerandlaunch.sh — User-Wrapper (mit ASCII-Banner)
-#   ibcstart.sh               — Worker-Script (gleiche Argumente)
-# Reihenfolge: erst Banner-Wrapper bevorzugen, dann den Worker.
+# IBC-Start-Script finden. Wir nutzen ibcstart.sh direkt — der Banner-Wrapper
+# displaybannerandlaunch.sh erwartet IBC_PATH/TWS_PATH/etc. als ENV-Vars,
+# nicht als CLI-Args; das wuerden wir nur unnoetig spiegeln. ibcstart.sh
+# hingegen parst alle Pfade aus den --xxx=...-Argumenten selbst.
 IBC_START=""
 for cand in \
-    "${NOVA_IBC_PATH}/scripts/displaybannerandlaunch.sh" \
     "${NOVA_IBC_PATH}/scripts/ibcstart.sh" \
-    "${NOVA_IBC_PATH}/libexec/scripts/displaybannerandlaunch.sh" \
     "${NOVA_IBC_PATH}/libexec/scripts/ibcstart.sh"; do
   if [[ -x "$cand" ]]; then
     IBC_START="$cand"
@@ -68,8 +66,8 @@ for cand in \
   fi
 done
 if [[ -z "${IBC_START}" ]]; then
-  echo "[ib-gateway-start] FEHLER: weder displaybannerandlaunch.sh noch" \
-       "ibcstart.sh ausfuehrbar unter ${NOVA_IBC_PATH}/scripts/." >&2
+  echo "[ib-gateway-start] FEHLER: ibcstart.sh nicht ausfuehrbar unter" \
+       "${NOVA_IBC_PATH}/scripts/." >&2
   exit 65
 fi
 
