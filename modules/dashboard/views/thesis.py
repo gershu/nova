@@ -448,6 +448,45 @@ with t_guv:
             # Revenue Breakdown — Stacked Bar ueber alle Perioden
             # ===================================================
             st.markdown(f"##### Umsatz-Verlauf ({_cur})")
+
+            # --- Wachstums-Kennzahlen zur gewaehlten Periode ---------------
+            _rev_ser = (_hist_is[_hist_is["_ptype"] == _ptype_sel]
+                        .sort_values("period_end"))
+            _rv = _rev_ser["revenue"].astype(float).tolist()
+            _rp = _rev_ser["period_end"].tolist()
+            _is_q = _ptype_sel == "Quartal"
+            _lag = 4 if _is_q else 1            # YoY-Versatz in Perioden
+
+            def _grow(cur, base):
+                if (cur is None or base is None
+                        or _missing(cur) or _missing(base) or base == 0):
+                    return None
+                return float(cur) / float(base) - 1.0
+
+            _last = _rv[-1] if _rv else None
+            _seq = _grow(_last, _rv[-2]) if len(_rv) >= 2 else None
+            _yoy = _grow(_last, _rv[-1 - _lag]) if len(_rv) > _lag else None
+            _cagr = None
+            if len(_rv) >= 2 and _rv[0] > 0 and _last and _last > 0:
+                _yrs = (_rp[-1] - _rp[0]).days / 365.25
+                if _yrs >= 1.0:
+                    _cagr = (_last / _rv[0]) ** (1.0 / _yrs) - 1.0
+
+            def _dlt(g, suffix):
+                if g is None:
+                    return None
+                return f"{'+' if g >= 0 else ''}{_pct(g)} {suffix}"
+
+            _mc1, _mc2, _mc3 = st.columns(3)
+            _mc1.metric(
+                "Umsatz (letzte Periode)",
+                _fmt_money_big(_last, _cur) if _last is not None else "—",
+                delta=_dlt(_seq, "ggü. Vorquartal") if _is_q else None)
+            _mc2.metric("Wachstum YoY",
+                        _pct(_yoy) if _yoy is not None else "—")
+            _mc3.metric("CAGR p.a.",
+                        _pct(_cagr) if _cagr is not None else "—")
+
             _PAL = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB",
                     "#3B6D11", "#639922", "#97C459", "#C0DD97"]
             if _seg_axis is not None:
