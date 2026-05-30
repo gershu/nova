@@ -602,6 +602,51 @@ with t_guv:
                            "Stabile bzw. steigende Margen = hoehere "
                            "Ergebnisqualitaet.")
 
+            # ===================================================
+            # Absolute Kostenaufteilung — Stacked Bar (Umsatz =
+            # Herstellkosten + Betriebsaufwand + Operatives Ergebnis)
+            # ===================================================
+            _kt = (_hist_is[_hist_is["_ptype"] == _ptype_sel]
+                   .sort_values("period_end").copy())
+            if len(_kt) >= 1:
+                _cogs_s = _kt["cost_of_revenue"].astype(float)
+                _rd_s = _kt["rd_expense"].astype(float)
+                _sga_s = _kt["sga_expense"].astype(float)
+                _opex_s = _kt["operating_expense"].astype(float)
+                _opinc_s = _kt["operating_income"].astype(float)
+                _rest_opex = (_opex_s - _rd_s.fillna(0) - _sga_s.fillna(0))
+                _rest_opex = _rest_opex.clip(lower=0)
+
+                _bands = [
+                    ("Herstellkosten",        _cogs_s,    "#A32D2D"),
+                    ("F&E",                   _rd_s,      "#C75B5B"),
+                    ("Vertrieb & Verwaltung", _sga_s,     "#E08A8A"),
+                    ("Uebriger Betriebsaufwand", _rest_opex, "#B4B2A9"),
+                    ("Operatives Ergebnis",   _opinc_s,   "#1D9E75"),
+                ]
+                if any(s.notna().any() and (s.fillna(0) != 0).any()
+                       for _, s, _c in _bands):
+                    st.markdown("##### Kostenaufteilung (absolut)")
+                    _figk = go.Figure()
+                    for _name, _ser, _col in _bands:
+                        _figk.add_trace(go.Bar(
+                            name=_name, x=_kt["period_end"], y=_ser,
+                            marker_color=_col,
+                            hovertemplate=(f"%{{x|%Y-%m-%d}}<br>{_name}: "
+                                           "%{y:,.0f}<extra></extra>"),
+                        ))
+                    _figk.update_layout(
+                        barmode="stack", height=360,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        legend=dict(orientation="h", y=-0.2),
+                        yaxis_title=f"Aufwand / Ergebnis ({_cur})",
+                        hovermode="x unified")
+                    st.plotly_chart(_figk, use_container_width=True)
+                    st.caption("Umsatz = Herstellkosten + Betriebsaufwand "
+                               "+ Operatives Ergebnis. Bandhoehe in "
+                               f"{_cur}; Summe je Balken entspricht dem "
+                               "Umsatz der Periode.")
+
             st.divider()
 
             # ===================================================
