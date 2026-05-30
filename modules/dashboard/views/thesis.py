@@ -668,6 +668,42 @@ with t_guv:
                 _fig.update_layout(height=_sankey_h,
                                    margin=dict(l=10, r=10, t=10, b=10))
                 st.plotly_chart(_fig, use_container_width=True)
+
+                # --- Ergebnisqualitaet: Margen aus den Sankey-Fluessen ----
+                def _ratio_of(num, den):
+                    if (num is None or den is None
+                            or _missing(num) or _missing(den)
+                            or float(den) == 0):
+                        return None
+                    return float(num) / float(den)
+
+                _q_brutto = _ratio_of(_gross, _rev)
+                _q_op = _ratio_of(_opinc, _rev)
+                _q_net = _ratio_of(_net, _rev)
+                _q_rd = _ratio_of(_rd, _rev)
+                _tax_base = _ptax if _ptax else (
+                    (_net + _tax) if (_net is not None and _tax is not None)
+                    else None)
+                _q_tax = _ratio_of(_tax, _tax_base)
+
+                st.markdown("**Ergebnisqualitaet**")
+                _qc = st.columns(5)
+                _qc[0].metric("Bruttomarge",
+                              _pct(_q_brutto) if _q_brutto is not None else "—",
+                              help="Bruttogewinn / Umsatz")
+                _qc[1].metric("Operative Marge",
+                              _pct(_q_op) if _q_op is not None else "—",
+                              help="Operatives Ergebnis / Umsatz")
+                _qc[2].metric("Nettomarge",
+                              _pct(_q_net) if _q_net is not None else "—",
+                              help="Nettogewinn / Umsatz")
+                _qc[3].metric("F&E-Quote",
+                              _pct(_q_rd) if _q_rd is not None else "—",
+                              help="F&E-Aufwand / Umsatz")
+                _qc[4].metric("Steuerquote",
+                              _pct(_q_tax) if _q_tax is not None else "—",
+                              help="Steuern / Vorsteuerergebnis (effektiv)")
+
                 st.caption(
                     f"{_r['form_type'] or 'Filing'} · Berichtsperiode "
                     f"{str(_r['period_end'])[:10]} · eingereicht "
