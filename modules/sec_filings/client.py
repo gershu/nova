@@ -572,6 +572,137 @@ def fetch_statements_from_filing(
     return inc, bs
 
 
+# ---------- GAAP vs non-GAAP (Earnings-8-K Exhibit 99) ----------
+
+# Anpassungs-Kategorien -> Schluesselwoerter (lowercase). SBC als Add-back
+# ist das klassische Aggressivitaets-Signal (echte, wiederkehrende Kosten).
+NON_GAAP_ADJUSTMENTS = {
+    "Aktienverguetung (SBC)": ["stock-based compensation",
+                               "share-based compensation",
+                               "stock compensation",
+                               "stock-based comp"],
+    "Amortisation immaterieller": ["amortization of acquired intangible",
+                                   "amortization of intangible",
+                                   "intangible amortization",
+                                   "amortization of purchased intangible"],
+    "Restrukturierung": ["restructuring"],
+    "Akquisitionskosten": ["acquisition-related", "acquisition related",
+                           "transaction costs", "acquisition costs"],
+    "Wertminderung": ["impairment"],
+    "Rechtsstreit/Settlement": ["litigation", "legal settlement"],
+    "Steueranpassungen": ["discrete tax", "tax effects of",
+                          "non-gaap tax", "income tax adjustment"],
+    "Waehrung (constant currency)": ["constant currency"],
+}
+
+_NON_GAAP_TERMS = ["non-gaap", "non gaap", "adjusted", "ebitda",
+                   "core earnings", "free cash flow"]
+_TAG_RE = re.compile(r"<[^>]+>")
+_EPS_RE = re.compile(r"\$\s?\d{1,3}(?:[.,]\d{1,2})")
+
+
+def _query_raw(query: str, n: int = 5) -> list[dict]:
+    """Roh-Filings der Query-API (komplette Records inkl. Dokumente)."""
+    payload = {"query": query, "from": "0", "size": str(max(1, int(n))),
+               "sort": [{"filedAt": {"order": "desc"}}]}
+    try:
+        resp = requests.post(QUERY_URL, json=payload,
+                             headers={"Authorization": _api_key()},
+                             timeout=20)
+    except requests.RequestException as e:
+        raise SecApiError(f"Query-API-Request fehlgeschlagen: {e}") from e
+    if resp.status_code != 200:
+        raise SecApiError(
+            f"Query-API HTTP {resp.status_code}: {resp.text[:200]}")
+    return (resp.json() or {}).get("filings", [])
+
+
+def _pick_earnings_exhibit(docs: list[dict]) -> str | None:
+    """Bevorzugt EX-99.1, dann EX-99 — sonst erstes Dokument mit '99'."""
+    for d in docs or []:
+        t = (d.get("type") or "").lower()
+        if t.startswith("ex-99.1") or t.startswith("ex-99.01"):
+            return d.get("documentUrl")
+    for d in docs or []:
+        if (d.get("type") or "").lower().startswith("ex-99"):
+            return d.get("documentUrl")
+    for d in docs or []:
+        if "99" in (d.get("description") or ""):
+            return d.get("documentUrl")
+    return None
+
+
+def find_earnings_exhibits(ticker: str, *, n: int = 4) -> list[dict]:
+    """Juengste Earnings-8-K (Item 2.02) mit Exhibit-99-URL."""
+    filings = _query_raw(
+        f'ticker:{ticker} AND formType:"8-K" AND items:"2.02"', n)
+    out = []
+    for f in filings:
+        out.append({
+            "accession_no": f.get("accessionNo"),
+            "filed_at":     f.get("filedAt"),
+            "exhibit_url":  _pick_earnings_exhibit(
+                f.get("documentFormatFiles") or []),
+            "link":         f.get("linkToFilingDetails"),
+        })
+    return out
+
+
+def fetch_exhibit_text(url: str) -> str:
+    """Exhibit-HTML laden und zu Plain-Text reduzieren (SEC-User-Agent)."""
+    if not url:
+        return ""
+    try:
+        resp = requests.get(
+            url, headers={"User-Agent": "nova-lab research"}, timeout=30)
+    except requests.RequestException as e:
+        raise SecApiError(f"Exhibit-Download fehlgeschlagen: {e}") from e
+    if resp.status_code != 200:
+        raise SecApiError(
+            f"Exhibit HTTP {resp.status_code}: {resp.text[:120]}")
+    text = _TAG_RE.sub(" ", resp.text)
+    text = re.sub(r"&[a-zA-Z#0-9]+;", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def analyze_non_gaap(text: str) -> dict:
+    """Heuristische Auswertung eines Earnings-Exhibit-Texts.
+
+    Returns dict:
+      uses_non_gaap : bool
+      mentions      : int   (Treffer ueber alle Non-GAAP-Begriffe)
+      categories    : {label: count}  (gefundene Anpassungs-Kategorien)
+      adds_back_sbc : bool
+      amounts       : [str] (Best-effort Dollar-/EPS-Beträge nahe 'non-gaap')
+    """
+    low = (text or "").lower()
+    mentions = sum(low.count(t) for t in _NON_GAAP_TERMS)
+    categories: dict[str, int] = {}
+    for label, kws in NON_GAAP_ADJUSTMENTS.items():
+        c = sum(low.count(k) for k in kws)
+        if c:
+            categories[label] = c
+
+    # Best-effort: Dollar-Betraege im Umfeld von 'non-gaap'
+    amounts: list[str] = []
+    idx = low.find("non-gaap")
+    scan = 0
+    while idx != -1 and len(amounts) < 8 and scan < 20:
+        window = text[idx:idx + 160]
+        for m in _EPS_RE.findall(window):
+            amounts.append(m.strip())
+        idx = low.find("non-gaap", idx + 1)
+        scan += 1
+
+    return {
+        "uses_non_gaap": mentions > 0,
+        "mentions":      mentions,
+        "categories":    categories,
+        "adds_back_sbc": "Aktienverguetung (SBC)" in categories,
+        "amounts":       list(dict.fromkeys(amounts)),   # dedupe, Reihenfolge
+    }
+
+
 # ---------- Stock-based Compensation / Cashflow ----------
 
 _SBC = ["ShareBasedCompensation",

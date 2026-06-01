@@ -21,9 +21,10 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from datetime import date, timedelta
 
 from modules.sec_filings.client import (
-    INSIDER_CODE_LABELS, SecApiError, fetch_balance_sheet_from_filing,
+    INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
+    fetch_balance_sheet_from_filing, fetch_exhibit_text,
     fetch_insider_transactions, fetch_sbc_from_filing,
-    fetch_statements_from_filing, find_filings,
+    fetch_statements_from_filing, find_earnings_exhibits, find_filings,
 )
 
 
@@ -106,6 +107,16 @@ def _load_returns(ticker: str, n_years: int):
 def _load_insider(ticker: str):
     """Flache Insider-Transaktionsliste (Form 3/4/5)."""
     return fetch_insider_transactions(ticker, n=300)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_gaap(ticker: str):
+    """Juengstes Earnings-8-K Exhibit -> (meta, analyse, textlaenge)."""
+    ex = find_earnings_exhibits(ticker, n=1)
+    if not ex or not ex[0].get("exhibit_url"):
+        return None, None
+    text = fetch_exhibit_text(ex[0]["exhibit_url"])
+    return ex[0], analyze_non_gaap(text)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -565,6 +576,77 @@ def render_sbc(ticker, n_years):
                "der gewichteten verwaesserten Aktien.")
 
 
+def render_gaap(ticker, n_years):
+    try:
+        with st.spinner(f"Lade Earnings-8-K-Exhibit fuer {ticker} …"):
+            meta, ana = _load_gaap(ticker)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if meta is None or ana is None:
+        st.warning(
+            f"Kein Earnings-8-K (Item 2.02) mit Exhibit 99 fuer "
+            f"**{ticker}** gefunden. Manche Firmen melden Zahlen anders.")
+        st.stop()
+
+    st.markdown(
+        f"### {ticker} — GAAP vs non-GAAP  \n"
+        f"Quelle: Earnings-8-K, eingereicht **{str(meta['filed_at'])[:10]}**")
+
+    cats = ana["categories"]
+    checks = [
+        ("Non-GAAP-Nutzung moderat (< 15 Erwaehnungen)",
+         ana["mentions"] < 15),
+        ("SBC NICHT herausgerechnet", not ana["adds_back_sbc"]),
+        ("≤ 3 Anpassungskategorien", len(cats) <= 3),
+    ]
+    _verdict_box(checks, strong="konservativ / transparent",
+                 mixed="moderat", weak="aggressiv (viele Add-backs)",
+                 lead="Reporting")
+
+    m = st.columns(3)
+    m[0].metric("Non-GAAP-Erwaehnungen", str(ana["mentions"]))
+    m[1].metric("Anpassungs-Kategorien", str(len(cats)))
+    m[2].metric("SBC herausgerechnet?",
+                "Ja" if ana["adds_back_sbc"] else "Nein",
+                help="Add-back von Aktienverguetung ist der klassische "
+                     "Aggressivitaets-Marker (echte, wiederkehrende Kosten)")
+
+    if cats:
+        st.markdown("#### Gefundene Anpassungs-Kategorien")
+        cat_df = (pd.DataFrame(
+            [{"Kategorie": k, "Treffer": v} for k, v in cats.items()])
+            .sort_values("Treffer", ascending=False))
+        fig = go.Figure(go.Bar(
+            x=cat_df["Treffer"], y=cat_df["Kategorie"], orientation="h",
+            marker_color=["#A32D2D" if k.startswith("Aktienverguetung")
+                          else "#1D9E75" for k in cat_df["Kategorie"]]))
+        fig.update_layout(height=max(220, 40 * len(cat_df)),
+                          margin=dict(l=10, r=10, t=10, b=10),
+                          xaxis_title="Erwaehnungen")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Keine bekannten Anpassungs-Kategorien im Text erkannt — "
+                "entweder rein GAAP berichtet oder ungewohnte Formulierung.")
+
+    if ana["amounts"]:
+        with st.expander("Beträge nahe 'non-GAAP' (heuristisch, ungeprueft)"):
+            st.write(", ".join(ana["amounts"]))
+            st.caption("Reine Textnaehe-Suche — keine Zuordnung zu GAAP/"
+                       "non-GAAP-Zeilen. Nur als grobe Orientierung.")
+
+    if meta.get("link"):
+        st.caption(f"Original-Filing: {meta['link']}")
+    st.caption("Heuristische Textanalyse des Earnings-Exhibits "
+               "(Exhibit 99). Non-GAAP-Kennzahlen sind nicht im XBRL "
+               "strukturiert — daher Stichwort-basiert. Add-back von SBC "
+               "und vielen wiederkehrenden Posten gilt als Warnsignal fuer "
+               "die Ergebnisqualitaet.")
+
+
 # =====================================================================
 # Seite
 # =====================================================================
@@ -579,7 +661,7 @@ _TOPICS = {
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
     "Stock-based Compensation — SBC & Verwaesserung": render_sbc,
-    "GAAP vs non-GAAP (in Arbeit)": None,
+    "GAAP vs non-GAAP — Earnings-Exhibit": render_gaap,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))
 
