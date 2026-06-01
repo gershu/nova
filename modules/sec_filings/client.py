@@ -794,6 +794,37 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
 
 # ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
 
+def fetch_employee_counts(cik) -> dict:
+    """dei:EntityNumberOfEmployees-Zeitreihe via SEC company-concept-API.
+
+    Returns {end_date_iso: anzahl} aus 10-K-Kontexten. {} bei Fehler —
+    xbrl-to-json enthaelt diese DEI-Cover-Page-Fakten nicht.
+    """
+    if cik in (None, "", 0):
+        return {}
+    c10 = str(cik).lstrip("0").zfill(10)
+    url = (f"https://data.sec.gov/api/xbrl/companyconcept/CIK{c10}"
+           "/dei/EntityNumberOfEmployees.json")
+    try:
+        resp = requests.get(url, headers={"User-Agent": _SEC_UA}, timeout=30)
+    except requests.RequestException:
+        return {}
+    if resp.status_code != 200:
+        return {}
+    units = (resp.json() or {}).get("units") or {}
+    out: dict = {}
+    for items in units.values():
+        for it in items or []:
+            end, val, form = it.get("end"), it.get("val"), it.get("form", "")
+            if end is None or val is None or "10-K" not in (form or ""):
+                continue
+            try:
+                out[end] = float(val)
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 def _pick_employees(xbrl: dict, period: str):
     """dei:EntityNumberOfEmployees ueber alle XBRL-Sektionen suchen."""
     for sect in xbrl.values():

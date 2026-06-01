@@ -25,9 +25,9 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_beneficial_ownership_detail, fetch_exhibit_text,
-    fetch_institutional_holdings, fetch_insider_first_filing,
-    fetch_insider_transactions,
+    fetch_beneficial_ownership_detail, fetch_employee_counts,
+    fetch_exhibit_text, fetch_institutional_holdings,
+    fetch_insider_first_filing, fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
     fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
     get_issuer_cik,
@@ -331,6 +331,15 @@ def _load_prices(ticker: str, start_iso: str, end_iso: str) -> dict:
         return {str(idx.date()): float(row["Close"])
                 for idx, row in h.iterrows()}
     except Exception:  # noqa: BLE001 — Marktdaten optional
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_employees(ticker: str) -> dict:
+    """Mitarbeiter-Zeitreihe (SEC company-concept) -> {end_iso: anzahl}."""
+    try:
+        return fetch_employee_counts(_issuer_cik(ticker))
+    except Exception:  # noqa: BLE001
         return {}
 
 
@@ -2130,6 +2139,23 @@ def render_physical(ticker, n_years):
         st.warning(f"Mind. 2 Jahresberichte noetig — fuer **{ticker}** nur "
                    f"{len(rows)} gefunden.")
         st.stop()
+
+    # Mitarbeiterzahl separat aus der SEC company-concept-API (nicht im
+    # xbrl-to-json), je Jahr per Stichtag zuordnen.
+    emp_map = _load_employees(ticker)
+    if emp_map:
+        def _emp_for(period_iso):
+            if period_iso in emp_map:
+                return emp_map[period_iso]
+            pe = pd.to_datetime(period_iso)
+            best, bestdiff = None, 999
+            for d, v in emp_map.items():
+                diff = abs((pd.to_datetime(d) - pe).days)
+                if diff < bestdiff:
+                    bestdiff, best = diff, v
+            return best if bestdiff <= 45 else None
+        rows = [dict(d, employees=(_emp_for(str(d["period_end"])[:10])
+                                   or d.get("employees"))) for d in rows]
 
     cur = "USD"
     last, first = rows[-1], rows[0]
