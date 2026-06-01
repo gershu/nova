@@ -794,6 +794,32 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
 
 # ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
 
+def _pick_employees(xbrl: dict, period: str):
+    """dei:EntityNumberOfEmployees ueber alle XBRL-Sektionen suchen."""
+    for sect in xbrl.values():
+        if not isinstance(sect, dict):
+            continue
+        for concept, facts in sect.items():
+            if "NumberOfEmployees" not in concept \
+                    or not isinstance(facts, list):
+                continue
+            best = None
+            for f in facts:
+                if not isinstance(f, dict):
+                    continue
+                p = f.get("period") or {}
+                d = p.get("instant") or p.get("endDate")
+                try:
+                    v = float(f["value"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if d == period:
+                    return v
+                best = v
+            if best is not None:
+                return best
+    return None
+
 # Kapitalallokation (Cashflow, als positive Mittelabfluesse berichtet).
 _BUYBACKS = ["PaymentsForRepurchaseOfCommonStock",
              "PaymentsForRepurchaseOfEquity"]
@@ -841,6 +867,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
     diluted_shares, _ = _pick(inc_stmt, _DILUTED_SHARES, period)
     shares_outstanding = _pick_instant(bs_stmt, _SHARES_OUT, period)
+    employees = _pick_employees(xbrl, period)
 
     # Kapitalallokation (Mittelverwendung; als positive Betraege fuehren)
     buybacks, _ = _pick(cf, _BUYBACKS, period)
@@ -883,6 +910,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         "fcf":              fcf,
         "diluted_shares":   diluted_shares,
         "shares_outstanding": shares_outstanding,
+        "employees":        employees,
         "buybacks":         buybacks,
         "dividends":        dividends,
         "acquisitions":     acquisitions,

@@ -71,6 +71,9 @@ _DEFAULT_SCORE_CFG = {
         "bands": {"strong": 70, "mixed": 40},
         "sbc_thresholds": {"clean": 0.05, "heavy": 0.15},
     },
+    "physical_growth": {
+        "weights": {"ppe": 0.4, "employees": 0.3, "capex": 0.3},
+    },
     "management": {
         "smart_money": ["BERKSHIRE HATHAWAY", "BAILLIE GIFFORD", "FUNDSMITH",
                         "AKRE CAPITAL", "RUANE", "TCI FUND", "LONE PINE",
@@ -150,6 +153,10 @@ def _div(a, b):
 
 def _eps(v, cur: str = "USD") -> str:
     return "—" if _missing(v) else f"{de_dec(v, 2)} {cur}"
+
+
+def _abs_or(v):
+    return abs(v) if v is not None else None
 
 
 def _trend_ampel(vals, up: float = 0.5, down: float = -0.5):
@@ -2107,6 +2114,125 @@ def render_quality(ticker, n_years):
                "staerker. Eigenstaendig, nicht im Gesamt-Score.")
 
 
+# ---------- Physical Growth ----------
+
+def render_physical(ticker, n_years):
+    try:
+        with st.spinner(f"Lade {n_years} Jahresberichte fuer {ticker} …"):
+            rows = _load_year_metrics(ticker, n_years)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if len(rows) < 2:
+        st.warning(f"Mind. 2 Jahresberichte noetig — fuer **{ticker}** nur "
+                   f"{len(rows)} gefunden.")
+        st.stop()
+
+    cur = "USD"
+    last, first = rows[-1], rows[0]
+    st.markdown(
+        f"### {ticker} — Physical Growth Score  \n"
+        f"{len(rows)} GJ "
+        f"({str(first['period_end'])[:4]}–{str(last['period_end'])[:4]})")
+
+    dates = [pd.to_datetime(d["period_end"]) for d in rows]
+    span = (dates[-1] - dates[0]).days / 365.25
+
+    def _g(key):
+        a, b = first.get(key), last.get(key)
+        return _cagr(a, b, span)
+
+    g_ppe = _g("ppe_gross")
+    g_emp = _g("employees")
+    g_capex = _g("capex")
+
+    wts = SCORE_CFG["physical_growth"]["weights"]
+    comp = [("ppe", g_ppe), ("employees", g_emp), ("capex", g_capex)]
+    num = den = 0.0
+    for k, g in comp:
+        if g is not None:
+            num += wts[k] * g
+            den += wts[k]
+    index = (num / den) if den else None   # gewichtetes Wachstum p.a.
+
+    rev_emp_last = _div(last.get("revenue"), last.get("employees"))
+    rev_emp_first = _div(first.get("revenue"), first.get("employees"))
+
+    if index is not None:
+        st.markdown(f"## Physical Growth Index: {_pct(index)} p.a.")
+        st.caption("Gewichtetes Wachstum der physischen Basis "
+                   f"(PP&E {int(wts['ppe']*100)}%, Mitarbeiter "
+                   f"{int(wts['employees']*100)}%, CapEx "
+                   f"{int(wts['capex']*100)}%). Hoch = kapitalintensive "
+                   "Expansion; niedrig/negativ = kapitalleichtes Wachstum.")
+
+    m = st.columns(4)
+    m[0].metric("PP&E (brutto)", _money(last.get("ppe_gross"), cur),
+                delta=_pct(g_ppe) if g_ppe is not None else None,
+                delta_color="off")
+    m[1].metric("CapEx", _money(_abs_or(last.get("capex")), cur),
+                delta=_pct(g_capex) if g_capex is not None else None,
+                delta_color="off")
+    m[2].metric("Mitarbeiter",
+                de_int(last.get("employees")) if last.get("employees")
+                else "—",
+                delta=_pct(g_emp) if g_emp is not None else None,
+                delta_color="off")
+    m[3].metric("Umsatz / Mitarbeiter",
+                _money(rev_emp_last, cur) if rev_emp_last is not None
+                else "—",
+                delta=(_pct(_cagr(rev_emp_first, rev_emp_last, span))
+                       if (rev_emp_first and rev_emp_last) else None),
+                delta_color="off",
+                help="Produktivitaet: Umsatz je Mitarbeiter")
+
+    df = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "ppe": d.get("ppe_gross"),
+        "capex": _abs_or(d.get("capex")),
+        "employees": d.get("employees"),
+        "rev_emp": _div(d.get("revenue"), d.get("employees")),
+    } for d in rows])
+
+    st.markdown("#### Verlauf (10-K, jaehrlich)")
+    t1, t2 = st.columns(2)
+    f1 = go.Figure()
+    f1.add_trace(go.Bar(name="PP&E (brutto)", x=df["period_end"],
+                        y=df["ppe"], marker_color="#0F6E56"))
+    f1.add_trace(go.Bar(name="CapEx", x=df["period_end"], y=df["capex"],
+                        marker_color="#1D9E75"))
+    f1.update_layout(barmode="group", height=300,
+                     margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"PP&E & CapEx ({cur})", yaxis_title=cur,
+                     legend=dict(orientation="h", y=-0.2))
+    t1.plotly_chart(f1, use_container_width=True)
+
+    f2 = go.Figure(go.Bar(x=df["period_end"], y=df["employees"],
+                          marker_color="#B4862B"))
+    f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title="Mitarbeiter", yaxis_title="Anzahl")
+    t2.plotly_chart(f2, use_container_width=True)
+
+    if df["rev_emp"].notna().any():
+        f3 = go.Figure(go.Scatter(
+            x=df["period_end"], y=df["rev_emp"], mode="lines+markers",
+            line=dict(color="#444441", width=2), connectgaps=False,
+            hovertemplate="%{x|%Y-%m-%d}<br>%{y:,.0f}<extra></extra>"))
+        f3.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Umsatz / Mitarbeiter ({cur})",
+                         yaxis_title=cur)
+        st.plotly_chart(f3, use_container_width=True)
+
+    st.caption("PP&E brutto + CapEx aus dem Filing; Mitarbeiter aus "
+               "dei:EntityNumberOfEmployees (fehlt bei manchen Filern -> "
+               "Komponente ausgeklammert, Gewichte renormiert). Δ = CAGR "
+               "p.a. ueber den Zeitraum. Eigenstaendig, nicht im "
+               "Gesamt-Score.")
+
+
 # ---------- Gesamt-Score ----------
 
 # Anzeige-Label -> Config-Schluessel. Gewichte kommen aus SCORE_CFG.
@@ -2250,6 +2376,7 @@ _TOPICS = {
     "★ Gesamt-Score (alle 5 Themen)": render_score,
     "★ Moat-Score (6 Faktoren)": render_moat,
     "★ Earnings Quality Score (6 Faktoren)": render_quality,
+    "Physical Growth Score — PP&E, CapEx, Mitarbeiter": render_physical,
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,

@@ -77,6 +77,14 @@ earnings_quality:
 
 # Management: langfristige Quality-/Smart-Money-Manager (13F). Name-
 # Teilstrings (case-insensitive), die als 'Smart Money' zaehlen.
+# Physical Growth Index: gewichtetes Wachstum der physischen Basis.
+# Index = ppe*ΔPP&E + employees*ΔMitarbeiter + capex*ΔCapEx (CAGR p.a.).
+physical_growth:
+  weights:
+    ppe:        0.4
+    employees:  0.3
+    capex:      0.3
+
 management:
   smart_money:
     - "BERKSHIRE HATHAWAY"
