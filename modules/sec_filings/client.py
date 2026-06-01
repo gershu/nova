@@ -1113,6 +1113,61 @@ def fetch_insider_first_filing(ticker: str, owner_name: str,
     return None
 
 
+def find_latest_proxy(ticker: str) -> dict | None:
+    """Juengste DEF 14A (Proxy) mit Haupt-Dokument-URL."""
+    filings = _query_raw(f'ticker:{ticker} AND formType:"DEF 14A"', 1)
+    if not filings:
+        return None
+    f = filings[0]
+    docs = f.get("documentFormatFiles") or []
+    url = None
+    for d in docs:
+        if (d.get("type") or "").upper().startswith("DEF 14A"):
+            url = d.get("documentUrl"); break
+    if not url:                                  # Fallback: erstes HTML
+        for d in docs:
+            u = (d.get("documentUrl") or "")
+            if u.lower().endswith((".htm", ".html")):
+                url = u; break
+    return {"filed_at": f.get("filedAt"), "url": url,
+            "link": f.get("linkToFilingDetails")}
+
+
+def parse_beneficial_ownership(text: str) -> dict | None:
+    """Aus DEF-14A-Text die 'directors and officers as a group'-Zeile lesen.
+
+    Diese Zeile fasst die Management-Beteiligung exakt zusammen (Stueck +
+    %-Anteil). Returns {group_shares, group_pct} oder None.
+    """
+    low = (text or "").lower()
+    for m in re.finditer(r"as a group", low):
+        pre = low[max(0, m.start() - 140):m.start()]
+        if "director" not in pre and "officer" not in pre:
+            continue
+        seg = text[m.end():m.end() + 240]
+        sh = re.search(r"([\d][\d,]{3,})", seg)        # >= 4 Zeichen
+        shares = float(sh.group(1).replace(",", "")) if sh else None
+        pc = re.search(r"(\d{1,2}(?:\.\d+)?)\s*%", seg)
+        pct = float(pc.group(1)) / 100 if pc else None
+        if shares is not None or pct is not None:
+            return {"group_shares": shares, "group_pct": pct}
+    return None
+
+
+def fetch_beneficial_ownership(ticker: str) -> dict | None:
+    """DEF 14A laden + Management-Beteiligung (Gruppe) extrahieren."""
+    pr = find_latest_proxy(ticker)
+    if not pr or not pr.get("url"):
+        return None
+    text = fetch_exhibit_text(pr["url"])
+    res = parse_beneficial_ownership(text)
+    if res is None:
+        return None
+    res["filed_at"] = pr.get("filed_at")
+    res["link"] = pr.get("link")
+    return res
+
+
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:
     """8-K Item 5.02 (Abgang/Bestellung von Direktoren/Officers).
 

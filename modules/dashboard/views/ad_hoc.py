@@ -25,10 +25,10 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_exhibit_text, fetch_insider_first_filing,
-    fetch_insider_transactions, fetch_mgmt_changes, fetch_sbc_from_filing,
-    fetch_statements_from_filing, fetch_year_metrics_from_filing,
-    find_earnings_exhibits, find_filings,
+    fetch_beneficial_ownership, fetch_exhibit_text,
+    fetch_insider_first_filing, fetch_insider_transactions,
+    fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
+    fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
 )
 
 
@@ -227,6 +227,15 @@ def _load_insider(ticker: str):
 def _load_mgmt_changes(ticker: str):
     """8-K Item 5.02 Filings (Management-Wechsel)."""
     return fetch_mgmt_changes(ticker, n=50)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_beneficial(ticker: str):
+    """Exakte Management-Beteiligung aus der DEF 14A (Gruppe)."""
+    try:
+        return fetch_beneficial_ownership(ticker)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1650,8 +1659,14 @@ def render_management(ticker, n_years):
         insider_shares = float(agg["shares"].sum())
     else:
         mgmt_shares = insider_shares = 0.0
-    ownership = _div(mgmt_shares, total_shares)        # Management-Anteil
+    own_form4 = _div(mgmt_shares, total_shares)         # Form-4-Schaetzung
     ownership_all = _div(insider_shares, total_shares)  # alle Insider
+
+    # Exakter Wert aus DEF 14A (Gruppe Direktoren+Officers), wenn parsbar
+    bo = _load_beneficial(ticker)
+    own_def14a = bo.get("group_pct") if bo else None
+    ownership = own_def14a if own_def14a is not None else own_form4
+    own_source = "DEF 14A" if own_def14a is not None else "Form 4 (Schaetzung)"
 
     # Management-Turnover: 8-K Item 5.02 im Zeitfenster
     try:
@@ -1681,10 +1696,13 @@ def render_management(ticker, n_years):
     m[1].metric("CFO-Tenure",
                 f"{de_dec(cfo_ten, 1)} J" if cfo_ten is not None else "—",
                 help=f"Seit fruehestem Insider-Filing{(' · ' + cfo_name) if cfo_name else ''}")
-    m[2].metric("Insider Ownership (Mgmt)",
+    m[2].metric(f"Insider Ownership ({own_source})",
                 _pct(ownership) if ownership is not None else "—",
-                help="Σ Bestaende Officers/Direktoren / ausstehende Aktien. "
-                     f"Alle Insider inkl. 10%-Eigner: "
+                help="Management-Beteiligung (Direktoren + Officers als "
+                     "Gruppe). DEF 14A = exakte Proxy-Angabe; sonst Form-4-"
+                     f"Schaetzung. Form-4-Wert: "
+                     f"{_pct(own_form4) if own_form4 is not None else '—'} · "
+                     f"alle Insider: "
                      f"{_pct(ownership_all) if ownership_all is not None else '—'}")
     m[3].metric(f"Mgmt-Wechsel ({int(n_years)} J)",
                 str(turnover),
@@ -1718,15 +1736,17 @@ def render_management(ticker, n_years):
             } for _gid, r in top.iterrows()]),
                 use_container_width=True, hide_index=True)
 
+    bo_note = (f" Quelle DEF 14A vom {str(bo['filed_at'])[:10]}."
+               if bo and bo.get("group_pct") is not None else "")
     st.caption("Tenure approximiert ueber das frueheste Insider-Filing der "
                "aktuellen Person (per CIK; Form 3 ≈ Eintritt als Insider) — "
-               "nicht zwingend der Rollenbeginn. Insider Ownership: juengste "
-               "Form-4-Bestaende je Person (gruppiert ueber CIK), Management "
-               "= Officers/Direktoren; Nenner ausstehende Aktien (Fallback "
-               "verwaessert). Erfasst nur meldende Insider — ueber Trusts/"
-               "LLCs gehaltene Anteile koennen fehlen, daher eher Unter-"
-               "grenze. Turnover = 8-K Item 5.02 im Zeitfenster. "
-               "Eigenstaendig, nicht im Gesamt-Score.")
+               "nicht zwingend der Rollenbeginn. Insider Ownership: bevorzugt "
+               "die exakte 'directors and officers as a group'-Zeile der "
+               "DEF-14A-Beneficial-Ownership-Tabelle (inkl. indirekter "
+               "Bestaende ueber Trusts/LLCs); faellt sonst auf die Form-4-"
+               "Schaetzung (juengste Bestaende je CIK / ausstehende Aktien) "
+               "zurueck." + bo_note + " Turnover = 8-K Item 5.02 im "
+               "Zeitfenster. Eigenstaendig, nicht im Gesamt-Score.")
 
 
 # ---------- Earnings Quality Score ----------
