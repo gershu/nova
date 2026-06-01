@@ -327,6 +327,32 @@ def _load_prices(ticker: str, start_iso: str, end_iso: str) -> dict:
         return {}
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_splits(ticker: str) -> dict:
+    """Aktiensplits via yfinance -> {iso_date: ratio}. {} bei Fehler."""
+    try:
+        import yfinance as yf
+        s = yf.Ticker(ticker).splits
+        if s is None or len(s) == 0:
+            return {}
+        return {str(idx.date()): float(r) for idx, r in s.items()
+                if r and r > 0}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _split_factor(splits: dict, period_iso: str) -> float:
+    """Kumulierter Split-Faktor NACH period_iso (Anpassung auf heute).
+
+    z.B. 10:1-Split nach dem Stichtag -> Faktor 10: EPS/10, Aktien*10.
+    """
+    f = 1.0
+    for d, r in (splits or {}).items():
+        if d > period_iso:
+            f *= r
+    return f
+
+
 def _nearest_close(prices: dict, target_iso: str):
     """Schlusskurs am/letzten Handelstag <= target_iso (sonst frühester)."""
     if not prices:
@@ -1208,9 +1234,13 @@ def render_earnings(ticker, n_years):
                  ).date().isoformat()
     end_iso = date.today().isoformat()
     prices = _load_prices(ticker, start_iso, end_iso)
+    splits = _load_splits(ticker)            # fuer Split-Bereinigung
 
     def _ev(d, target_iso):
+        # Aktien split-bereinigt (yfinance-Kurse sind bereits bereinigt)
         sh, nd = d.get("diluted_shares"), d.get("net_debt")
+        if sh is not None:
+            sh *= _split_factor(splits, str(d["period_end"])[:10])
         px = _nearest_close(prices, target_iso)
         if px is None or sh in (None, 0):
             return None
@@ -1276,11 +1306,17 @@ def render_earnings(ticker, n_years):
                       "Marktkap. = EV − Net Debt.")
 
     if len(rows) >= 2:
+        def _adj_eps(d, key):
+            v = d.get(key)
+            if v is None:
+                return None
+            return v / _split_factor(splits, str(d["period_end"])[:10])
+
         df = pd.DataFrame([{
             "period_end": pd.to_datetime(d["period_end"]),
             "retained": d.get("retained_earnings"),
-            "eps_basic": d.get("eps_basic"),
-            "eps_diluted": d.get("eps_diluted"),
+            "eps_basic": _adj_eps(d, "eps_basic"),
+            "eps_diluted": _adj_eps(d, "eps_diluted"),
             "equity": d.get("equity"),
             "fcf": d.get("fcf"),
             "ev": ev_by_year.get(str(d["period_end"])[:10]),
@@ -1401,6 +1437,10 @@ def render_earnings(ticker, n_years):
             "EPS verw.": _eps(d.get("eps_diluted"), cur),
         } for d in rows]), use_container_width=True, hide_index=True)
 
+    if splits:
+        st.caption("Hinweis: EPS-Chart und EV sind split-bereinigt "
+                   f"({len(splits)} Split(s) erkannt); die Rohwerte-Tabelle "
+                   "zeigt die as-reported-Werte des jeweiligen Filings.")
     st.caption("Gewinnruecklagen, Eigenkapital als Bilanz-Stichtagswerte; "
                "Free Cash Flow = operativer Cashflow − CapEx; EPS aus der "
                "GuV. Enterprise Value mischt SEC-Fundamentaldaten mit "
