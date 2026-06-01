@@ -23,9 +23,10 @@ from datetime import date
 import requests
 
 
-QUERY_URL   = "https://api.sec-api.io"
-XBRL_URL    = "https://api.sec-api.io/xbrl-to-json"
-INSIDER_URL = "https://api.sec-api.io/insider-trading"
+QUERY_URL    = "https://api.sec-api.io"
+XBRL_URL     = "https://api.sec-api.io/xbrl-to-json"
+INSIDER_URL  = "https://api.sec-api.io/insider-trading"
+FORM13F_URL  = "https://api.sec-api.io/form-13f/holdings"
 
 
 class SecApiError(RuntimeError):
@@ -1220,6 +1221,69 @@ def fetch_beneficial_ownership_detail(ticker: str) -> dict:
                         "'directors/officers as a group'-Zeile nicht "
                         "gefunden")
     return out
+
+
+def _13f_match(h: dict, ticker: str) -> bool:
+    t = (h.get("ticker") or "").upper()
+    return t == ticker.upper()
+
+
+def _13f_shares(h: dict):
+    sp = h.get("shrsOrPrnAmt") or h.get("sharesOrPrincipalAmount") or {}
+    val = sp.get("sshPrnamt") if isinstance(sp, dict) else None
+    if val is None:
+        val = h.get("shares") or h.get("sshPrnamt")
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_institutional_holdings(ticker: str, *, n: int = 50) -> dict:
+    """Institutionelle 13F-Positionen im Wert (Best-effort, groesste Halter).
+
+    Form-13F-Holdings-Endpoint, gefiltert auf den Ticker. Returns
+    {holdings: [{manager, shares, value, period, filed_at}], error}.
+    Hinweis: keine Vollaggregation aller Filer (Kosten/Pagination) — eine
+    Stichprobe der zuletzt gemeldeten Positionen.
+    """
+    payload = {"query": f"holdings.ticker:{ticker}", "from": "0",
+               "size": str(min(int(n), 50)),
+               "sort": [{"filedAt": {"order": "desc"}}]}
+    try:
+        resp = requests.post(FORM13F_URL, json=payload,
+                             headers={"Authorization": _api_key()},
+                             timeout=30)
+    except requests.RequestException as e:
+        return {"holdings": [], "error": f"Request: {e}"}
+    if resp.status_code != 200:
+        return {"holdings": [],
+                "error": f"HTTP {resp.status_code}: {resp.text[:160]}"}
+    body = resp.json() or {}
+    recs = body.get("data") or body.get("filings") or body.get("holdings") \
+        or []
+    out: list[dict] = []
+    for rec in recs:
+        manager = (rec.get("companyName")
+                   or (rec.get("filer") or {}).get("name")
+                   or rec.get("managerName") or rec.get("name") or "—")
+        filed = rec.get("filedAt")
+        period = rec.get("periodOfReport")
+        hs = rec.get("holdings")
+        cand = hs if isinstance(hs, list) else [rec]
+        for h in cand:
+            if not isinstance(h, dict) or not _13f_match(h, ticker):
+                continue
+            try:
+                value = float(h.get("value")) if h.get("value") is not None \
+                    else None
+            except (TypeError, ValueError):
+                value = None
+            out.append({"manager": manager, "shares": _13f_shares(h),
+                        "value": value, "period": period,
+                        "filed_at": filed})
+    return {"holdings": out,
+            "error": None if out else "keine 13F-Positionen gefunden"}
 
 
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:

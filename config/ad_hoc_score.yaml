@@ -75,6 +75,25 @@ earnings_quality:
     clean: 0.05    # SBC/operativer CF <= clean -> voller Score
     heavy: 0.15    # > heavy -> 0 Punkte
 
+# Management: langfristige Quality-/Smart-Money-Manager (13F). Name-
+# Teilstrings (case-insensitive), die als 'Smart Money' zaehlen.
+management:
+  smart_money:
+    - "BERKSHIRE HATHAWAY"
+    - "BAILLIE GIFFORD"
+    - "FUNDSMITH"
+    - "AKRE CAPITAL"
+    - "RUANE"            # Sequoia / Ruane Cunniff
+    - "TCI FUND"
+    - "LONE PINE"
+    - "PRIMECAP"
+    - "CAPITAL RESEARCH" # Capital Group
+    - "T. ROWE PRICE"
+    - "T ROWE PRICE"
+    - "MARKEL"
+    - "TWEEDY"           # Tweedy Browne
+    - "DODGE & COX"
+
 # ---------------------------------------------------------------------
 # Moat-Score (eigenstaendig, separater Modus). Sechs Teil-Signale,
 # jedes 0..1; gewichteter Mittelwert -> 0-100. Nicht auswertbare

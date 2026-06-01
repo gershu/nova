@@ -26,7 +26,8 @@ from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
     fetch_beneficial_ownership_detail, fetch_exhibit_text,
-    fetch_insider_first_filing, fetch_insider_transactions,
+    fetch_institutional_holdings, fetch_insider_first_filing,
+    fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
     fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
     get_issuer_cik,
@@ -69,6 +70,12 @@ _DEFAULT_SCORE_CFG = {
                     "litigation": 0.15, "tax": 0.15, "one_time": 0.15},
         "bands": {"strong": 70, "mixed": 40},
         "sbc_thresholds": {"clean": 0.05, "heavy": 0.15},
+    },
+    "management": {
+        "smart_money": ["BERKSHIRE HATHAWAY", "BAILLIE GIFFORD", "FUNDSMITH",
+                        "AKRE CAPITAL", "RUANE", "TCI FUND", "LONE PINE",
+                        "PRIMECAP", "CAPITAL RESEARCH", "T. ROWE PRICE",
+                        "T ROWE PRICE", "MARKEL", "TWEEDY", "DODGE & COX"],
     },
     "moat": {
         "weights": {"gross_margin_trend": 0.22, "roic_stability": 0.22,
@@ -238,6 +245,15 @@ def _load_insider(ticker: str):
 def _load_mgmt_changes(ticker: str):
     """8-K Item 5.02 Filings (Management-Wechsel)."""
     return fetch_mgmt_changes(ticker, n=50)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_institutional(ticker: str):
+    """Institutionelle 13F-Positionen (Best-effort, groesste Halter)."""
+    try:
+        return fetch_institutional_holdings(ticker, n=50)
+    except Exception as e:  # noqa: BLE001
+        return {"holdings": [], "error": f"{e.__class__.__name__}: {e}"}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1748,6 +1764,83 @@ def render_management(ticker, n_years):
                                  if total_shares else "—"),
             } for _gid, r in top.iterrows()]),
                 use_container_width=True, hide_index=True)
+
+    # ---- Institutionelle Eigentuemer (13F) ------------------------------
+    st.markdown("#### Institutionelle Eigentuemer (13F)")
+    inst = _load_institutional(ticker)
+    ih = inst.get("holdings") if inst else []
+    if not ih:
+        st.info("Keine 13F-Positionen ermittelbar.")
+        with st.expander("13F — Diagnose"):
+            st.write({"Fehler": inst.get("error") if inst else "—"})
+    else:
+        idf = pd.DataFrame(ih)
+        idf = idf[idf["shares"].notna() & (idf["shares"] > 0)]
+        # je Manager die juengste Periode
+        idf["pdt"] = pd.to_datetime(idf["period"], errors="coerce")
+        idf = idf.sort_values("pdt")
+        latest_period = idf["pdt"].max()
+        cur_q = idf[idf["pdt"] == latest_period] if pd.notna(latest_period) \
+            else idf
+        cur_q = (cur_q.sort_values("shares", ascending=False)
+                 .drop_duplicates("manager"))
+        inst_shares = float(cur_q["shares"].sum())
+        top10 = cur_q.head(10)
+        top10_shares = float(top10["shares"].sum())
+
+        sm_list = [s.upper() for s in
+                   SCORE_CFG.get("management", {}).get("smart_money", [])]
+        sm_mask = cur_q["manager"].str.upper().apply(
+            lambda nm: any(s in nm for s in sm_list))
+        smart_shares = float(cur_q.loc[sm_mask, "shares"].sum())
+
+        inst_pct = _div(inst_shares, total_shares)
+        top10_pct = _div(top10_shares, total_shares)
+        smart_pct = _div(smart_shares, total_shares)
+
+        im = st.columns(3)
+        im[0].metric("Institutionell (Top-Sample)",
+                     _pct(inst_pct) if inst_pct is not None else "—",
+                     help=f"Σ {len(cur_q)} gemeldeter Positionen / "
+                          "ausstehende Aktien (Untergrenze, keine "
+                          "Vollaggregation)")
+        im[1].metric("Top-10-Anteil",
+                     _pct(top10_pct) if top10_pct is not None else "—",
+                     help="10 groesste 13F-Halter / ausstehende Aktien")
+        im[2].metric("Smart-Money-Anteil",
+                     _pct(smart_pct) if smart_pct is not None else "—",
+                     help="Langfrist-/Quality-Manager (config) / "
+                          "ausstehende Aktien")
+
+        # Trend: Top-Sample-Summe je Quartal
+        if idf["pdt"].nunique() >= 2 and total_shares:
+            per_q = (idf.sort_values("pdt")
+                     .drop_duplicates(["manager", "pdt"])
+                     .groupby("pdt")["shares"].sum().reset_index())
+            per_q["pct"] = per_q["shares"] / total_shares * 100
+            fig = go.Figure(go.Scatter(
+                x=per_q["pdt"], y=per_q["pct"], mode="lines+markers",
+                line=dict(color="#0F6E56", width=2),
+                hovertemplate="%{x|%Y-%m}<br>%{y:.1f}%<extra></extra>"))
+            fig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                              title="Institutioneller Anteil je Quartal "
+                                    "(Top-Sample, %)", yaxis_title="%")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("Groesste institutionelle Halter (13F)"):
+            st.dataframe(pd.DataFrame([{
+                "Manager": r["manager"],
+                "Aktien": de_int(r["shares"]),
+                "% ausstehend": (_pct(_div(r["shares"], total_shares))
+                                 if total_shares else "—"),
+                "Smart Money": ("✓" if any(s in r["manager"].upper()
+                                           for s in sm_list) else ""),
+            } for _i, r in top10.iterrows()]),
+                use_container_width=True, hide_index=True)
+        st.caption("13F-Positionen sind eine Stichprobe der zuletzt "
+                   "gemeldeten Halter (keine Vollaggregation aller Filer) — "
+                   "Anteile daher Untergrenze. 13F meldet mit bis zu 45 "
+                   "Tagen Verzug und nur Long-US-Positionen.")
 
     if bo and own_def14a is None:
         with st.expander("DEF-14A-Ownership — Diagnose"):
