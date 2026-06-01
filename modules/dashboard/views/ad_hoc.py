@@ -591,24 +591,86 @@ def render_returns(ticker, n_years):
             {"Posten": "Bilanzsumme", "Wert": _money(bs_l.total_assets, cur)},
         ]), use_container_width=True, hide_index=True)
 
-    # ---- FCF-Verwendung (Kapitalallokation) -----------------------------
-    st.markdown("#### FCF-Verwendung (Kapitalallokation)")
+    # ---- Owner Earnings + FCF-Verwendung (gemeinsamer Cashflow-Load) -----
     try:
-        with st.spinner("Lade Kapitalallokation …"):
+        with st.spinner("Lade Cashflow-Details …"):
             cap = _load_year_metrics(ticker, n_years)
     except SecApiError as e:
-        st.warning(f"Kapitalallokation nicht ladbar: {e}")
+        st.warning(f"Cashflow-Details nicht ladbar: {e}")
         cap = []
     except Exception:  # noqa: BLE001
         cap = []
 
     if not cap:
-        st.info("Keine Cashflow-Daten zur Kapitalallokation gefunden.")
+        st.info("Keine Cashflow-Daten gefunden.")
         return
 
     def _abs(v):
         return abs(v) if v is not None else None
 
+    # ---- Owner Earnings (Buffett): NI + D&A − Maintenance CapEx ----------
+    st.markdown("#### Owner Earnings (Buffett)")
+    _ratios = [(_abs(d.get("capex")) / d["revenue"]) for d in cap
+               if d.get("capex") is not None and d.get("revenue")]
+    _avg_cs = (sum(_ratios) / len(_ratios)) if _ratios else None
+    oe_series = []
+    _prev_rev = None
+    for d in cap:
+        ni, da = d.get("net_income"), d.get("dep_amort")
+        cx, rev = _abs(d.get("capex")), d.get("revenue")
+        maint = None
+        if cx is not None:
+            if _avg_cs is not None and _prev_rev is not None \
+                    and rev is not None:
+                growth = _avg_cs * max(0.0, rev - _prev_rev)
+                maint = min(cx, max(0.0, cx - growth))
+            else:
+                maint = cx          # erstes Jahr: konservativ volle CapEx
+        oe = (ni + (da or 0.0) - maint
+              if (ni is not None and maint is not None) else None)
+        oe_series.append({"period_end": pd.to_datetime(d["period_end"]),
+                          "oe": oe, "ni": ni, "fcf": d.get("fcf"),
+                          "maint": maint})
+        _prev_rev = rev
+
+    oel = oe_series[-1]
+    oe_margin = _div(oel["oe"], cap[-1].get("revenue"))
+    om = st.columns(4)
+    om[0].metric("Owner Earnings", _money(oel["oe"], cur),
+                 help="Nettogewinn + Abschreibungen (D&A) − Maintenance CapEx")
+    om[1].metric("OE-Marge", _pct(oe_margin) if oe_margin is not None
+                 else "—", help="Owner Earnings / Umsatz")
+    om[2].metric("Abschreibungen (D&A)",
+                 _money(cap[-1].get("dep_amort"), cur))
+    om[3].metric("Maintenance CapEx (gesch.)", _money(oel["maint"], cur),
+                 help="Greenwald-Schaetzung: Gesamt-CapEx − Wachstums-CapEx "
+                      "(Ø CapEx/Umsatz × Umsatzzuwachs)")
+
+    if len(oe_series) >= 2:
+        odf = pd.DataFrame(oe_series)
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Owner Earnings", x=odf["period_end"],
+                             y=odf["oe"], marker_color="#0F6E56"))
+        fig.add_trace(go.Scatter(name="Nettogewinn", x=odf["period_end"],
+                                 y=odf["ni"], mode="lines+markers",
+                                 line=dict(color="#A32D2D", width=2)))
+        fig.add_trace(go.Scatter(name="Free Cash Flow", x=odf["period_end"],
+                                 y=odf["fcf"], mode="lines+markers",
+                                 line=dict(color="#444441", width=2,
+                                           dash="dot")))
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=cur, legend=dict(orientation="h",
+                                                       y=-0.2),
+                          hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+    st.caption("Owner Earnings nach Buffett = Nettogewinn + Abschreibungen "
+               "(D&A) − Maintenance CapEx. Maintenance CapEx wird nicht "
+               "berichtet und per Greenwald-Methode geschaetzt (Gesamt-CapEx "
+               "− Wachstums-CapEx); im ersten Jahr konservativ volle CapEx. "
+               "Naeherung.")
+
+    # ---- FCF-Verwendung (Kapitalallokation) -----------------------------
+    st.markdown("#### FCF-Verwendung (Kapitalallokation)")
     cl = cap[-1]
     bb, dv = _abs(cl.get("buybacks")), _abs(cl.get("dividends"))
     cx, aq = _abs(cl.get("capex")), _abs(cl.get("acquisitions"))

@@ -787,6 +787,14 @@ _DIVIDENDS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends",
 _ACQUISITIONS = ["PaymentsToAcquireBusinessesNetOfCashAcquired",
                  "PaymentsToAcquireBusinessesAndInterestInAffiliates",
                  "PaymentsToAcquireBusinessesGross"]
+# Abschreibungen (D&A) — kombinierte Concepts zuerst, sonst Summe Einzeln.
+_DA = ["DepreciationDepletionAndAmortization",
+       "DepreciationAmortizationAndAccretionNet",
+       "DepreciationAndAmortization",
+       "DepreciationAmortizationAndDepletion"]
+_DEP_ONLY = ["Depreciation", "DepreciationNonproduction"]
+_AMORT_ONLY = ["AmortizationOfIntangibleAssets",
+               "AmortizationOfDeferredCharges"]
 
 
 def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
@@ -819,6 +827,14 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     dividends, _ = _pick(cf, _DIVIDENDS, period)
     acquisitions, _ = _pick(cf, _ACQUISITIONS, period)
 
+    # Abschreibungen (D&A) fuer Owner Earnings
+    dep_amort, _ = _pick(cf, _DA, period)
+    if dep_amort is None:
+        dep, _ = _pick(cf, _DEP_ONLY, period)
+        amort, _ = _pick(cf, _AMORT_ONLY, period)
+        if dep is not None or amort is not None:
+            dep_amort = (dep or 0.0) + (amort or 0.0)
+
     if inc is not None and inc.revenue is None and inc.net_income is None:
         return None
     return {
@@ -842,6 +858,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         "buybacks":         buybacks,
         "dividends":        dividends,
         "acquisitions":     acquisitions,
+        "dep_amort":        dep_amort,
     }
 
 
