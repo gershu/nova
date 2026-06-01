@@ -29,6 +29,7 @@ from modules.sec_filings.client import (
     fetch_insider_first_filing, fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
     fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
+    get_issuer_cik,
 )
 
 
@@ -217,10 +218,20 @@ def _load_returns(ticker: str, n_years: int):
     return rows
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _issuer_cik(ticker: str):
+    """Konstante Emittenten-CIK (faengt Ticker-Umbenennungen ab)."""
+    try:
+        return get_issuer_cik(ticker)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_insider(ticker: str):
-    """Flache Insider-Transaktionsliste (Form 3/4/5)."""
-    return fetch_insider_transactions(ticker, n=300)
+    """Flache Insider-Transaktionsliste (Form 3/4/5) — per issuer.cik."""
+    return fetch_insider_transactions(ticker, n=300,
+                                      issuer_cik=_issuer_cik(ticker))
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -242,7 +253,8 @@ def _load_beneficial(ticker: str):
 def _load_first_filing(ticker: str, owner: str, owner_cik=None):
     """Fruehestes Insider-Filing einer Person (Tenure-Beginn)."""
     try:
-        return fetch_insider_first_filing(ticker, owner, owner_cik)
+        return fetch_insider_first_filing(ticker, owner, owner_cik,
+                                          issuer_cik=_issuer_cik(ticker))
     except Exception:  # noqa: BLE001
         return None
 

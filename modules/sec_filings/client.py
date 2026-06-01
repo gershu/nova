@@ -1074,6 +1074,20 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
 _INSIDER_PAGE = 50          # API-Hardlimit fuer 'size'
 
 
+def get_issuer_cik(ticker: str) -> str | None:
+    """Konstante Emittenten-CIK zum Ticker (ueber die Query-API, die auch
+    historische Filings auf den heutigen Ticker mappt). Wichtig fuer
+    Ticker-Umbenennungen (z.B. FB -> META) im Insider-Endpoint."""
+    fil = _query_raw(f'ticker:{ticker}', 1)
+    return fil[0].get("cik") if fil else None
+
+
+def _issuer_query(ticker: str, issuer_cik) -> str:
+    if issuer_cik not in (None, "", 0):
+        return f'issuer.cik:{str(issuer_cik).lstrip("0") or "0"}'
+    return f'issuer.tradingSymbol:{ticker}'
+
+
 def _insider_first(query: str) -> str | None:
     payload = {"query": query, "from": "0", "size": "1",
                "sort": [{"filedAt": {"order": "asc"}}]}
@@ -1092,24 +1106,21 @@ def _insider_first(query: str) -> str | None:
 
 
 def fetch_insider_first_filing(ticker: str, owner_name: str,
-                               owner_cik=None) -> str | None:
+                               owner_cik=None, issuer_cik=None) -> str | None:
     """Fruehestes Insider-Filing (filedAt) einer Person beim Emittenten.
 
-    Bevorzugt die exakte CIK (robust); faellt auf den Namen zurueck.
-    Gezielte Abfrage (sort filedAt asc, size 1) — unabhaengig davon, wie
-    weit das juengste Fenster zurueckreicht. None, wenn kein Treffer.
+    Emittent per issuer.cik (faengt Ticker-Umbenennungen ab); Person per
+    exakter CIK, sonst Name. Gezielte Abfrage (sort filedAt asc, size 1).
     """
+    iq = _issuer_query(ticker, issuer_cik)
     if owner_cik not in (None, "", 0):
         cik = str(owner_cik).lstrip("0") or "0"
-        res = _insider_first(
-            f'issuer.tradingSymbol:{ticker} AND reportingOwner.cik:{cik}')
+        res = _insider_first(f'{iq} AND reportingOwner.cik:{cik}')
         if res:
             return res
     if owner_name and owner_name != "—":
         safe = owner_name.replace('"', " ").strip()
-        return _insider_first(
-            f'issuer.tradingSymbol:{ticker} AND '
-            f'reportingOwner.name:"{safe}"')
+        return _insider_first(f'{iq} AND reportingOwner.name:"{safe}"')
     return None
 
 
@@ -1179,21 +1190,23 @@ def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:
              "accession_no": f.get("accessionNo")} for f in filings]
 
 
-def fetch_insider_transactions(ticker: str, *, n: int = 300) -> list[dict]:
+def fetch_insider_transactions(ticker: str, *, n: int = 300,
+                               issuer_cik=None) -> list[dict]:
     """Bis zu N juengste Form-3/4/5-Records -> flache Transaktionsliste.
 
-    Der Insider-Endpoint erlaubt max. size=50 pro Request; daher wird in
-    50er-Schritten ueber 'from' paginiert. Leere Liste, wenn keine
-    Insider-Filings vorliegen (z.B. ETFs, nicht US-gelistete Werte).
+    Emittent per issuer.cik (faengt Ticker-Umbenennungen wie FB->META ab),
+    sonst per tradingSymbol. Der Endpoint erlaubt max. size=50 pro Request;
+    daher 50er-Paging ueber 'from'. Leere Liste, wenn keine Filings.
     """
     rows: list[dict] = []
     fetched = 0
     target = max(1, int(n))
     auth = {"Authorization": _api_key()}
+    iq = _issuer_query(ticker, issuer_cik)
     while fetched < target:
         page = min(_INSIDER_PAGE, target - fetched)
         payload = {
-            "query": f"issuer.tradingSymbol:{ticker}",
+            "query": iq,
             "from":  str(fetched),
             "size":  str(page),
             "sort":  [{"filedAt": {"order": "desc"}}],
