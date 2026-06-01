@@ -741,10 +741,10 @@ def render_returns(ticker, n_years):
     ]
     m = st.columns(4)
     for col, (key, label, helptext) in zip(m, _specs):
-        cur, slope, emoji, dc = _trend_ampel([r[key] for r in _allret])
+        cv, slope, emoji, dc = _trend_ampel([r[key] for r in _allret])
         col.metric(
             f"{emoji} {label}",
-            _pct(cur) if cur is not None else "—",
+            _pct(cv) if cv is not None else "—",
             delta=(f"{slope:+.1f} pp/J" if slope is not None else None),
             delta_color=dc, help=helptext)
     st.caption("Trendampel: aktueller Wert + lineare Steigung in %-Punkten "
