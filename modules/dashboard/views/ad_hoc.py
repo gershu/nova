@@ -18,9 +18,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from modules.dashboard.components.format import _missing, de_dec, de_int
+from datetime import date, timedelta
+
 from modules.sec_filings.client import (
-    SecApiError, fetch_balance_sheet_from_filing,
-    fetch_statements_from_filing, find_filings,
+    INSIDER_CODE_LABELS, SecApiError, fetch_balance_sheet_from_filing,
+    fetch_insider_transactions, fetch_statements_from_filing, find_filings,
 )
 
 
@@ -97,6 +99,12 @@ def _load_returns(ticker: str, n_years: int):
             rows.append((inc, bs))
     rows.sort(key=lambda t: t[0].period_end or "")
     return rows
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_insider(ticker: str):
+    """Flache Insider-Transaktionsliste (Form 3/4/5)."""
+    return fetch_insider_transactions(ticker, n=300)
 
 
 # ---------- Kennzahlen ----------
@@ -331,6 +339,103 @@ def render_returns(ticker, n_years):
         ]), use_container_width=True, hide_index=True)
 
 
+def render_insider(ticker, n_years):
+    try:
+        with st.spinner(f"Lade Insider-Filings fuer {ticker} …"):
+            tx = _load_insider(ticker)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if not tx:
+        st.warning(f"Keine Insider-Filings (Form 3/4/5) fuer **{ticker}** "
+                   "gefunden.")
+        st.stop()
+
+    cutoff = (date.today() - timedelta(days=int(n_years) * 365)).isoformat()
+    df = pd.DataFrame(tx)
+    df = df[df["transaction_date"] >= cutoff]
+    st.markdown(
+        f"### {ticker} — Insider Buy / Sell  \n"
+        f"Lookback **{int(n_years)} J** · {len(df)} Transaktionen "
+        f"(Markt-Trades P/S davon hervorgehoben)")
+    if df.empty:
+        st.info("Keine Transaktionen im gewaehlten Zeitraum.")
+        st.stop()
+
+    buys = df[df["code"] == "P"]
+    sells = df[df["code"] == "S"]
+    buy_val = float(buys["value"].fillna(0).sum())
+    sell_val = float(sells["value"].fillna(0).sum())
+    net_val = buy_val - sell_val
+    n_buyers = buys["owner"].nunique()
+    n_sellers = sells["owner"].nunique()
+
+    checks = [
+        ("Netto-Insiderkaeufe (Wert)", net_val > 0),
+        ("Mehr Kaeufer als Verkaeufer", n_buyers > n_sellers),
+        ("Cluster-Kauf (>= 3 Kaeufer)", n_buyers >= 3),
+    ]
+    _verdict_box(checks, strong="bullisch (Insider kaufen)",
+                 mixed="neutral / gemischt",
+                 weak="bearisch (Insider verkaufen)",
+                 lead="Insider-Signal")
+
+    m = st.columns(4)
+    m[0].metric("Kaeufe (Markt, P)", _money(buy_val),
+                help=f"{len(buys)} Transaktionen · {n_buyers} Personen")
+    m[1].metric("Verkaeufe (Markt, S)", _money(sell_val),
+                help=f"{len(sells)} Transaktionen · {n_sellers} Personen")
+    m[2].metric("Netto", _money(net_val),
+                delta=("Kaufüberhang" if net_val > 0 else "Verkaufüberhang"))
+    m[3].metric("Kaeufer / Verkaeufer", f"{n_buyers} / {n_sellers}")
+
+    # Monatlicher Netto-Wert (nur P/S)
+    ps = df[df["code"].isin(["P", "S"])].copy()
+    if not ps.empty:
+        ps["month"] = pd.to_datetime(ps["transaction_date"]).dt.to_period(
+            "M").dt.to_timestamp()
+        ps["signed"] = ps.apply(
+            lambda r: (r["value"] or 0) * (1 if r["code"] == "P" else -1),
+            axis=1)
+        monthly = ps.groupby("month")["signed"].sum().reset_index()
+        st.markdown("#### Netto Insider-Flow je Monat (P − S)")
+        colors = ["#1D9E75" if v >= 0 else "#A32D2D"
+                  for v in monthly["signed"]]
+        fig = go.Figure(go.Bar(
+            x=monthly["month"], y=monthly["signed"], marker_color=colors,
+            hovertemplate="%{x|%Y-%m}<br>Netto: %{y:,.0f}<extra></extra>"))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title="USD", bargap=0.2)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("#### Letzte Markt-Transaktionen (P/S)")
+    show = (df[df["code"].isin(["P", "S"])]
+            .sort_values("transaction_date", ascending=False).head(25))
+    if show.empty:
+        st.caption("Keine offenen Markt-Trades (P/S) im Zeitraum — nur "
+                   "Awards/Ausuebungen/Steuereinbehalte.")
+    else:
+        tbl = pd.DataFrame({
+            "Datum": show["transaction_date"],
+            "Person": show["owner"],
+            "Funktion": show["relationship"],
+            "Art": show["code"].map(INSIDER_CODE_LABELS).fillna(show["code"]),
+            "Stueck": show["shares"].map(
+                lambda v: de_int(v) if not _missing(v) else "—"),
+            "Preis": show["price"].map(
+                lambda v: _money(v) if not _missing(v) else "—"),
+            "Wert": show["value"].map(lambda v: _money(v)),
+        })
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    st.caption("Nur P (Markt-Kauf) und S (Markt-Verkauf) gelten als "
+               "diskretionaeres Signal. Awards (A), Ausuebungen (M), "
+               "Steuereinbehalte (F), Schenkungen (G) sind ausgeklammert.")
+
+
 # =====================================================================
 # Seite
 # =====================================================================
@@ -343,18 +448,21 @@ st.caption(
 _TOPICS = {
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
-    "Insider Sales / Buys (in Arbeit)": None,
+    "Insider Sales / Buys — Form 3/4/5": render_insider,
     "Stock-based Compensation (in Arbeit)": None,
     "GAAP vs non-GAAP (in Arbeit)": None,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))
 
+_yr_label = ("Lookback (Jahre)" if _topic.startswith("Insider")
+             else "Jahre (10-K)")
 _c1, _c2 = st.columns([3, 1])
 _ticker = _c1.text_input(
     "Ticker (US-gelistet, EDGAR)", value="",
     placeholder="z. B. AAPL, MSFT, NVDA").strip().upper()
-_n_years = _c2.number_input("Jahre (10-K)", min_value=2, max_value=10,
-                            value=5, step=1)
+_n_years = _c2.number_input(_yr_label, min_value=1, max_value=10,
+                            value=3 if _topic.startswith("Insider") else 5,
+                            step=1)
 st.button("Analysieren", type="primary", disabled=not _ticker)
 
 _render = _TOPICS[_topic]

@@ -23,8 +23,9 @@ from datetime import date
 import requests
 
 
-QUERY_URL = "https://api.sec-api.io"
-XBRL_URL  = "https://api.sec-api.io/xbrl-to-json"
+QUERY_URL   = "https://api.sec-api.io"
+XBRL_URL    = "https://api.sec-api.io/xbrl-to-json"
+INSIDER_URL = "https://api.sec-api.io/insider-trading"
 
 
 class SecApiError(RuntimeError):
@@ -569,3 +570,105 @@ def fetch_statements_from_filing(
             bs = None
 
     return inc, bs
+
+
+# ---------- Insider Trading (Form 3/4/5) ----------
+
+# Transaktions-Codes (SEC Form 4): die diskretionaeren Markt-Trades sind
+# P (Kauf) und S (Verkauf). A/M/F/G/C sind Awards, Ausuebungen, Steuer-
+# einbehalte, Schenkungen, Wandlungen — kein echtes Buy/Sell-Signal.
+INSIDER_CODE_LABELS = {
+    "P": "Kauf (Markt)",
+    "S": "Verkauf (Markt)",
+    "A": "Zuteilung/Grant",
+    "M": "Optionsausuebung",
+    "F": "Steuereinbehalt",
+    "G": "Schenkung",
+    "C": "Wandlung",
+    "D": "Rueckgabe an Emittent",
+}
+
+
+def _relationship_label(rel: dict | None) -> str:
+    if not isinstance(rel, dict):
+        return "—"
+    parts = []
+    if rel.get("isDirector"):
+        parts.append("Director")
+    if rel.get("isOfficer"):
+        parts.append(rel.get("officerTitle") or "Officer")
+    if rel.get("isTenPercentOwner"):
+        parts.append("10%-Eigner")
+    if rel.get("isOther") and not parts:
+        parts.append(rel.get("otherText") or "Sonstige")
+    return ", ".join(parts) if parts else "—"
+
+
+def _flatten_insider_record(rec: dict) -> list[dict]:
+    """Ein Form-4-Record -> flache Transaktionszeilen (non-deriv + deriv)."""
+    owner = rec.get("reportingOwner") or {}
+    owner_name = owner.get("name") or "—"
+    rel = _relationship_label(owner.get("relationship"))
+    filed_at = rec.get("filedAt")
+    out: list[dict] = []
+    for tbl_key, is_deriv in (("nonDerivativeTable", False),
+                              ("derivativeTable", True)):
+        tbl = rec.get(tbl_key) or {}
+        for tx in (tbl.get("transactions") or []):
+            coding = tx.get("coding") or {}
+            amounts = tx.get("amounts") or {}
+            try:
+                shares = float(amounts.get("shares")) \
+                    if amounts.get("shares") is not None else None
+            except (TypeError, ValueError):
+                shares = None
+            try:
+                price = float(amounts.get("pricePerShare")) \
+                    if amounts.get("pricePerShare") is not None else None
+            except (TypeError, ValueError):
+                price = None
+            value = (shares * price
+                     if shares is not None and price is not None else None)
+            out.append({
+                "filed_at":      filed_at,
+                "owner":         owner_name,
+                "relationship":  rel,
+                "transaction_date": (tx.get("transactionDate") or "")[:10],
+                "code":          coding.get("code"),
+                "shares":        shares,
+                "price":         price,
+                "value":         value,
+                "acquired_disposed": amounts.get("acquiredDisposedCode"),
+                "security":      tx.get("securityTitle"),
+                "derivative":    is_deriv,
+            })
+    return out
+
+
+def fetch_insider_transactions(ticker: str, *, n: int = 300) -> list[dict]:
+    """Bis zu N juengste Form-3/4/5-Records -> flache Transaktionsliste.
+
+    Leere Liste, wenn keine Insider-Filings vorliegen (z.B. ETFs, nicht
+    US-gelistete Werte).
+    """
+    payload = {
+        "query": f"issuer.tradingSymbol:{ticker}",
+        "from":  "0",
+        "size":  str(max(1, min(int(n), 1000))),
+        "sort":  [{"filedAt": {"order": "desc"}}],
+    }
+    try:
+        resp = requests.post(
+            INSIDER_URL, json=payload,
+            headers={"Authorization": _api_key()}, timeout=30)
+    except requests.RequestException as e:
+        raise SecApiError(f"Insider-API-Request fehlgeschlagen: {e}") from e
+    if resp.status_code != 200:
+        raise SecApiError(
+            f"Insider-API HTTP {resp.status_code}: {resp.text[:200]}")
+    body = resp.json() or {}
+    records = body.get("transactions") or body.get("data") or []
+    rows: list[dict] = []
+    for rec in records:
+        rows.extend(_flatten_insider_record(rec))
+    return rows
