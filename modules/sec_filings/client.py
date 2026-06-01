@@ -336,6 +336,134 @@ def extract_revenue_segments(stmt: dict, period_end: str,
     return list(seen.values())
 
 
+# ---------- Bilanz (Balance Sheet) ----------
+
+_CASH        = ["CashAndCashEquivalentsAtCarryingValue",
+                "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents"]
+_STI         = ["ShortTermInvestments", "MarketableSecuritiesCurrent",
+                "AvailableForSaleSecuritiesCurrent"]
+_ASSETS_CUR  = ["AssetsCurrent"]
+_LIAB_CUR    = ["LiabilitiesCurrent"]
+_ASSETS      = ["Assets"]
+_LIAB        = ["Liabilities"]
+_EQUITY      = ["StockholdersEquity",
+                "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest"]
+_LT_DEBT     = ["LongTermDebtNoncurrent", "LongTermDebt"]
+_CUR_DEBT    = ["LongTermDebtCurrent", "DebtCurrent", "ShortTermBorrowings"]
+_INVENTORY   = ["InventoryNet"]
+_GOODWILL    = ["Goodwill"]
+_INTANGIBLES = ["IntangibleAssetsNetExcludingGoodwill",
+                "FiniteLivedIntangibleAssetsNet"]
+
+
+@dataclass
+class BalanceSheet:
+    """Bilanz-Kernzeilen eines Filings — Stichtagswerte (instant)."""
+    period_end:    str | None = None
+    form_type:     str | None = None
+    accession_no:  str | None = None
+    filed_at:      str | None = None
+    currency:      str = "USD"
+
+    cash:                  float | None = None
+    short_term_invest:     float | None = None
+    assets_current:        float | None = None
+    liabilities_current:   float | None = None
+    total_assets:          float | None = None
+    total_liabilities:     float | None = None
+    equity:                float | None = None
+    long_term_debt:        float | None = None
+    current_debt:          float | None = None
+    inventory:             float | None = None
+    goodwill:              float | None = None
+    intangibles:           float | None = None
+
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def cash_and_sti(self) -> float | None:
+        vals = [v for v in (self.cash, self.short_term_invest)
+                if v is not None]
+        return sum(vals) if vals else None
+
+    @property
+    def total_debt(self) -> float | None:
+        vals = [v for v in (self.long_term_debt, self.current_debt)
+                if v is not None]
+        return sum(vals) if vals else None
+
+    @property
+    def net_debt(self) -> float | None:
+        td, cash = self.total_debt, self.cash_and_sti
+        if td is None:
+            return None
+        return td - (cash or 0.0)
+
+
+def _pick_instant(stmt: dict, concepts: list[str],
+                  period_end: str) -> float | None:
+    """Erster Treffer eines Concepts zum Stichtag (instant ODER endDate).
+
+    Bilanzfakten tragen meist period={'instant': date}; manche Filings
+    nutzen endDate. Segment-dimensionierte Fakten werden ignoriert.
+    """
+    for c in concepts:
+        for fct in stmt.get(c, []) or []:
+            if fct.get("segment"):
+                continue
+            p = fct.get("period") or {}
+            if (p.get("instant") or p.get("endDate")) != period_end:
+                continue
+            try:
+                return float(fct["value"])
+            except (KeyError, TypeError, ValueError):
+                continue
+    return None
+
+
+def map_balance_sheet(stmt: dict, period_end: str) -> BalanceSheet:
+    """BalanceSheets-dict -> BalanceSheet mit Kernzeilen zum Stichtag."""
+    bs = BalanceSheet(period_end=period_end)
+    bs.cash                = _pick_instant(stmt, _CASH,       period_end)
+    bs.short_term_invest   = _pick_instant(stmt, _STI,        period_end)
+    bs.assets_current      = _pick_instant(stmt, _ASSETS_CUR, period_end)
+    bs.liabilities_current = _pick_instant(stmt, _LIAB_CUR,   period_end)
+    bs.total_assets        = _pick_instant(stmt, _ASSETS,     period_end)
+    bs.total_liabilities   = _pick_instant(stmt, _LIAB,       period_end)
+    bs.equity              = _pick_instant(stmt, _EQUITY,     period_end)
+    bs.long_term_debt      = _pick_instant(stmt, _LT_DEBT,    period_end)
+    bs.current_debt        = _pick_instant(stmt, _CUR_DEBT,   period_end)
+    bs.inventory           = _pick_instant(stmt, _INVENTORY,  period_end)
+    bs.goodwill            = _pick_instant(stmt, _GOODWILL,   period_end)
+    bs.intangibles         = _pick_instant(stmt, _INTANGIBLES, period_end)
+
+    # Ableitung: Gesamtverbindlichkeiten aus Aktiva - Eigenkapital
+    if bs.total_liabilities is None and \
+            bs.total_assets is not None and bs.equity is not None:
+        bs.total_liabilities = bs.total_assets - bs.equity
+        bs.warnings.append(
+            "total_liabilities abgeleitet (assets - equity)")
+    return bs
+
+
+def fetch_balance_sheet_from_filing(filing: dict) -> BalanceSheet | None:
+    """Aus einem Filing-Record (find_filings-Output) die Bilanz holen."""
+    if not filing or not filing.get("accession_no") \
+            or not filing.get("period_of_report"):
+        return None
+    xbrl = fetch_xbrl(filing["accession_no"])
+    stmt = xbrl.get("BalanceSheets") or {}
+    if not stmt:
+        return None
+    bs = map_balance_sheet(stmt, filing["period_of_report"])
+    bs.accession_no = filing["accession_no"]
+    bs.form_type    = filing["form_type"]
+    bs.filed_at     = filing["filed_at"]
+    if bs.total_assets is None and bs.equity is None:
+        return None
+    return bs
+
+
 def map_income_statement(stmt: dict, period_end: str) -> IncomeStatement:
     """StatementsOfIncome-dict -> IncomeStatement mit GuV-Kernzeilen."""
     inc = IncomeStatement(period_end=period_end)

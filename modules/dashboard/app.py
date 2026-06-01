@@ -61,6 +61,9 @@ nav = st.navigation({
         st.Page("views/action_items.py",    title="Action Items",     icon="🎯"),
         st.Page("views/decision_journal.py", title="Decision Journal", icon="📓"),
     ],
+    "Ad-Hoc": [
+        st.Page("views/ad_hoc.py",          title="Ad-Hoc Analysis", icon="🧭"),
+    ],
     "Markt & Signale": [
         st.Page("views/marktlage.py",       title="Marktlage",    icon="🌡"),
         st.Page("views/alerts.py",          title="Alerts",       icon="🔔"),
