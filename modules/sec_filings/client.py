@@ -530,3 +530,42 @@ def fetch_income(ticker: str) -> IncomeStatement | None:
     if not filing:
         return None
     return fetch_income_from_filing(filing)
+
+
+def fetch_statements_from_filing(
+    filing: dict,
+) -> tuple[IncomeStatement | None, BalanceSheet | None]:
+    """GuV + Bilanz aus EINEM XBRL-Call (spart API-Aufrufe).
+
+    Returns (income, balance) — jeweils None, wenn die Sektion fehlt oder
+    keine verwertbaren Pflichtfelder enthaelt.
+    """
+    if not filing or not filing.get("accession_no") \
+            or not filing.get("period_of_report"):
+        return None, None
+    xbrl = fetch_xbrl(filing["accession_no"])
+    period = filing["period_of_report"]
+
+    inc = None
+    inc_stmt = xbrl.get("StatementsOfIncome") or {}
+    if inc_stmt:
+        inc = map_income_statement(inc_stmt, period)
+        inc.accession_no = filing["accession_no"]
+        inc.form_type    = filing["form_type"]
+        inc.filed_at     = filing["filed_at"]
+        inc.segments     = extract_revenue_segments(
+            inc_stmt, period, inc.period_months)
+        if inc.revenue is None and inc.net_income is None:
+            inc = None
+
+    bs = None
+    bs_stmt = xbrl.get("BalanceSheets") or {}
+    if bs_stmt:
+        bs = map_balance_sheet(bs_stmt, period)
+        bs.accession_no = filing["accession_no"]
+        bs.form_type    = filing["form_type"]
+        bs.filed_at     = filing["filed_at"]
+        if bs.total_assets is None and bs.equity is None:
+            bs = None
+
+    return inc, bs
