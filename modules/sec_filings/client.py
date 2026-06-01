@@ -794,6 +794,39 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
 
 # ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
 
+def fetch_concept_series(cik, taxonomy: str, tag: str) -> dict:
+    """XBRL-Zeitreihe via SEC company-concept-API (10-K-Kontexte).
+
+    Returns {end_date_iso: wert}. {} bei Fehler/404. Robuste Quelle, wenn
+    xbrl-to-json ein Konzept nicht (mehr) am erwarteten Ort fuehrt.
+    """
+    if cik in (None, "", 0):
+        return {}
+    c10 = str(cik).lstrip("0").zfill(10)
+    url = (f"https://data.sec.gov/api/xbrl/companyconcept/CIK{c10}"
+           f"/{taxonomy}/{tag}.json")
+    try:
+        resp = requests.get(url, headers={
+            "User-Agent": _SEC_UA, "Accept-Encoding": "gzip, deflate",
+            "Host": "data.sec.gov"}, timeout=30)
+    except requests.RequestException:
+        return {}
+    if resp.status_code != 200:
+        return {}
+    units = (resp.json() or {}).get("units") or {}
+    out: dict = {}
+    for items in units.values():
+        for it in items or []:
+            end, val, form = it.get("end"), it.get("val"), it.get("form", "")
+            if end is None or val is None or "10-K" not in (form or ""):
+                continue
+            try:
+                out[end] = float(val)
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
 def fetch_employee_counts_detail(cik) -> dict:
     """dei:EntityNumberOfEmployees-Zeitreihe via SEC company-concept-API,
     mit Diagnose. Returns {map, url, status, error}."""

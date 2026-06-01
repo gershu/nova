@@ -29,8 +29,8 @@ from modules.sec_filings.client import (
     fetch_exhibit_text, fetch_institutional_holdings,
     fetch_insider_first_filing, fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
-    fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
-    get_issuer_cik,
+    fetch_year_metrics_from_filing, fetch_concept_series,
+    find_earnings_exhibits, find_filings, get_issuer_cik,
 )
 from modules.sec_filings.extractor import fetch_employees_from_filing
 
@@ -342,6 +342,34 @@ def _load_employees(ticker: str) -> dict:
         return fetch_employee_counts_detail(_issuer_cik(ticker))
     except Exception as e:  # noqa: BLE001
         return {"map": {}, "error": f"{e.__class__.__name__}: {e}"}
+
+
+def _series_at(m: dict, period_iso: str, tol_days: int = 45):
+    """Wert einer {end_iso: val}-Reihe zum Stichtag (exakt, sonst naechster
+    innerhalb tol_days)."""
+    if not m:
+        return None
+    if period_iso in m:
+        return m[period_iso]
+    pe = pd.to_datetime(period_iso)
+    best, bestdiff = None, 10 ** 9
+    for d, v in m.items():
+        diff = abs((pd.to_datetime(d) - pe).days)
+        if diff < bestdiff:
+            bestdiff, best = diff, v
+    return best if bestdiff <= tol_days else None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_ppe_series(ticker: str) -> dict:
+    """PP&E-Zeitreihe (us-gaap) via company-concept — robuster als
+    xbrl-to-json. Net bevorzugt (Bilanz-Face), sonst Gross."""
+    cik = _issuer_cik(ticker)
+    m = fetch_concept_series(cik, "us-gaap", "PropertyPlantAndEquipmentNet")
+    if not m:
+        m = fetch_concept_series(cik, "us-gaap",
+                                 "PropertyPlantAndEquipmentGross")
+    return m
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2150,22 +2178,19 @@ def render_physical(ticker, n_years):
                    f"{len(rows)} gefunden.")
         st.stop()
 
+    # PP&E robust aus company-concept (xbrl-to-json fuehrt es bei manchen
+    # Filern wie INTC ab gewissen Jahren nicht mehr am erwarteten Ort).
+    ppe_map = _load_ppe_series(ticker)
+    if ppe_map:
+        rows = [dict(d, ppe_gross=(_series_at(ppe_map, str(d["period_end"])[:10])
+                                   or d.get("ppe_gross"))) for d in rows]
+
     # Mitarbeiterzahl separat aus der SEC company-concept-API (nicht im
     # xbrl-to-json), je Jahr per Stichtag zuordnen.
     emp_detail = _load_employees(ticker)
     emp_map = emp_detail.get("map") or {}
     if emp_map:
-        def _emp_for(period_iso):
-            if period_iso in emp_map:
-                return emp_map[period_iso]
-            pe = pd.to_datetime(period_iso)
-            best, bestdiff = None, 999
-            for d, v in emp_map.items():
-                diff = abs((pd.to_datetime(d) - pe).days)
-                if diff < bestdiff:
-                    bestdiff, best = diff, v
-            return best if bestdiff <= 45 else None
-        rows = [dict(d, employees=(_emp_for(str(d["period_end"])[:10])
+        rows = [dict(d, employees=(_series_at(emp_map, str(d["period_end"])[:10])
                                    or d.get("employees"))) for d in rows]
 
     # Fallback: Mitarbeiterzahl aus 10-K Item 1 (Text), wenn nicht XBRL-
@@ -2215,7 +2240,7 @@ def render_physical(ticker, n_years):
                    "Expansion; niedrig/negativ = kapitalleichtes Wachstum.")
 
     m = st.columns(4)
-    m[0].metric("PP&E (brutto)", _money(last.get("ppe_gross"), cur),
+    m[0].metric("PP&E", _money(last.get("ppe_gross"), cur),
                 delta=_pct(g_ppe) if g_ppe is not None else None,
                 delta_color="off")
     m[1].metric("CapEx", _money(_abs_or(last.get("capex")), cur),
@@ -2245,7 +2270,7 @@ def render_physical(ticker, n_years):
     st.markdown("#### Verlauf (10-K, jaehrlich)")
     t1, t2 = st.columns(2)
     f1 = go.Figure()
-    f1.add_trace(go.Bar(name="PP&E (brutto)", x=df["period_end"],
+    f1.add_trace(go.Bar(name="PP&E", x=df["period_end"],
                         y=df["ppe"], marker_color="#0F6E56"))
     f1.add_trace(go.Bar(name="CapEx", x=df["period_end"], y=df["capex"],
                         marker_color="#1D9E75"))
@@ -2276,7 +2301,10 @@ def render_physical(ticker, n_years):
             st.write({"URL": emp_detail.get("url"),
                       "Status": emp_detail.get("status"),
                       "Fehler": emp_detail.get("error")})
-    st.caption("PP&E brutto + CapEx aus dem Filing; Mitarbeiter aus "
+    st.caption("PP&E aus der SEC company-concept-API (us-gaap, "
+               "Net/face bevorzugt — robuster als xbrl-to-json, das es bei "
+               "manchen Filern ab gewissen Jahren nicht mehr fuehrt); CapEx "
+               "aus dem Filing; Mitarbeiter aus "
                "dei:EntityNumberOfEmployees (fehlt bei manchen Filern -> "
                "Komponente ausgeklammert, Gewichte renormiert). Δ = CAGR "
                "p.a. ueber den Zeitraum. Eigenstaendig, nicht im "
