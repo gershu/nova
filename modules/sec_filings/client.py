@@ -645,30 +645,44 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
     return out
 
 
+_INSIDER_PAGE = 50          # API-Hardlimit fuer 'size'
+
+
 def fetch_insider_transactions(ticker: str, *, n: int = 300) -> list[dict]:
     """Bis zu N juengste Form-3/4/5-Records -> flache Transaktionsliste.
 
-    Leere Liste, wenn keine Insider-Filings vorliegen (z.B. ETFs, nicht
-    US-gelistete Werte).
+    Der Insider-Endpoint erlaubt max. size=50 pro Request; daher wird in
+    50er-Schritten ueber 'from' paginiert. Leere Liste, wenn keine
+    Insider-Filings vorliegen (z.B. ETFs, nicht US-gelistete Werte).
     """
-    payload = {
-        "query": f"issuer.tradingSymbol:{ticker}",
-        "from":  "0",
-        "size":  str(max(1, min(int(n), 1000))),
-        "sort":  [{"filedAt": {"order": "desc"}}],
-    }
-    try:
-        resp = requests.post(
-            INSIDER_URL, json=payload,
-            headers={"Authorization": _api_key()}, timeout=30)
-    except requests.RequestException as e:
-        raise SecApiError(f"Insider-API-Request fehlgeschlagen: {e}") from e
-    if resp.status_code != 200:
-        raise SecApiError(
-            f"Insider-API HTTP {resp.status_code}: {resp.text[:200]}")
-    body = resp.json() or {}
-    records = body.get("transactions") or body.get("data") or []
     rows: list[dict] = []
-    for rec in records:
-        rows.extend(_flatten_insider_record(rec))
+    fetched = 0
+    target = max(1, int(n))
+    auth = {"Authorization": _api_key()}
+    while fetched < target:
+        page = min(_INSIDER_PAGE, target - fetched)
+        payload = {
+            "query": f"issuer.tradingSymbol:{ticker}",
+            "from":  str(fetched),
+            "size":  str(page),
+            "sort":  [{"filedAt": {"order": "desc"}}],
+        }
+        try:
+            resp = requests.post(
+                INSIDER_URL, json=payload, headers=auth, timeout=30)
+        except requests.RequestException as e:
+            raise SecApiError(
+                f"Insider-API-Request fehlgeschlagen: {e}") from e
+        if resp.status_code != 200:
+            raise SecApiError(
+                f"Insider-API HTTP {resp.status_code}: {resp.text[:200]}")
+        body = resp.json() or {}
+        records = body.get("transactions") or body.get("data") or []
+        if not records:
+            break
+        for rec in records:
+            rows.extend(_flatten_insider_record(rec))
+        fetched += len(records)
+        if len(records) < page:     # letzte Seite erreicht
+            break
     return rows
