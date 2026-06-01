@@ -353,6 +353,23 @@ def _split_factor(splits: dict, period_iso: str) -> float:
     return f
 
 
+def _split_adjust_shares(rows, ticker):
+    """diluted_shares je Periode split-bereinigt (Kopie, Cache unberuehrt)."""
+    splits = _load_splits(ticker)
+    if not splits:
+        return rows
+    out = []
+    for d in rows:
+        sh = d.get("diluted_shares")
+        if sh:
+            out.append(dict(
+                d, diluted_shares=sh * _split_factor(
+                    splits, str(d.get("period_end"))[:10])))
+        else:
+            out.append(d)
+    return out
+
+
 def _nearest_close(prices: dict, target_iso: str):
     """Schlusskurs am/letzten Handelstag <= target_iso (sonst frühester)."""
     if not prices:
@@ -1052,6 +1069,7 @@ def render_sbc(ticker, n_years):
                    "gefunden.")
         st.stop()
 
+    rows = _split_adjust_shares(rows, ticker)   # Verwaesserung split-bereinigt
     last = rows[-1]
     cur = "USD"
     st.markdown(
@@ -1127,7 +1145,7 @@ def render_sbc(ticker, n_years):
 
     st.caption("SBC aus dem Cashflow-Statement (ShareBasedCompensation, "
                "nicht-zahlungswirksamer Zuschlag). Verwaesserung als CAGR "
-               "der gewichteten verwaesserten Aktien.")
+               "der gewichteten verwaesserten Aktien — split-bereinigt.")
 
 
 def render_gaap(ticker, n_years):
@@ -1582,6 +1600,7 @@ def render_moat(ticker, n_years):
                    f"{len(rows)} gefunden. Mehr Jahre waehlen?")
         st.stop()
 
+    rows = _split_adjust_shares(rows, ticker)   # Rueckkaeufe split-bereinigt
     st.markdown(
         f"### {ticker} — Moat-Score  \n"
         f"{len(rows)} Geschaeftsjahre "
