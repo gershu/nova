@@ -1682,10 +1682,15 @@ def render_management(ticker, n_years):
     except Exception:  # noqa: BLE001
         total_shares = None
 
+    strategic_ratio = None
     if agg is not None and not agg.empty:
         mgmt_mask = (agg["is_mgmt"].astype(bool) | agg["is_dir"].astype(bool))
         mgmt_shares = float(agg.loc[mgmt_mask, "shares"].sum())
         insider_shares = float(agg["shares"].sum())
+        # Strategisch = 10%-Eigner, die NICHT Officer/Director sind
+        strat_mask = agg["is_10"].astype(bool) & ~mgmt_mask
+        strategic_ratio = _div(float(agg.loc[strat_mask, "shares"].sum()),
+                               total_shares)
     else:
         mgmt_shares = insider_shares = 0.0
     own_form4 = _div(mgmt_shares, total_shares)         # Form-4-Schaetzung
@@ -1772,6 +1777,7 @@ def render_management(ticker, n_years):
                 use_container_width=True, hide_index=True)
 
     # ---- Institutionelle Eigentuemer (13F) ------------------------------
+    inst_ratio = None
     st.markdown("#### Institutionelle Eigentuemer (13F)")
     inst = _load_institutional(ticker)
     ih = inst.get("holdings") if inst else []
@@ -1801,6 +1807,7 @@ def render_management(ticker, n_years):
         smart_shares = float(cur_q.loc[sm_mask, "shares"].sum())
 
         inst_pct = _div(inst_shares, total_shares)
+        inst_ratio = inst_pct
         top10_pct = _div(top10_shares, total_shares)
         smart_pct = _div(smart_shares, total_shares)
 
@@ -1851,6 +1858,53 @@ def render_management(ticker, n_years):
         st.caption(f"13F-Positionen: {_srt_note}. Keine Vollaggregation "
                    "aller Filer -> Anteile sind Untergrenze. 13F meldet mit "
                    "bis zu 45 Tagen Verzug und nur Long-US-Positionen.")
+
+    # ---- Ownership-Struktur ---------------------------------------------
+    st.markdown("#### Ownership-Struktur")
+    ins_r = 0.005 if own_lt1 else ownership          # Insider (Mgmt)
+    parts = [("Insider", ins_r), ("Institutionell", inst_ratio),
+             ("Strategisch (10%)", strategic_ratio)]
+    avail = [(lbl, v) for lbl, v in parts if v is not None]
+    strong = sum(v for _lbl, v in avail) if avail else None
+    if strong is not None:
+        strong = min(strong, 1.0)
+    free_float = (max(0.0, 1.0 - strong) if strong is not None else None)
+
+    sc = st.columns(4)
+    sc[0].metric("Free Float", _pct(free_float) if free_float is not None
+                 else "—", help="1 − Strong Hands (frei handelbar)")
+    sc[1].metric("Institutionell",
+                 _pct(inst_ratio) if inst_ratio is not None else "—",
+                 help="13F-Top-Sample (Untergrenze)")
+    sc[2].metric("Insider",
+                 ("< 1 %" if own_lt1 else
+                  _pct(ownership) if ownership is not None else "—"),
+                 help="Management (DEF 14A / Form-4)")
+    sc[3].metric("Strong Hands",
+                 _pct(strong) if strong is not None else "—",
+                 help="Institutionell + Insider + Strategisch (10%-Eigner)")
+
+    if strong is not None:
+        bars = avail + [("Free Float", free_float)]
+        colors = {"Insider": "#0F6E56", "Institutionell": "#1D9E75",
+                  "Strategisch (10%)": "#B4862B", "Free Float": "#CFCDC6"}
+        fig = go.Figure()
+        for lbl, v in bars:
+            fig.add_trace(go.Bar(name=lbl, x=[v * 100], y=["Struktur"],
+                                 orientation="h",
+                                 marker_color=colors.get(lbl, "#888"),
+                                 hovertemplate=f"{lbl}: %{{x:.1f}}%"
+                                 "<extra></extra>"))
+        fig.update_layout(barmode="stack", height=160,
+                          margin=dict(l=10, r=10, t=10, b=10),
+                          xaxis=dict(range=[0, 100], title="% der Aktien"),
+                          legend=dict(orientation="h", y=-0.4))
+        st.plotly_chart(fig, use_container_width=True)
+    st.caption("Strong Hands = Institutionell + Insider + Strategisch "
+               "(10%-Eigner). Free Float = 1 − Strong Hands. Institutionell "
+               "ist eine 13F-Untergrenze (Top-Sample) -> Strong Hands eher "
+               "zu niedrig, Free Float eher zu hoch. Ueberschneidungen "
+               "(13F-Filer zugleich 10%-Eigner) nicht bereinigt.")
 
     if bo and own_def14a is None and not own_lt1:
         with st.expander("DEF-14A-Ownership — Diagnose"):
