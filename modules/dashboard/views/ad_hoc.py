@@ -55,6 +55,13 @@ _DEFAULT_SCORE_CFG = {
         "gaap_vs_non_gaap": {"mentions_max": 15, "categories_max": 3},
         "insider": {"cluster_buyers_min": 3},
     },
+    "insider_conviction": {
+        "weights": {"ceo_buy": 35, "cfo_buy": 25, "cluster_buy": 20,
+                    "first_buy": 15, "meaningful_sell": 25},
+        "cluster_buyers_min": 3,
+        "meaningful_sell_pct": 0.20,
+        "signal": {"bullish_min": 35, "bearish_max": -20},
+    },
     "moat": {
         "weights": {"gross_margin_trend": 0.22, "roic_stability": 0.22,
                     "fcf_margin": 0.18, "rnd_efficiency": 0.13,
@@ -810,19 +817,89 @@ def render_insider(ticker, n_years):
     net_val = buy_val - sell_val
     n_buyers, n_sellers = agg["n_buyers"], agg["n_sellers"]
 
-    _verdict_box(_checks_insider(agg), strong="bullisch (Insider kaufen)",
-                 mixed="neutral / gemischt",
-                 weak="bearisch (Insider verkaufen)",
-                 lead="Insider-Signal")
+    # ---- Insider Conviction Score ---------------------------------------
+    ic = SCORE_CFG["insider_conviction"]
+    w, cm = ic["weights"], ic["cluster_buyers_min"]
+    pct, sigcfg = ic["meaningful_sell_pct"], ic["signal"]
+
+    def _col(d, c):
+        return d[c] if c in d.columns else False
+
+    ceo_buys = buys[_col(buys, "is_ceo") == True] if not buys.empty else buys
+    cfo_buys = buys[_col(buys, "is_cfo") == True] if not buys.empty else buys
+    cluster = n_buyers >= cm
+
+    # Erstkauf: Kauf, bei dem der Vorbestand ~0 war (shares_following−shares)
+    first_buyers = 0
+    if not buys.empty and "shares_following" in buys.columns:
+        fb = buys[buys["shares_following"].notna()].copy()
+        if not fb.empty:
+            prior = fb["shares_following"] - fb["shares"].fillna(0)
+            fb = fb[prior <= 0.05 * fb["shares_following"].clip(lower=1)]
+            first_buyers = fb["owner"].nunique()
+
+    # Bedeutender Verkauf: kein 10b5-1-Routineplan UND grosser Anteil
+    routine_sells = meaningful_sells = 0
+    if not sells.empty:
+        planned = (sells["planned"].fillna(False)
+                   if "planned" in sells.columns else False)
+        routine_sells = int(planned.sum()) if hasattr(planned, "sum") else 0
+        se = sells.copy()
+        if "shares_following" in se.columns:
+            pre = se["shares"].fillna(0) + se["shares_following"].fillna(0)
+            frac = se["shares"] / pre.where(pre > 0)
+        else:
+            frac = pd.Series([None] * len(se), index=se.index)
+        not_planned = ~(se["planned"].fillna(False)
+                        if "planned" in se.columns else False)
+        big = frac.isna() | (frac >= pct)
+        meaningful_sells = int((not_planned & big).sum())
+
+    pts = 0
+    fired = []
+    if len(ceo_buys) > 0:
+        pts += w["ceo_buy"]; fired.append(("CEO-Kauf", w["ceo_buy"]))
+    if len(cfo_buys) > 0:
+        pts += w["cfo_buy"]; fired.append(("CFO-Kauf", w["cfo_buy"]))
+    if cluster:
+        pts += w["cluster_buy"]
+        fired.append((f"Cluster-Kauf ({n_buyers} Kaeufer)", w["cluster_buy"]))
+    if first_buyers > 0:
+        pts += w["first_buy"]
+        fired.append((f"Erstkauf ({first_buyers})", w["first_buy"]))
+    if meaningful_sells > 0:
+        pts -= w["meaningful_sell"]
+        fired.append((f"Bedeutender Verkauf ({meaningful_sells})",
+                      -w["meaningful_sell"]))
+    conviction = max(0, sum(p for _, p in fired if p > 0))
+
+    if pts >= sigcfg["bullish_min"]:
+        sig_label, sig_fn = "Bullisch", st.success
+    elif pts <= sigcfg["bearish_max"]:
+        sig_label, sig_fn = "Bearisch", st.warning
+    else:
+        sig_label, sig_fn = "Neutral", st.info
+    _lines = "  \n".join(
+        f"{'➕' if p > 0 else '➖'} {name}: {p:+d}" for name, p in fired) \
+        or "keine ausgepraegten Signale"
+    sig_fn(f"**Insider-Signal: {sig_label}**  \nConviction {conviction} · "
+           f"Netto-Punkte {pts:+d}  \n{_lines}")
+    if routine_sells:
+        st.caption(f"{routine_sells} Routine-Verkauf/e (10b5-1-Plan) "
+                   "ausgeklammert — zaehlen nicht als bearish.")
 
     m = st.columns(4)
-    m[0].metric("Kaeufe (Markt, P)", _money(buy_val),
-                help=f"{len(buys)} Transaktionen · {n_buyers} Personen")
-    m[1].metric("Verkaeufe (Markt, S)", _money(sell_val),
-                help=f"{len(sells)} Transaktionen · {n_sellers} Personen")
-    m[2].metric("Netto", _money(net_val),
-                delta=("Kaufüberhang" if net_val > 0 else "Verkaufüberhang"))
-    m[3].metric("Kaeufer / Verkaeufer", f"{n_buyers} / {n_sellers}")
+    m[0].metric("CEO / CFO-Kauf",
+                f"{'✓' if len(ceo_buys) else '–'} / "
+                f"{'✓' if len(cfo_buys) else '–'}",
+                help="Markt-Kauf (Code P) durch CEO bzw. CFO im Zeitraum")
+    m[1].metric("Cluster-Kauf",
+                f"{n_buyers} Kaeufer" + (" ✓" if cluster else ""),
+                help=f"≥ {cm} verschiedene Kaeufer = Cluster")
+    m[2].metric("Erstkaeufe", str(first_buyers),
+                help="Kauf mit ~0 Vorbestand (Initial-Position)")
+    m[3].metric("Bedeutende Verkaeufe", str(meaningful_sells),
+                help="Kein 10b5-1-Plan und grosser Anteil der Holdings")
 
     # Monatlicher Netto-Wert (nur P/S)
     ps = df[df["code"].isin(["P", "S"])].copy()
@@ -863,9 +940,15 @@ def render_insider(ticker, n_years):
         })
         st.dataframe(tbl, use_container_width=True, hide_index=True)
 
-    st.caption("Nur P (Markt-Kauf) und S (Markt-Verkauf) gelten als "
-               "diskretionaeres Signal. Awards (A), Ausuebungen (M), "
-               "Steuereinbehalte (F), Schenkungen (G) sind ausgeklammert.")
+    st.caption(
+        "Conviction Score gewichtet aussagekraeftige Signale (CEO-/CFO-"
+        "Kauf, Cluster-Kauf, Erstkauf) und zieht nur *bedeutende* Verkaeufe "
+        "ab. Routine-Verkaeufe ueber 10b5-1-Handelsplaene werden erkannt "
+        "und ausgeklammert — so wird ein regelmaessig automatisch "
+        "verkaufender CEO nicht faelschlich als bearish gewertet. Holding-"
+        "Dauer ist nicht im Filing; 'bedeutender Verkauf' wird ueber "
+        "10b5-1-Status + verkauften Anteil der Holdings approximiert. "
+        "Gewichte/Schwellen in config/ad_hoc_score.yaml.")
 
 
 def render_sbc(ticker, n_years):

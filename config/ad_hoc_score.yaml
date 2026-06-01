@@ -40,6 +40,22 @@ thresholds:
   insider:
     cluster_buyers_min: 3
 
+# Insider Conviction Score: gewichtet aussagekraeftige Signale. Routine-
+# Verkaeufe (10b5-1-Handelsplaene) zaehlen NICHT als bearish. Netto-Punkte
+# -> Bullisch/Neutral/Bearisch.
+insider_conviction:
+  weights:
+    ceo_buy:         35     # CEO-Kauf (Markt)
+    cfo_buy:         25     # CFO-Kauf (Markt)
+    cluster_buy:     20     # >= cluster_buyers_min verschiedene Kaeufer
+    first_buy:       15     # Erstkauf eines Insiders im Zeitraum
+    meaningful_sell: 25     # bedeutender Verkauf (abgezogen)
+  cluster_buyers_min: 3
+  meaningful_sell_pct: 0.20  # verkaufter Anteil der Holdings -> bedeutend
+  signal:
+    bullish_min:  35       # Netto-Punkte >= -> bullisch
+    bearish_max: -20       # Netto-Punkte <= -> bearisch; dazwischen neutral
+
 # ---------------------------------------------------------------------
 # Moat-Score (eigenstaendig, separater Modus). Sechs Teil-Signale,
 # jedes 0..1; gewichteter Mittelwert -> 0-100. Nicht auswertbare

@@ -972,11 +972,40 @@ def _relationship_label(rel: dict | None) -> str:
     return ", ".join(parts) if parts else "—"
 
 
+def _role_flags(rel: dict | None) -> tuple[bool, bool]:
+    """(is_ceo, is_cfo) aus officerTitle."""
+    if not isinstance(rel, dict):
+        return False, False
+    title = (rel.get("officerTitle") or "").lower()
+    toks = title.replace(".", " ").split()
+    is_ceo = "chief executive" in title or "ceo" in toks
+    is_cfo = "chief financial" in title or "cfo" in toks
+    return is_ceo, is_cfo
+
+
+def _record_is_planned(rec: dict) -> bool:
+    """Heuristik: gehoert das Filing zu einem 10b5-1-Handelsplan (Routine)?"""
+    fns = rec.get("footnotes")
+    texts: list[str] = []
+    if isinstance(fns, list):
+        for f in fns:
+            texts.append(str(f.get("text", "")) if isinstance(f, dict)
+                         else str(f))
+    elif isinstance(fns, dict):
+        texts.extend(str(v) for v in fns.values())
+    blob = " ".join(texts).lower()
+    return "10b5-1" in blob or "10b5 1" in blob or "rule 10b5" in blob \
+        or "trading plan" in blob
+
+
 def _flatten_insider_record(rec: dict) -> list[dict]:
     """Ein Form-4-Record -> flache Transaktionszeilen (non-deriv + deriv)."""
     owner = rec.get("reportingOwner") or {}
     owner_name = owner.get("name") or "—"
-    rel = _relationship_label(owner.get("relationship"))
+    rel_dict = owner.get("relationship")
+    rel = _relationship_label(rel_dict)
+    is_ceo, is_cfo = _role_flags(rel_dict)
+    planned = _record_is_planned(rec)
     filed_at = rec.get("filedAt")
     out: list[dict] = []
     for tbl_key, is_deriv in (("nonDerivativeTable", False),
@@ -985,6 +1014,7 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
         for tx in (tbl.get("transactions") or []):
             coding = tx.get("coding") or {}
             amounts = tx.get("amounts") or {}
+            post = tx.get("postTransactionAmounts") or {}
             try:
                 shares = float(amounts.get("shares")) \
                     if amounts.get("shares") is not None else None
@@ -995,17 +1025,28 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
                     if amounts.get("pricePerShare") is not None else None
             except (TypeError, ValueError):
                 price = None
+            try:
+                shares_following = float(
+                    post.get("sharesOwnedFollowingTransaction")) \
+                    if post.get("sharesOwnedFollowingTransaction") \
+                    is not None else None
+            except (TypeError, ValueError):
+                shares_following = None
             value = (shares * price
                      if shares is not None and price is not None else None)
             out.append({
                 "filed_at":      filed_at,
                 "owner":         owner_name,
                 "relationship":  rel,
+                "is_ceo":        is_ceo,
+                "is_cfo":        is_cfo,
+                "planned":       planned,
                 "transaction_date": (tx.get("transactionDate") or "")[:10],
                 "code":          coding.get("code"),
                 "shares":        shares,
                 "price":         price,
                 "value":         value,
+                "shares_following": shares_following,
                 "acquired_disposed": amounts.get("acquiredDisposedCode"),
                 "security":      tx.get("securityTitle"),
                 "derivative":    is_deriv,
