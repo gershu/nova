@@ -1256,45 +1256,48 @@ def fetch_institutional_holdings(ticker: str, *, n: int = 50) -> dict:
     Hinweis: keine Vollaggregation aller Filer (Kosten/Pagination) — eine
     Stichprobe der zuletzt gemeldeten Positionen.
     """
-    # Nach Positionswert sortieren -> groesste Halter zuerst (nicht die
-    # zuletzt einreichenden Klein-RIAs).
-    payload = {"query": f"holdings.ticker:{ticker}", "from": "0",
-               "size": str(min(int(n), 50)),
-               "sort": [{"value": {"order": "desc"}}]}
-    try:
-        resp = requests.post(FORM13F_URL, json=payload,
-                             headers={"Authorization": _api_key()},
-                             timeout=30)
-    except requests.RequestException as e:
-        return {"holdings": [], "error": f"Request: {e}"}
-    if resp.status_code != 200:
-        return {"holdings": [],
-                "error": f"HTTP {resp.status_code}: {resp.text[:160]}"}
-    body = resp.json() or {}
-    recs = body.get("data") or body.get("filings") or body.get("holdings") \
-        or []
-    out: list[dict] = []
-    for rec in recs:
-        manager = (rec.get("companyName")
-                   or (rec.get("filer") or {}).get("name")
-                   or rec.get("managerName") or rec.get("name") or "—")
-        filed = rec.get("filedAt")
-        period = rec.get("periodOfReport")
-        hs = rec.get("holdings")
-        cand = hs if isinstance(hs, list) else [rec]
-        for h in cand:
-            if not isinstance(h, dict) or not _13f_match(h, ticker):
-                continue
-            try:
-                value = float(h.get("value")) if h.get("value") is not None \
-                    else None
-            except (TypeError, ValueError):
-                value = None
-            out.append({"manager": manager, "shares": _13f_shares(h),
-                        "value": value, "period": period,
-                        "filed_at": filed})
-    return {"holdings": out,
-            "error": None if out else "keine 13F-Positionen gefunden"}
+    # Sortfeld unsicher (Endpoint kann Filings liefern); daher mehrere
+    # probieren — groesste Positionen bevorzugt, filedAt als Fallback.
+    auth = {"Authorization": _api_key()}
+    size = str(min(int(n), 50))
+    last_err = None
+    for sort_field in ("value", "holdings.value", "filedAt"):
+        payload = {"query": f"holdings.ticker:{ticker}", "from": "0",
+                   "size": size, "sort": [{sort_field: {"order": "desc"}}]}
+        try:
+            resp = requests.post(FORM13F_URL, json=payload, headers=auth,
+                                 timeout=30)
+        except requests.RequestException as e:
+            last_err = f"Request: {e}"; continue
+        if resp.status_code != 200:
+            last_err = f"HTTP {resp.status_code}: {resp.text[:120]}"; continue
+        body = resp.json() or {}
+        recs = (body.get("data") or body.get("filings")
+                or body.get("holdings") or [])
+        out: list[dict] = []
+        for rec in recs:
+            manager = (rec.get("companyName")
+                       or (rec.get("filer") or {}).get("name")
+                       or rec.get("managerName") or rec.get("name") or "—")
+            filed = rec.get("filedAt")
+            period = rec.get("periodOfReport")
+            hs = rec.get("holdings")
+            cand = hs if isinstance(hs, list) else [rec]
+            for h in cand:
+                if not isinstance(h, dict) or not _13f_match(h, ticker):
+                    continue
+                try:
+                    value = (float(h.get("value"))
+                             if h.get("value") is not None else None)
+                except (TypeError, ValueError):
+                    value = None
+                out.append({"manager": manager, "shares": _13f_shares(h),
+                            "value": value, "period": period,
+                            "filed_at": filed})
+        if out:
+            return {"holdings": out, "error": None, "sort": sort_field}
+        last_err = f"keine Positionen (sort={sort_field})"
+    return {"holdings": [], "error": last_err or "keine 13F-Positionen"}
 
 
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:

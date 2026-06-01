@@ -1843,10 +1843,14 @@ def render_management(ticker, n_years):
                                            for s in sm_list) else ""),
             } for _i, r in top10.iterrows()]),
                 use_container_width=True, hide_index=True)
-        st.caption("13F-Positionen sind eine Stichprobe der zuletzt "
-                   "gemeldeten Halter (keine Vollaggregation aller Filer) — "
-                   "Anteile daher Untergrenze. 13F meldet mit bis zu 45 "
-                   "Tagen Verzug und nur Long-US-Positionen.")
+        _srt = inst.get("sort")
+        _srt_note = ("nach Positionswert sortiert (groesste Halter)"
+                     if _srt in ("value", "holdings.value")
+                     else "nach Aktualitaet sortiert — evtl. nur kleine "
+                          "Spaetmelder, Anteile dann stark untertrieben")
+        st.caption(f"13F-Positionen: {_srt_note}. Keine Vollaggregation "
+                   "aller Filer -> Anteile sind Untergrenze. 13F meldet mit "
+                   "bis zu 45 Tagen Verzug und nur Long-US-Positionen.")
 
     if bo and own_def14a is None and not own_lt1:
         with st.expander("DEF-14A-Ownership — Diagnose"):
