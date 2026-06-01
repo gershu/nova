@@ -794,35 +794,50 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
 
 # ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
 
-def fetch_employee_counts(cik) -> dict:
-    """dei:EntityNumberOfEmployees-Zeitreihe via SEC company-concept-API.
-
-    Returns {end_date_iso: anzahl} aus 10-K-Kontexten. {} bei Fehler —
-    xbrl-to-json enthaelt diese DEI-Cover-Page-Fakten nicht.
-    """
+def fetch_employee_counts_detail(cik) -> dict:
+    """dei:EntityNumberOfEmployees-Zeitreihe via SEC company-concept-API,
+    mit Diagnose. Returns {map, url, status, error}."""
+    out = {"map": {}, "url": None, "status": None, "error": None}
     if cik in (None, "", 0):
-        return {}
+        out["error"] = "keine CIK"
+        return out
     c10 = str(cik).lstrip("0").zfill(10)
     url = (f"https://data.sec.gov/api/xbrl/companyconcept/CIK{c10}"
            "/dei/EntityNumberOfEmployees.json")
+    out["url"] = url
+    # data.sec.gov ueber sec-api-Archiv-Proxy nicht erreichbar -> direkt,
+    # konformer User-Agent.
     try:
-        resp = requests.get(url, headers={"User-Agent": _SEC_UA}, timeout=30)
-    except requests.RequestException:
-        return {}
+        resp = requests.get(url, headers={
+            "User-Agent": _SEC_UA, "Accept-Encoding": "gzip, deflate",
+            "Host": "data.sec.gov"}, timeout=30)
+    except requests.RequestException as e:
+        out["error"] = f"Request: {e}"
+        return out
+    out["status"] = resp.status_code
     if resp.status_code != 200:
-        return {}
+        out["error"] = f"HTTP {resp.status_code}: {resp.text[:120]}"
+        return out
     units = (resp.json() or {}).get("units") or {}
-    out: dict = {}
+    m: dict = {}
     for items in units.values():
         for it in items or []:
             end, val, form = it.get("end"), it.get("val"), it.get("form", "")
             if end is None or val is None or "10-K" not in (form or ""):
                 continue
             try:
-                out[end] = float(val)
+                m[end] = float(val)
             except (TypeError, ValueError):
                 pass
+    out["map"] = m
+    if not m:
+        out["error"] = "keine 10-K-Mitarbeiterwerte in der Antwort"
     return out
+
+
+def fetch_employee_counts(cik) -> dict:
+    """Duenne Schale: nur die {end_iso: anzahl}-Map."""
+    return fetch_employee_counts_detail(cik).get("map", {})
 
 
 def _pick_employees(xbrl: dict, period: str):

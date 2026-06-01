@@ -25,7 +25,7 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_beneficial_ownership_detail, fetch_employee_counts,
+    fetch_beneficial_ownership_detail, fetch_employee_counts_detail,
     fetch_exhibit_text, fetch_institutional_holdings,
     fetch_insider_first_filing, fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
@@ -336,11 +336,11 @@ def _load_prices(ticker: str, start_iso: str, end_iso: str) -> dict:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _load_employees(ticker: str) -> dict:
-    """Mitarbeiter-Zeitreihe (SEC company-concept) -> {end_iso: anzahl}."""
+    """Mitarbeiter-Zeitreihe (SEC company-concept) inkl. Diagnose."""
     try:
-        return fetch_employee_counts(_issuer_cik(ticker))
-    except Exception:  # noqa: BLE001
-        return {}
+        return fetch_employee_counts_detail(_issuer_cik(ticker))
+    except Exception as e:  # noqa: BLE001
+        return {"map": {}, "error": f"{e.__class__.__name__}: {e}"}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2142,7 +2142,8 @@ def render_physical(ticker, n_years):
 
     # Mitarbeiterzahl separat aus der SEC company-concept-API (nicht im
     # xbrl-to-json), je Jahr per Stichtag zuordnen.
-    emp_map = _load_employees(ticker)
+    emp_detail = _load_employees(ticker)
+    emp_map = emp_detail.get("map") or {}
     if emp_map:
         def _emp_for(period_iso):
             if period_iso in emp_map:
@@ -2252,6 +2253,11 @@ def render_physical(ticker, n_years):
                          yaxis_title=cur)
         st.plotly_chart(f3, use_container_width=True)
 
+    if not emp_map:
+        with st.expander("Mitarbeiter — Diagnose"):
+            st.write({"URL": emp_detail.get("url"),
+                      "Status": emp_detail.get("status"),
+                      "Fehler": emp_detail.get("error")})
     st.caption("PP&E brutto + CapEx aus dem Filing; Mitarbeiter aus "
                "dei:EntityNumberOfEmployees (fehlt bei manchen Filern -> "
                "Komponente ausgeklammert, Gewichte renormiert). Δ = CAGR "
