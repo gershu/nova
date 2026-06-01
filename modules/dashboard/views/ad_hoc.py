@@ -15,17 +15,72 @@ from __future__ import annotations
 
 import pandas as pd
 import plotly.graph_objects as go
-import streamlit as st
-
-from modules.dashboard.components.format import _missing, de_dec, de_int
+import pathlib
 from datetime import date, timedelta
 
+import streamlit as st
+import yaml
+
+from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_exhibit_text,
     fetch_insider_transactions, fetch_sbc_from_filing,
     fetch_statements_from_filing, find_earnings_exhibits, find_filings,
 )
+
+
+# ---------- Score-Konfiguration (config/ad_hoc_score.yaml) ----------
+
+_SCORE_CFG_PATH = (pathlib.Path(__file__).resolve().parents[3]
+                   / "config" / "ad_hoc_score.yaml")
+
+_DEFAULT_SCORE_CFG = {
+    "weights": {
+        "return_on_capital": 0.30, "balance_sheet": 0.25,
+        "stock_based_comp": 0.20, "gaap_vs_non_gaap": 0.15,
+        "insider": 0.10,
+    },
+    "bands": {"strong": 70, "mixed": 40},
+    "thresholds": {
+        "balance_sheet": {"current_ratio_min": 1.5,
+                          "debt_to_equity_max": 0.5,
+                          "equity_ratio_min": 0.40},
+        "return_on_capital": {"roic_min": 0.15, "roe_min": 0.15,
+                              "roa_min": 0.06},
+        "stock_based_comp": {"sbc_to_revenue_max": 0.05,
+                             "sbc_to_cfo_max": 0.15,
+                             "dilution_cagr_max": 0.01},
+        "gaap_vs_non_gaap": {"mentions_max": 15, "categories_max": 3},
+        "insider": {"cluster_buyers_min": 3},
+    },
+}
+
+
+def _load_score_cfg() -> dict:
+    """YAML-Config laden und ueber die Defaults mergen (2 Ebenen tief)."""
+    import copy
+    cfg = copy.deepcopy(_DEFAULT_SCORE_CFG)
+    try:
+        if _SCORE_CFG_PATH.is_file():
+            loaded = yaml.safe_load(_SCORE_CFG_PATH.read_text()) or {}
+            for section, vals in loaded.items():
+                if isinstance(vals, dict) and isinstance(
+                        cfg.get(section), dict):
+                    for k, v in vals.items():
+                        if isinstance(v, dict) and isinstance(
+                                cfg[section].get(k), dict):
+                            cfg[section][k].update(v)
+                        else:
+                            cfg[section][k] = v
+                else:
+                    cfg[section] = vals
+    except Exception:  # noqa: BLE001 — Defaults bleiben gueltig
+        pass
+    return cfg
+
+
+SCORE_CFG = _load_score_cfg()
 
 
 # ---------- Formatierung ----------
@@ -162,31 +217,39 @@ def _returns(inc, bs) -> dict:
 # ---------- Kriterien je Thema (Single Source fuer Verdict + Score) ----
 
 def _checks_balance(latest) -> list:
+    t = SCORE_CFG["thresholds"]["balance_sheet"]
     checks = []
     cr = _div(latest.assets_current, latest.liabilities_current)
     if cr is not None:
-        checks.append(("Current Ratio > 1,5", cr > 1.5))
+        checks.append((f"Current Ratio > {de_dec(t['current_ratio_min'], 1)}",
+                       cr > t["current_ratio_min"]))
     if latest.net_debt is not None:
         checks.append(("Netto-Cash (Net Debt < 0)", latest.net_debt < 0))
     de = _div(latest.total_debt, latest.equity)
     if de is not None:
-        checks.append(("Debt/Equity < 0,5", de < 0.5))
+        checks.append((f"Debt/Equity < {de_dec(t['debt_to_equity_max'], 1)}",
+                       de < t["debt_to_equity_max"]))
     eqr = _div(latest.equity, latest.total_assets)
     if eqr is not None:
-        checks.append(("Eigenkapitalquote > 40 %", eqr > 0.40))
+        checks.append((f"Eigenkapitalquote > {_pct(t['equity_ratio_min'], 0)}",
+                       eqr > t["equity_ratio_min"]))
     return checks
 
 
 def _checks_returns(rows) -> list:
+    t = SCORE_CFG["thresholds"]["return_on_capital"]
     inc_l, bs_l = rows[-1]
     rl = _returns(inc_l, bs_l)
     checks = []
     if rl["roic"] is not None:
-        checks.append(("ROIC > 15 %", rl["roic"] > 0.15))
+        checks.append((f"ROIC > {_pct(t['roic_min'], 0)}",
+                       rl["roic"] > t["roic_min"]))
     if rl["roe"] is not None:
-        checks.append(("ROE > 15 %", rl["roe"] > 0.15))
+        checks.append((f"ROE > {_pct(t['roe_min'], 0)}",
+                       rl["roe"] > t["roe_min"]))
     if rl["roa"] is not None:
-        checks.append(("ROA > 6 %", rl["roa"] > 0.06))
+        checks.append((f"ROA > {_pct(t['roa_min'], 0)}",
+                       rl["roa"] > t["roa_min"]))
     all_roic = [_returns(i, b)["roic"] for i, b in rows]
     all_roic = [x for x in all_roic if x is not None]
     if len(all_roic) >= 2:
@@ -213,11 +276,12 @@ def _insider_aggregate(tx, n_years) -> dict:
 
 
 def _checks_insider(agg) -> list:
+    cm = SCORE_CFG["thresholds"]["insider"]["cluster_buyers_min"]
     net = agg["buy_val"] - agg["sell_val"]
     return [
         ("Netto-Insiderkaeufe (Wert)", net > 0),
         ("Mehr Kaeufer als Verkaeufer", agg["n_buyers"] > agg["n_sellers"]),
-        ("Cluster-Kauf (>= 3 Kaeufer)", agg["n_buyers"] >= 3),
+        (f"Cluster-Kauf (>= {cm} Kaeufer)", agg["n_buyers"] >= cm),
     ]
 
 
@@ -245,24 +309,31 @@ def _sbc_metrics(rows) -> dict:
 
 
 def _checks_sbc(metrics) -> list:
+    t = SCORE_CFG["thresholds"]["stock_based_comp"]
     checks = []
     if metrics["sbc_rev"] is not None:
-        checks.append(("SBC < 5 % vom Umsatz", metrics["sbc_rev"] < 0.05))
+        checks.append((f"SBC < {_pct(t['sbc_to_revenue_max'], 0)} vom Umsatz",
+                       metrics["sbc_rev"] < t["sbc_to_revenue_max"]))
     if metrics["sbc_cfo"] is not None:
-        checks.append(("SBC < 15 % vom operativen Cashflow",
-                       metrics["sbc_cfo"] < 0.15))
+        checks.append(
+            (f"SBC < {_pct(t['sbc_to_cfo_max'], 0)} vom operativen Cashflow",
+             metrics["sbc_cfo"] < t["sbc_to_cfo_max"]))
     if metrics["dil_cagr"] is not None:
-        checks.append(("Aktienzahl ≤ +1 % p.a. (kaum Verwaesserung)",
-                       metrics["dil_cagr"] <= 0.01))
+        checks.append(
+            (f"Aktienzahl ≤ +{_pct(t['dilution_cagr_max'], 0)} p.a. "
+             "(kaum Verwaesserung)",
+             metrics["dil_cagr"] <= t["dilution_cagr_max"]))
     return checks
 
 
 def _checks_gaap(ana) -> list:
+    t = SCORE_CFG["thresholds"]["gaap_vs_non_gaap"]
     return [
-        ("Non-GAAP-Nutzung moderat (< 15 Erwaehnungen)",
-         ana["mentions"] < 15),
+        (f"Non-GAAP-Nutzung moderat (< {t['mentions_max']} Erwaehnungen)",
+         ana["mentions"] < t["mentions_max"]),
         ("SBC NICHT herausgerechnet", not ana["adds_back_sbc"]),
-        ("≤ 3 Anpassungskategorien", len(ana["categories"]) <= 3),
+        (f"≤ {t['categories_max']} Anpassungskategorien",
+         len(ana["categories"]) <= t["categories_max"]),
     ]
 
 
@@ -699,14 +770,16 @@ def render_gaap(ticker, n_years):
 
 # ---------- Gesamt-Score ----------
 
-# Gewichte: Fundamentalqualitaet (Bilanz, ROC) hoeher als Signale.
-_SCORE_WEIGHTS = {
-    "Return on Capital": 0.30,
-    "Balance Sheet":     0.25,
-    "Stock-based Comp.": 0.20,
-    "GAAP vs non-GAAP":  0.15,
-    "Insider":           0.10,
+# Anzeige-Label -> Config-Schluessel. Gewichte kommen aus SCORE_CFG.
+_THEME_KEYS = {
+    "Return on Capital": "return_on_capital",
+    "Balance Sheet":     "balance_sheet",
+    "Stock-based Comp.": "stock_based_comp",
+    "GAAP vs non-GAAP":  "gaap_vs_non_gaap",
+    "Insider":           "insider",
 }
+_SCORE_WEIGHTS = {label: SCORE_CFG["weights"][key]
+                  for label, key in _THEME_KEYS.items()}
 
 
 def _subscore(checks):
@@ -777,9 +850,10 @@ def render_score(ticker, n_years):
 
     score = round(100 * num / den)
     n_ok = sum(1 for r in rows if r["sub"] is not None)
-    if score >= 70:
+    _bands = SCORE_CFG["bands"]
+    if score >= _bands["strong"]:
         st.success(f"## {score}/100 — hohe Qualitaet")
-    elif score >= 40:
+    elif score >= _bands["mixed"]:
         st.info(f"## {score}/100 — gemischt")
     else:
         st.warning(f"## {score}/100 — schwach")
@@ -795,8 +869,8 @@ def render_score(ticker, n_years):
     } for r in rows])
     fig = go.Figure(go.Bar(
         x=bar["Score"], y=bar["Thema"], orientation="h",
-        marker_color=["#1D9E75" if (s is not None and s >= 70)
-                      else "#B4862B" if (s is not None and s >= 40)
+        marker_color=["#1D9E75" if (s is not None and s >= _bands["strong"])
+                      else "#B4862B" if (s is not None and s >= _bands["mixed"])
                       else "#A32D2D" if s is not None else "#CFCDC6"
                       for s in bar["Score"]],
         text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],

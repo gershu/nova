@@ -1,0 +1,41 @@
+# Konfiguration fuer den Ad-Hoc Gesamt-Qualitaets-Score
+# (modules/dashboard/views/ad_hoc.py).
+#
+# Aenderungen hier wirken sofort (Dashboard-Reload), ohne Code-Aenderung.
+# Fehlt diese Datei oder einzelne Schluessel, greifen die Defaults im Code.
+
+# Gewichte je Thema fuer den 0-100-Gesamtscore. Themen ohne Daten werden
+# ausgeklammert und die verbleibenden Gewichte renormiert.
+weights:
+  return_on_capital: 0.30
+  balance_sheet:     0.25
+  stock_based_comp:  0.20
+  gaap_vs_non_gaap:  0.15
+  insider:           0.10
+
+# Ampel-Grenzen fuer den Gesamtscore (>= strong gruen, >= mixed gelb,
+# darunter rot).
+bands:
+  strong: 70
+  mixed:  40
+
+# Schwellenwerte je Kriterium. Anteile/Quoten als Dezimalbruch
+# (0.15 = 15 %).
+thresholds:
+  balance_sheet:
+    current_ratio_min:  1.5
+    debt_to_equity_max: 0.5
+    equity_ratio_min:   0.40
+  return_on_capital:
+    roic_min: 0.15
+    roe_min:  0.15
+    roa_min:  0.06
+  stock_based_comp:
+    sbc_to_revenue_max: 0.05
+    sbc_to_cfo_max:     0.15
+    dilution_cagr_max:  0.01
+  gaap_vs_non_gaap:
+    mentions_max:   15
+    categories_max: 3
+  insider:
+    cluster_buyers_min: 3
