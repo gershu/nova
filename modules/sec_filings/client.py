@@ -658,6 +658,16 @@ _SEC_UA = "nova-lab research admin@nova-lab.local"
 _ARCHIVE_PROXY = "https://archive.sec-api.io/"
 
 
+def _unwrap_ix(url: str) -> str:
+    """Inline-XBRL-Viewer-URL entpacken: '.../ix?doc=/Archives/x' ->
+    'https://www.sec.gov/Archives/x'. Sonst unveraendert."""
+    if "ix?doc=" in url:
+        frag = url.split("ix?doc=", 1)[1]
+        return ("https://www.sec.gov" + frag if frag.startswith("/")
+                else frag)
+    return url
+
+
 def _to_archive_proxy(url: str) -> str | None:
     """www.sec.gov/Archives/<path> -> archive.sec-api.io/<path> (Proxy)."""
     marker = "/Archives/"
@@ -674,6 +684,7 @@ def fetch_exhibit_text(url: str) -> str:
     """
     if not url:
         return ""
+    url = _unwrap_ix(url)
     proxy = _to_archive_proxy(url)
     try:
         if proxy:
