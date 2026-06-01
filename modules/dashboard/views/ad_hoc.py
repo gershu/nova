@@ -610,9 +610,26 @@ def render_returns(ticker, n_years):
 
     # ---- Owner Earnings (Buffett): NI + D&A − Maintenance CapEx ----------
     st.markdown("#### Owner Earnings (Buffett)")
-    _ratios = [(_abs(d.get("capex")) / d["revenue"]) for d in cap
-               if d.get("capex") is not None and d.get("revenue")]
-    _avg_cs = (sum(_ratios) / len(_ratios)) if _ratios else None
+    # Greenwald-Kapitalintensitaet: bevorzugt PP&E/Umsatz (streng), sonst
+    # CapEx/Umsatz als Fallback. Wachstums-CapEx = Intensitaet × ΔUmsatz.
+    _ppe_ratios = [(d["ppe_gross"] / d["revenue"]) for d in cap
+                   if d.get("ppe_gross") is not None and d.get("revenue")]
+    _capex_ratios = [(_abs(d.get("capex")) / d["revenue"]) for d in cap
+                     if d.get("capex") is not None and d.get("revenue")]
+    if _ppe_ratios:
+        _intensity = sum(_ppe_ratios) / len(_ppe_ratios)
+        _method = "PP&E/Umsatz"
+        _ppe_net_used = any(d.get("ppe_is_net") for d in cap
+                            if d.get("ppe_gross") is not None)
+    elif _capex_ratios:
+        _intensity = sum(_capex_ratios) / len(_capex_ratios)
+        _method = "CapEx/Umsatz (Fallback)"
+        _ppe_net_used = False
+    else:
+        _intensity = None
+        _method = "—"
+        _ppe_net_used = False
+
     oe_series = []
     _prev_rev = None
     for d in cap:
@@ -620,9 +637,9 @@ def render_returns(ticker, n_years):
         cx, rev = _abs(d.get("capex")), d.get("revenue")
         maint = None
         if cx is not None:
-            if _avg_cs is not None and _prev_rev is not None \
+            if _intensity is not None and _prev_rev is not None \
                     and rev is not None:
-                growth = _avg_cs * max(0.0, rev - _prev_rev)
+                growth = _intensity * max(0.0, rev - _prev_rev)
                 maint = min(cx, max(0.0, cx - growth))
             else:
                 maint = cx          # erstes Jahr: konservativ volle CapEx
@@ -663,11 +680,15 @@ def render_returns(ticker, n_years):
                                                        y=-0.2),
                           hovermode="x unified")
         st.plotly_chart(fig, use_container_width=True)
-    st.caption("Owner Earnings nach Buffett = Nettogewinn + Abschreibungen "
-               "(D&A) − Maintenance CapEx. Maintenance CapEx wird nicht "
-               "berichtet und per Greenwald-Methode geschaetzt (Gesamt-CapEx "
-               "− Wachstums-CapEx); im ersten Jahr konservativ volle CapEx. "
-               "Naeherung.")
+    _note_net = (" PP&E nur netto verfuegbar — Kapitalintensitaet leicht "
+                 "unterschaetzt." if _ppe_net_used else "")
+    st.caption(
+        "Owner Earnings nach Buffett = Nettogewinn + Abschreibungen (D&A) "
+        "− Maintenance CapEx. Maintenance CapEx wird nicht berichtet und "
+        f"per Greenwald-Methode geschaetzt: Kapitalintensitaet ({_method}) "
+        "× Umsatzzuwachs = Wachstums-CapEx; Maintenance = Gesamt-CapEx − "
+        "Wachstums-CapEx. Erstes Jahr konservativ volle CapEx. Naeherung."
+        + _note_net)
 
     # ---- FCF-Verwendung (Kapitalallokation) -----------------------------
     st.markdown("#### FCF-Verwendung (Kapitalallokation)")

@@ -795,6 +795,9 @@ _DA = ["DepreciationDepletionAndAmortization",
 _DEP_ONLY = ["Depreciation", "DepreciationNonproduction"]
 _AMORT_ONLY = ["AmortizationOfIntangibleAssets",
                "AmortizationOfDeferredCharges"]
+# Sachanlagen fuer Greenwald-Kapitalintensitaet (Brutto bevorzugt).
+_PPE_GROSS = ["PropertyPlantAndEquipmentGross"]
+_PPE_NET = ["PropertyPlantAndEquipmentNet"]
 
 
 def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
@@ -835,6 +838,13 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         if dep is not None or amort is not None:
             dep_amort = (dep or 0.0) + (amort or 0.0)
 
+    # Sachanlagen (Greenwald-Kapitalintensitaet): Brutto, sonst Netto
+    ppe_gross = _pick_instant(bs_stmt, _PPE_GROSS, period)
+    ppe_is_net = False
+    if ppe_gross is None:
+        ppe_gross = _pick_instant(bs_stmt, _PPE_NET, period)
+        ppe_is_net = ppe_gross is not None
+
     if inc is not None and inc.revenue is None and inc.net_income is None:
         return None
     return {
@@ -859,6 +869,8 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         "dividends":        dividends,
         "acquisitions":     acquisitions,
         "dep_amort":        dep_amort,
+        "ppe_gross":        ppe_gross,
+        "ppe_is_net":       ppe_is_net,
     }
 
 
