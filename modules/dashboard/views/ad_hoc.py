@@ -25,9 +25,10 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_exhibit_text, fetch_insider_transactions, fetch_mgmt_changes,
-    fetch_sbc_from_filing, fetch_statements_from_filing,
-    fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
+    fetch_exhibit_text, fetch_insider_first_filing,
+    fetch_insider_transactions, fetch_mgmt_changes, fetch_sbc_from_filing,
+    fetch_statements_from_filing, fetch_year_metrics_from_filing,
+    find_earnings_exhibits, find_filings,
 )
 
 
@@ -226,6 +227,15 @@ def _load_insider(ticker: str):
 def _load_mgmt_changes(ticker: str):
     """8-K Item 5.02 Filings (Management-Wechsel)."""
     return fetch_mgmt_changes(ticker, n=50)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_first_filing(ticker: str, owner: str):
+    """Fruehestes Insider-Filing einer Person (Tenure-Beginn)."""
+    try:
+        return fetch_insider_first_filing(ticker, owner)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1585,7 +1595,14 @@ def render_management(ticker, n_years):
         if sub.empty:
             return None, None
         cur = sub.sort_values("txn_dt").iloc[-1]["owner"]   # aktuellste Person
+        # Gezielte Abfrage des fruehesten Filings (Fenster reicht oft nicht
+        # weit genug zurueck); Fenster-Minimum als Fallback.
         first = df[df["owner"] == cur]["filed_dt"].min()
+        f_iso = _load_first_filing(ticker, cur)
+        if f_iso:
+            f_dt = pd.to_datetime(f_iso, utc=True, errors="coerce")
+            if pd.notna(f_dt) and (pd.isna(first) or f_dt < first):
+                first = f_dt
         if pd.isna(first):
             return cur, None
         return cur, (today - first).days / 365.25

@@ -1062,6 +1062,36 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
 _INSIDER_PAGE = 50          # API-Hardlimit fuer 'size'
 
 
+def fetch_insider_first_filing(ticker: str, owner_name: str) -> str | None:
+    """Fruehestes Insider-Filing (filedAt) einer Person beim Emittenten.
+
+    Gezielte Abfrage (sort filedAt asc, size 1) — unabhaengig davon, wie
+    weit das juengste Fenster zurueckreicht. Approximiert den Eintritt als
+    Insider (Tenure-Beginn). None, wenn kein Treffer.
+    """
+    if not owner_name or owner_name == "—":
+        return None
+    safe = owner_name.replace('"', " ").strip()
+    payload = {
+        "query": f'issuer.tradingSymbol:{ticker} AND '
+                 f'reportingOwner.name:"{safe}"',
+        "from": "0", "size": "1",
+        "sort": [{"filedAt": {"order": "asc"}}],
+    }
+    try:
+        resp = requests.post(
+            INSIDER_URL, json=payload,
+            headers={"Authorization": _api_key()}, timeout=20)
+    except requests.RequestException as e:
+        raise SecApiError(f"Insider-First-Request fehlgeschlagen: {e}") from e
+    if resp.status_code != 200:
+        raise SecApiError(
+            f"Insider-First HTTP {resp.status_code}: {resp.text[:160]}")
+    body = resp.json() or {}
+    recs = body.get("transactions") or body.get("data") or []
+    return recs[0].get("filedAt") if recs else None
+
+
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:
     """8-K Item 5.02 (Abgang/Bestellung von Direktoren/Officers).
 
