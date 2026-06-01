@@ -32,6 +32,7 @@ from modules.sec_filings.client import (
     fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
     get_issuer_cik,
 )
+from modules.sec_filings.extractor import fetch_employees_from_filing
 
 
 # ---------- Score-Konfiguration (config/ad_hoc_score.yaml) ----------
@@ -341,6 +342,15 @@ def _load_employees(ticker: str) -> dict:
         return fetch_employee_counts_detail(_issuer_cik(ticker))
     except Exception as e:  # noqa: BLE001
         return {"map": {}, "error": f"{e.__class__.__name__}: {e}"}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_emp_text(accession_no: str):
+    """Mitarbeiterzahl aus 10-K Item 1 (Textextraktion). None bei Fehler."""
+    try:
+        return fetch_employees_from_filing(accession_no)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2157,6 +2167,14 @@ def render_physical(ticker, n_years):
             return best if bestdiff <= 45 else None
         rows = [dict(d, employees=(_emp_for(str(d["period_end"])[:10])
                                    or d.get("employees"))) for d in rows]
+
+    # Fallback: Mitarbeiterzahl aus 10-K Item 1 (Text), wenn nicht XBRL-
+    # getaggt (haeufig 404 bei der company-concept-API).
+    if not any(d.get("employees") for d in rows):
+        with st.spinner("Lese Mitarbeiterzahl aus 10-K-Text …"):
+            rows = [dict(d, employees=(d.get("employees")
+                         or _load_emp_text(d.get("accession_no"))))
+                    for d in rows]
 
     cur = "USD"
     last, first = rows[-1], rows[0]

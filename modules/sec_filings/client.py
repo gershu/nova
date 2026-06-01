@@ -940,6 +940,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     return {
         "period_end":       period,
         "form_type":        filing["form_type"],
+        "accession_no":     filing.get("accession_no"),
         "revenue":          inc.revenue if inc else None,
         "gross_profit":     inc.gross_profit if inc else None,
         "rd_expense":       inc.rd_expense if inc else None,
