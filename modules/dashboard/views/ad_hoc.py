@@ -159,6 +159,113 @@ def _returns(inc, bs) -> dict:
             "nopat": nopat, "inv_cap": inv_cap, "eff_tax": eff}
 
 
+# ---------- Kriterien je Thema (Single Source fuer Verdict + Score) ----
+
+def _checks_balance(latest) -> list:
+    checks = []
+    cr = _div(latest.assets_current, latest.liabilities_current)
+    if cr is not None:
+        checks.append(("Current Ratio > 1,5", cr > 1.5))
+    if latest.net_debt is not None:
+        checks.append(("Netto-Cash (Net Debt < 0)", latest.net_debt < 0))
+    de = _div(latest.total_debt, latest.equity)
+    if de is not None:
+        checks.append(("Debt/Equity < 0,5", de < 0.5))
+    eqr = _div(latest.equity, latest.total_assets)
+    if eqr is not None:
+        checks.append(("Eigenkapitalquote > 40 %", eqr > 0.40))
+    return checks
+
+
+def _checks_returns(rows) -> list:
+    inc_l, bs_l = rows[-1]
+    rl = _returns(inc_l, bs_l)
+    checks = []
+    if rl["roic"] is not None:
+        checks.append(("ROIC > 15 %", rl["roic"] > 0.15))
+    if rl["roe"] is not None:
+        checks.append(("ROE > 15 %", rl["roe"] > 0.15))
+    if rl["roa"] is not None:
+        checks.append(("ROA > 6 %", rl["roa"] > 0.06))
+    all_roic = [_returns(i, b)["roic"] for i, b in rows]
+    all_roic = [x for x in all_roic if x is not None]
+    if len(all_roic) >= 2:
+        checks.append(("ROIC durchgehend positiv",
+                       all(x > 0 for x in all_roic)))
+    return checks
+
+
+def _insider_aggregate(tx, n_years) -> dict:
+    cutoff = (date.today() - timedelta(days=int(n_years) * 365)).isoformat()
+    df = pd.DataFrame(tx)
+    if not df.empty:
+        df = df[df["transaction_date"] >= cutoff]
+    buys = df[df["code"] == "P"] if not df.empty else df
+    sells = df[df["code"] == "S"] if not df.empty else df
+    return {
+        "df": df,
+        "buy_val": float(buys["value"].fillna(0).sum()) if not df.empty else 0.0,
+        "sell_val": float(sells["value"].fillna(0).sum()) if not df.empty else 0.0,
+        "n_buyers": buys["owner"].nunique() if not df.empty else 0,
+        "n_sellers": sells["owner"].nunique() if not df.empty else 0,
+        "buys": buys, "sells": sells,
+    }
+
+
+def _checks_insider(agg) -> list:
+    net = agg["buy_val"] - agg["sell_val"]
+    return [
+        ("Netto-Insiderkaeufe (Wert)", net > 0),
+        ("Mehr Kaeufer als Verkaeufer", agg["n_buyers"] > agg["n_sellers"]),
+        ("Cluster-Kauf (>= 3 Kaeufer)", agg["n_buyers"] >= 3),
+    ]
+
+
+def _sbc_metrics(rows) -> dict:
+    last = rows[-1]
+    sbc = last.get("sbc")
+    sh = [(d["period_end"], d["diluted_shares"]) for d in rows
+          if d.get("diluted_shares")]
+    dil_cagr = None
+    if len(sh) >= 2 and sh[0][1] and sh[0][1] > 0:
+        try:
+            yrs = (pd.to_datetime(sh[-1][0]) - pd.to_datetime(
+                sh[0][0])).days / 365.25
+            if yrs >= 1:
+                dil_cagr = (sh[-1][1] / sh[0][1]) ** (1 / yrs) - 1
+        except Exception:  # noqa: BLE001
+            dil_cagr = None
+    return {
+        "last": last, "sbc": sbc,
+        "sbc_rev": _div(sbc, last.get("revenue")),
+        "sbc_cfo": _div(sbc, last.get("cfo")),
+        "sbc_ni": _div(sbc, last.get("net_income")),
+        "dil_cagr": dil_cagr,
+    }
+
+
+def _checks_sbc(metrics) -> list:
+    checks = []
+    if metrics["sbc_rev"] is not None:
+        checks.append(("SBC < 5 % vom Umsatz", metrics["sbc_rev"] < 0.05))
+    if metrics["sbc_cfo"] is not None:
+        checks.append(("SBC < 15 % vom operativen Cashflow",
+                       metrics["sbc_cfo"] < 0.15))
+    if metrics["dil_cagr"] is not None:
+        checks.append(("Aktienzahl ≤ +1 % p.a. (kaum Verwaesserung)",
+                       metrics["dil_cagr"] <= 0.01))
+    return checks
+
+
+def _checks_gaap(ana) -> list:
+    return [
+        ("Non-GAAP-Nutzung moderat (< 15 Erwaehnungen)",
+         ana["mentions"] < 15),
+        ("SBC NICHT herausgerechnet", not ana["adds_back_sbc"]),
+        ("≤ 3 Anpassungskategorien", len(ana["categories"]) <= 3),
+    ]
+
+
 # =====================================================================
 # Render-Funktionen je Thema
 # =====================================================================
@@ -184,19 +291,10 @@ def render_balance(ticker, n_years):
         f"Stichtag **{str(latest.period_end)[:10]}** "
         f"({latest.form_type}) · eingereicht {str(latest.filed_at)[:10]}")
 
-    checks = []
     cr = _div(latest.assets_current, latest.liabilities_current)
-    if cr is not None:
-        checks.append(("Current Ratio > 1,5", cr > 1.5))
-    if latest.net_debt is not None:
-        checks.append(("Netto-Cash (Net Debt < 0)", latest.net_debt < 0))
     de = _div(latest.total_debt, latest.equity)
-    if de is not None:
-        checks.append(("Debt/Equity < 0,5", de < 0.5))
     eqr = _div(latest.equity, latest.total_assets)
-    if eqr is not None:
-        checks.append(("Eigenkapitalquote > 40 %", eqr > 0.40))
-    _verdict_box(checks, lead="Bilanz")
+    _verdict_box(_checks_balance(latest), lead="Bilanz")
 
     inv = latest.inventory or 0.0
     quick = _div((latest.assets_current or 0.0) - inv,
@@ -297,20 +395,9 @@ def render_returns(ticker, n_years):
         f"Letztes GJ **{str(inc_l.period_end)[:10]}** "
         f"({inc_l.form_type}) · {len(rows)} Jahre geladen")
 
-    checks = []
-    if rl["roic"] is not None:
-        checks.append(("ROIC > 15 %", rl["roic"] > 0.15))
-    if rl["roe"] is not None:
-        checks.append(("ROE > 15 %", rl["roe"] > 0.15))
-    if rl["roa"] is not None:
-        checks.append(("ROA > 6 %", rl["roa"] > 0.06))
-    _all_roic = [_returns(i, b)["roic"] for i, b in rows]
-    _all_roic = [x for x in _all_roic if x is not None]
-    if len(_all_roic) >= 2:
-        checks.append(("ROIC durchgehend positiv",
-                       all(x > 0 for x in _all_roic)))
-    _verdict_box(checks, strong="hochwertig", mixed="durchschnittlich",
-                 weak="kapitalineffizient", lead="Kapitalrendite")
+    _verdict_box(_checks_returns(rows), strong="hochwertig",
+                 mixed="durchschnittlich", weak="kapitalineffizient",
+                 lead="Kapitalrendite")
 
     m = st.columns(4)
     m[0].metric("ROIC", _pct(rl["roic"]),
@@ -379,9 +466,8 @@ def render_insider(ticker, n_years):
                    "gefunden.")
         st.stop()
 
-    cutoff = (date.today() - timedelta(days=int(n_years) * 365)).isoformat()
-    df = pd.DataFrame(tx)
-    df = df[df["transaction_date"] >= cutoff]
+    agg = _insider_aggregate(tx, n_years)
+    df = agg["df"]
     st.markdown(
         f"### {ticker} — Insider Buy / Sell  \n"
         f"Lookback **{int(n_years)} J** · {len(df)} Transaktionen "
@@ -390,20 +476,12 @@ def render_insider(ticker, n_years):
         st.info("Keine Transaktionen im gewaehlten Zeitraum.")
         st.stop()
 
-    buys = df[df["code"] == "P"]
-    sells = df[df["code"] == "S"]
-    buy_val = float(buys["value"].fillna(0).sum())
-    sell_val = float(sells["value"].fillna(0).sum())
+    buys, sells = agg["buys"], agg["sells"]
+    buy_val, sell_val = agg["buy_val"], agg["sell_val"]
     net_val = buy_val - sell_val
-    n_buyers = buys["owner"].nunique()
-    n_sellers = sells["owner"].nunique()
+    n_buyers, n_sellers = agg["n_buyers"], agg["n_sellers"]
 
-    checks = [
-        ("Netto-Insiderkaeufe (Wert)", net_val > 0),
-        ("Mehr Kaeufer als Verkaeufer", n_buyers > n_sellers),
-        ("Cluster-Kauf (>= 3 Kaeufer)", n_buyers >= 3),
-    ]
-    _verdict_box(checks, strong="bullisch (Insider kaufen)",
+    _verdict_box(_checks_insider(agg), strong="bullisch (Insider kaufen)",
                  mixed="neutral / gemischt",
                  weak="bearisch (Insider verkaufen)",
                  lead="Insider-Signal")
@@ -488,34 +566,12 @@ def render_sbc(ticker, n_years):
                 "Cashflow-Statement gefunden. Manche Firmen weisen es nur "
                 "im Anhang aus.")
 
-    sbc = last.get("sbc")
-    sbc_rev = _div(sbc, last.get("revenue"))
-    sbc_cfo = _div(sbc, last.get("cfo"))
-    sbc_ni = _div(sbc, last.get("net_income"))
-
-    # Verwaesserung: CAGR der verwaesserten Aktien ueber den Zeitraum
-    _sh = [(d["period_end"], d["diluted_shares"]) for d in rows
-           if d.get("diluted_shares")]
-    dil_cagr = None
-    if len(_sh) >= 2:
-        first_sh, last_sh = _sh[0][1], _sh[-1][1]
-        try:
-            yrs = (pd.to_datetime(_sh[-1][0]) - pd.to_datetime(
-                _sh[0][0])).days / 365.25
-            if yrs >= 1 and first_sh > 0:
-                dil_cagr = (last_sh / first_sh) ** (1 / yrs) - 1
-        except Exception:  # noqa: BLE001
-            dil_cagr = None
-
-    checks = []
-    if sbc_rev is not None:
-        checks.append(("SBC < 5 % vom Umsatz", sbc_rev < 0.05))
-    if sbc_cfo is not None:
-        checks.append(("SBC < 15 % vom operativen Cashflow", sbc_cfo < 0.15))
-    if dil_cagr is not None:
-        checks.append(("Aktienzahl ≤ +1 % p.a. (kaum Verwaesserung)",
-                       dil_cagr <= 0.01))
-    _verdict_box(checks, strong="gering verwaessernd (hohe Qualitaet)",
+    _met = _sbc_metrics(rows)
+    sbc = _met["sbc"]
+    sbc_rev, sbc_cfo, dil_cagr = (_met["sbc_rev"], _met["sbc_cfo"],
+                                  _met["dil_cagr"])
+    _verdict_box(_checks_sbc(_met),
+                 strong="gering verwaessernd (hohe Qualitaet)",
                  mixed="moderat", weak="stark verwaessernd",
                  lead="SBC-Belastung")
 
@@ -597,13 +653,7 @@ def render_gaap(ticker, n_years):
         f"Quelle: Earnings-8-K, eingereicht **{str(meta['filed_at'])[:10]}**")
 
     cats = ana["categories"]
-    checks = [
-        ("Non-GAAP-Nutzung moderat (< 15 Erwaehnungen)",
-         ana["mentions"] < 15),
-        ("SBC NICHT herausgerechnet", not ana["adds_back_sbc"]),
-        ("≤ 3 Anpassungskategorien", len(cats) <= 3),
-    ]
-    _verdict_box(checks, strong="konservativ / transparent",
+    _verdict_box(_checks_gaap(ana), strong="konservativ / transparent",
                  mixed="moderat", weak="aggressiv (viele Add-backs)",
                  lead="Reporting")
 
@@ -647,6 +697,133 @@ def render_gaap(ticker, n_years):
                "die Ergebnisqualitaet.")
 
 
+# ---------- Gesamt-Score ----------
+
+# Gewichte: Fundamentalqualitaet (Bilanz, ROC) hoeher als Signale.
+_SCORE_WEIGHTS = {
+    "Return on Capital": 0.30,
+    "Balance Sheet":     0.25,
+    "Stock-based Comp.": 0.20,
+    "GAAP vs non-GAAP":  0.15,
+    "Insider":           0.10,
+}
+
+
+def _subscore(checks):
+    """Anteil erfuellter Kriterien (0..1) oder None, wenn keine Daten."""
+    if not checks:
+        return None
+    return sum(1 for _, ok in checks if ok) / len(checks)
+
+
+def render_score(ticker, n_years):
+    st.markdown(f"### {ticker} — Gesamt-Qualitaets-Score")
+
+    def _safe(fn):
+        try:
+            return fn()
+        except SecApiError:
+            return None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _balance():
+        latest, _ = _load_balance(ticker, n_years)
+        return _checks_balance(latest) if latest else None
+
+    def _roc():
+        rows = _load_returns(ticker, n_years)
+        return _checks_returns(rows) if rows else None
+
+    def _sbc():
+        rows = _load_sbc(ticker, n_years)
+        return _checks_sbc(_sbc_metrics(rows)) if rows else None
+
+    def _gaap():
+        _meta, ana = _load_gaap(ticker)
+        return _checks_gaap(ana) if ana else None
+
+    def _insider():
+        tx = _load_insider(ticker)
+        if not tx:
+            return None
+        return _checks_insider(_insider_aggregate(tx, n_years))
+
+    loaders = {
+        "Return on Capital": _roc,
+        "Balance Sheet":     _balance,
+        "Stock-based Comp.": _sbc,
+        "GAAP vs non-GAAP":  _gaap,
+        "Insider":           _insider,
+    }
+
+    with st.spinner(f"Werte alle 5 Themen fuer {ticker} aus …"):
+        themes = {name: _safe(fn) for name, fn in loaders.items()}
+
+    # Gewichteter Score ueber verfuegbare Themen (Renormierung)
+    num = den = 0.0
+    rows = []
+    for name, checks in themes.items():
+        w = _SCORE_WEIGHTS[name]
+        sub = _subscore(checks)
+        if sub is not None:
+            num += sub * w
+            den += w
+        rows.append({"Thema": name, "checks": checks, "sub": sub, "w": w})
+
+    if den == 0:
+        st.error("Keine Themen lieferten Daten — Ticker pruefen.")
+        st.stop()
+
+    score = round(100 * num / den)
+    n_ok = sum(1 for r in rows if r["sub"] is not None)
+    if score >= 70:
+        st.success(f"## {score}/100 — hohe Qualitaet")
+    elif score >= 40:
+        st.info(f"## {score}/100 — gemischt")
+    else:
+        st.warning(f"## {score}/100 — schwach")
+    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/5 auswertbare Themen "
+               f"(fehlende ausgeklammert, Gewichte renormiert). "
+               f"Lookback/Jahre: {int(n_years)}.")
+
+    # Teil-Scores als Balken
+    bar = pd.DataFrame([{
+        "Thema": r["Thema"],
+        "Score": round(100 * r["sub"]) if r["sub"] is not None else None,
+        "Gewicht": r["w"],
+    } for r in rows])
+    fig = go.Figure(go.Bar(
+        x=bar["Score"], y=bar["Thema"], orientation="h",
+        marker_color=["#1D9E75" if (s is not None and s >= 70)
+                      else "#B4862B" if (s is not None and s >= 40)
+                      else "#A32D2D" if s is not None else "#CFCDC6"
+                      for s in bar["Score"]],
+        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
+        textposition="auto",
+        hovertemplate="%{y}: %{x}/100<extra></extra>"))
+    fig.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis=dict(range=[0, 100], title="Teil-Score"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Detail je Thema
+    for r in rows:
+        w_pct = f"{int(r['w'] * 100)} %"
+        if r["sub"] is None:
+            st.markdown(f"**{r['Thema']}** · Gewicht {w_pct} — _keine "
+                        f"Daten / nicht auswertbar_")
+            continue
+        with st.expander(
+                f"{r['Thema']} · {round(100 * r['sub'])}/100 · "
+                f"Gewicht {w_pct}"):
+            for name, ok in r["checks"]:
+                st.markdown(f"{'✅' if ok else '❌'} {name}")
+
+    st.caption("Score = gewichteter Anteil erfuellter Qualitaets-Kriterien "
+               "je Thema. Heuristik, kein Anlageurteil. Datenbasis: "
+               "on-Demand sec-api.io, nicht persistiert.")
+
+
 # =====================================================================
 # Seite
 # =====================================================================
@@ -657,6 +834,7 @@ st.caption(
     "Checklist*. Daten on-Demand von sec-api.io — keine Speicherung.")
 
 _TOPICS = {
+    "★ Gesamt-Score (alle 5 Themen)": render_score,
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
