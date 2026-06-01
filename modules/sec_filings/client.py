@@ -572,6 +572,52 @@ def fetch_statements_from_filing(
     return inc, bs
 
 
+# ---------- Stock-based Compensation / Cashflow ----------
+
+_SBC = ["ShareBasedCompensation",
+        "ShareBasedCompensationExpense",
+        "AllocatedShareBasedCompensationExpense"]
+_CFO = ["NetCashProvidedByUsedInOperatingActivities",
+        "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations"]
+_DILUTED_SHARES = ["WeightedAverageNumberOfDilutedSharesOutstanding",
+                   "WeightedAverageNumberOfShareOutstandingBasicAndDiluted"]
+
+
+def fetch_sbc_from_filing(filing: dict) -> dict | None:
+    """SBC + Kontext aus EINEM XBRL-Call.
+
+    Returns dict {period_end, form_type, filed_at, sbc, cfo, revenue,
+    net_income, diluted_shares} oder None, wenn weder SBC noch Umsatz
+    auffindbar sind.
+    """
+    if not filing or not filing.get("accession_no") \
+            or not filing.get("period_of_report"):
+        return None
+    xbrl = fetch_xbrl(filing["accession_no"])
+    period = filing["period_of_report"]
+    cf = xbrl.get("StatementsOfCashFlows") or {}
+    inc = xbrl.get("StatementsOfIncome") or {}
+
+    sbc, _ = _pick(cf, _SBC, period)
+    cfo, _ = _pick(cf, _CFO, period)
+    revenue, _ = _pick(inc, _REVENUE, period)
+    net_income, _ = _pick(inc, _NET, period)
+    diluted, _ = _pick(inc, _DILUTED_SHARES, period)
+
+    if sbc is None and revenue is None:
+        return None
+    return {
+        "period_end":     period,
+        "form_type":      filing["form_type"],
+        "filed_at":       filing["filed_at"],
+        "sbc":            sbc,
+        "cfo":            cfo,
+        "revenue":        revenue,
+        "net_income":     net_income,
+        "diluted_shares": diluted,
+    }
+
+
 # ---------- Insider Trading (Form 3/4/5) ----------
 
 # Transaktions-Codes (SEC Form 4): die diskretionaeren Markt-Trades sind

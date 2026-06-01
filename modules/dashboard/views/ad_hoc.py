@@ -22,7 +22,8 @@ from datetime import date, timedelta
 
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, fetch_balance_sheet_from_filing,
-    fetch_insider_transactions, fetch_statements_from_filing, find_filings,
+    fetch_insider_transactions, fetch_sbc_from_filing,
+    fetch_statements_from_filing, find_filings,
 )
 
 
@@ -105,6 +106,19 @@ def _load_returns(ticker: str, n_years: int):
 def _load_insider(ticker: str):
     """Flache Insider-Transaktionsliste (Form 3/4/5)."""
     return fetch_insider_transactions(ticker, n=300)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_sbc(ticker: str, n_years: int):
+    """Letzte N 10-K: SBC + Kontext je Jahr (dicts)."""
+    annuals = find_filings(ticker, n=n_years, forms=("10-K",))
+    rows = []
+    for f in annuals:
+        d = fetch_sbc_from_filing(f)
+        if d is not None:
+            rows.append(d)
+    rows.sort(key=lambda d: d.get("period_end") or "")
+    return rows
 
 
 # ---------- Kennzahlen ----------
@@ -436,6 +450,121 @@ def render_insider(ticker, n_years):
                "Steuereinbehalte (F), Schenkungen (G) sind ausgeklammert.")
 
 
+def render_sbc(ticker, n_years):
+    try:
+        with st.spinner(f"Lade {n_years} Jahresberichte fuer {ticker} …"):
+            rows = _load_sbc(ticker, n_years)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if not rows:
+        st.warning(f"Keine 10-K mit SBC-/Cashflow-Daten fuer **{ticker}** "
+                   "gefunden.")
+        st.stop()
+
+    last = rows[-1]
+    cur = "USD"
+    st.markdown(
+        f"### {ticker} — Stock-based Compensation  \n"
+        f"Letztes GJ **{str(last['period_end'])[:10]}** "
+        f"({last['form_type']}) · {len(rows)} Jahre geladen")
+
+    if last.get("sbc") is None:
+        st.info("Kein SBC-Tag (ShareBasedCompensation) im juengsten "
+                "Cashflow-Statement gefunden. Manche Firmen weisen es nur "
+                "im Anhang aus.")
+
+    sbc = last.get("sbc")
+    sbc_rev = _div(sbc, last.get("revenue"))
+    sbc_cfo = _div(sbc, last.get("cfo"))
+    sbc_ni = _div(sbc, last.get("net_income"))
+
+    # Verwaesserung: CAGR der verwaesserten Aktien ueber den Zeitraum
+    _sh = [(d["period_end"], d["diluted_shares"]) for d in rows
+           if d.get("diluted_shares")]
+    dil_cagr = None
+    if len(_sh) >= 2:
+        first_sh, last_sh = _sh[0][1], _sh[-1][1]
+        try:
+            yrs = (pd.to_datetime(_sh[-1][0]) - pd.to_datetime(
+                _sh[0][0])).days / 365.25
+            if yrs >= 1 and first_sh > 0:
+                dil_cagr = (last_sh / first_sh) ** (1 / yrs) - 1
+        except Exception:  # noqa: BLE001
+            dil_cagr = None
+
+    checks = []
+    if sbc_rev is not None:
+        checks.append(("SBC < 5 % vom Umsatz", sbc_rev < 0.05))
+    if sbc_cfo is not None:
+        checks.append(("SBC < 15 % vom operativen Cashflow", sbc_cfo < 0.15))
+    if dil_cagr is not None:
+        checks.append(("Aktienzahl ≤ +1 % p.a. (kaum Verwaesserung)",
+                       dil_cagr <= 0.01))
+    _verdict_box(checks, strong="gering verwaessernd (hohe Qualitaet)",
+                 mixed="moderat", weak="stark verwaessernd",
+                 lead="SBC-Belastung")
+
+    m = st.columns(4)
+    m[0].metric("SBC (letztes GJ)", _money(sbc, cur))
+    m[1].metric("SBC / Umsatz", _pct(sbc_rev))
+    m[2].metric("SBC / operativer CF", _pct(sbc_cfo))
+    m[3].metric("Aktien p.a.", _pct(dil_cagr) if dil_cagr is not None
+                else "—", help="CAGR der verwaesserten Aktien "
+                                "(+ = Verwaesserung, − = Rueckkauf)")
+
+    if len(rows) >= 2:
+        df = pd.DataFrame([{
+            "period_end": pd.to_datetime(d["period_end"]),
+            "sbc_rev": _div(d.get("sbc"), d.get("revenue")),
+            "sbc_cfo": _div(d.get("sbc"), d.get("cfo")),
+            "diluted_shares": d.get("diluted_shares"),
+        } for d in rows])
+        st.markdown("#### Trend (10-K, jaehrlich)")
+        t1, t2 = st.columns(2)
+        f1 = go.Figure()
+        f1.add_trace(go.Scatter(
+            x=df["period_end"], y=df["sbc_rev"] * 100.0,
+            mode="lines+markers", name="SBC / Umsatz",
+            line=dict(color="#A32D2D", width=2), connectgaps=False))
+        f1.add_trace(go.Scatter(
+            x=df["period_end"], y=df["sbc_cfo"] * 100.0,
+            mode="lines+markers", name="SBC / operativer CF",
+            line=dict(color="#B4862B", width=2), connectgaps=False))
+        f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title="SBC-Belastung", yaxis_title="%",
+                         legend=dict(orientation="h", y=-0.25),
+                         hovermode="x unified")
+        t1.plotly_chart(f1, use_container_width=True)
+
+        f2 = go.Figure(go.Scatter(
+            x=df["period_end"], y=df["diluted_shares"],
+            mode="lines+markers", name="Verwaesserte Aktien",
+            line=dict(color="#0F6E56", width=2), connectgaps=False))
+        f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title="Verwaesserte Aktien (Stk.)",
+                         yaxis_title="Aktien")
+        t2.plotly_chart(f2, use_container_width=True)
+
+    with st.expander("SBC-Rohwerte je Jahr"):
+        st.dataframe(pd.DataFrame([{
+            "Jahr": str(d["period_end"])[:10],
+            "SBC": _money(d.get("sbc"), cur),
+            "Operativer CF": _money(d.get("cfo"), cur),
+            "Umsatz": _money(d.get("revenue"), cur),
+            "Nettogewinn": _money(d.get("net_income"), cur),
+            "Verw. Aktien": (de_int(d["diluted_shares"])
+                             if d.get("diluted_shares") else "—"),
+        } for d in rows]), use_container_width=True, hide_index=True)
+
+    st.caption("SBC aus dem Cashflow-Statement (ShareBasedCompensation, "
+               "nicht-zahlungswirksamer Zuschlag). Verwaesserung als CAGR "
+               "der gewichteten verwaesserten Aktien.")
+
+
 # =====================================================================
 # Seite
 # =====================================================================
@@ -449,7 +578,7 @@ _TOPICS = {
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
-    "Stock-based Compensation (in Arbeit)": None,
+    "Stock-based Compensation — SBC & Verwaesserung": render_sbc,
     "GAAP vs non-GAAP (in Arbeit)": None,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))
