@@ -1194,6 +1194,20 @@ def render_earnings(ticker, n_years):
                  help="Marktkap. (aktueller Kurs × verw. Aktien) + Net Debt. "
                       "Marktdaten via yfinance.")
 
+    # EV/FCF + Earnings Yield (EBIT/EV) — Bewertung, aktueller EV
+    evfcf = (ev_current / fcf_last
+             if (ev_current and fcf_last and fcf_last > 0) else None)
+    ey = _div(last.get("operating_income"), ev_current)
+    m3 = st.columns(2)
+    m3[0].metric("EV / FCF",
+                 f"{de_dec(evfcf, 1)}x" if evfcf is not None else "—",
+                 help="Enterprise Value / Free Cash Flow (aktueller EV, "
+                      "letztes GJ FCF). Niedriger = guenstiger.")
+    m3[1].metric("Earnings Yield (EBIT/EV)",
+                 _pct(ey) if ey is not None else "—",
+                 help="Operatives Ergebnis / Enterprise Value (Greenblatt). "
+                      "Hoeher = guenstiger.")
+
     if len(rows) >= 2:
         df = pd.DataFrame([{
             "period_end": pd.to_datetime(d["period_end"]),
@@ -1203,6 +1217,11 @@ def render_earnings(ticker, n_years):
             "equity": d.get("equity"),
             "fcf": d.get("fcf"),
             "ev": ev_by_year.get(str(d["period_end"])[:10]),
+            "evfcf": ((ev_by_year.get(str(d["period_end"])[:10]) / d["fcf"])
+                      if (ev_by_year.get(str(d["period_end"])[:10])
+                          and d.get("fcf") and d["fcf"] > 0) else None),
+            "eyield": _div(d.get("operating_income"),
+                           ev_by_year.get(str(d["period_end"])[:10])),
         } for d in rows])
         st.markdown("#### Verlauf (10-K, jaehrlich)")
         t1, t2 = st.columns(2)
@@ -1265,6 +1284,29 @@ def render_earnings(ticker, n_years):
         else:
             st.info("Enterprise-Value-Verlauf nicht verfuegbar — keine "
                     "Kursdaten (yfinance) oder Aktienzahl fehlt.")
+
+        if df["evfcf"].notna().any() or df["eyield"].notna().any():
+            t5, t6 = st.columns(2)
+            f6 = go.Figure(go.Scatter(
+                x=df["period_end"], y=df["evfcf"], mode="lines+markers",
+                name="EV/FCF", line=dict(color="#0F6E56", width=2),
+                connectgaps=False,
+                hovertemplate="%{x|%Y-%m-%d}<br>EV/FCF: "
+                              "%{y:.1f}x<extra></extra>"))
+            f6.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                             title="EV / FCF (x)", yaxis_title="x")
+            t5.plotly_chart(f6, use_container_width=True)
+
+            f7 = go.Figure(go.Scatter(
+                x=df["period_end"], y=df["eyield"] * 100.0,
+                mode="lines+markers", name="Earnings Yield",
+                line=dict(color="#B4862B", width=2), connectgaps=False,
+                hovertemplate="%{x|%Y-%m-%d}<br>Earnings Yield: "
+                              "%{y:.1f}%<extra></extra>"))
+            f7.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                             title="Earnings Yield EBIT/EV (%)",
+                             yaxis_title="%")
+            t6.plotly_chart(f7, use_container_width=True)
 
     with st.expander("Rohwerte je Jahr"):
         st.dataframe(pd.DataFrame([{

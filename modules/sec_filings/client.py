@@ -908,6 +908,7 @@ def fetch_earnings_history_from_filing(filing: dict) -> dict | None:
     eps_basic, _ = _pick(inc, _EPS_BASIC, period)
     eps_diluted, _ = _pick(inc, _EPS_DILUTED, period)
     net_income, _ = _pick(inc, _NET, period)
+    operating_income, _ = _pick(inc, _OPINC, period)
     diluted_shares, _ = _pick(inc, _DILUTED_SHARES, period)
 
     bs = map_balance_sheet(bs_stmt, period) if bs_stmt else None
@@ -930,6 +931,7 @@ def fetch_earnings_history_from_filing(filing: dict) -> dict | None:
         "eps_basic":   eps_basic,
         "eps_diluted": eps_diluted,
         "net_income":  net_income,
+        "operating_income": operating_income,
         "equity":      equity,
         "cfo":         cfo,
         "capex":       capex,
