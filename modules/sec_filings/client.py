@@ -648,13 +648,41 @@ def find_earnings_exhibits(ticker: str, *, n: int = 4) -> list[dict]:
     return out
 
 
+# SEC verlangt einen User-Agent mit Kontakt (Fair-Access-Policy); ein
+# generischer UA fuehrt zu HTTP 403. Primaer laeuft der Download aber ueber
+# die authentifizierte Proxy von sec-api.io (archive.sec-api.io + token).
+_SEC_UA = "nova-lab research admin@nova-lab.local"
+_ARCHIVE_PROXY = "https://archive.sec-api.io/"
+
+
+def _to_archive_proxy(url: str) -> str | None:
+    """www.sec.gov/Archives/<path> -> archive.sec-api.io/<path> (Proxy)."""
+    marker = "/Archives/"
+    if marker in url:
+        return _ARCHIVE_PROXY + url.split(marker, 1)[1]
+    return None
+
+
 def fetch_exhibit_text(url: str) -> str:
-    """Exhibit-HTML laden und zu Plain-Text reduzieren (SEC-User-Agent)."""
+    """Exhibit-HTML laden und zu Plain-Text reduzieren.
+
+    Primaerpfad: sec-api.io-Download-Proxy (authentifiziert, kein SEC-UA-
+    Blocking). Fallback: direkter SEC-Abruf mit konformem User-Agent.
+    """
     if not url:
         return ""
+    proxy = _to_archive_proxy(url)
     try:
-        resp = requests.get(
-            url, headers={"User-Agent": "nova-lab research"}, timeout=30)
+        if proxy:
+            resp = requests.get(proxy, params={"token": _api_key()},
+                                timeout=30)
+        else:
+            resp = requests.get(url, headers={"User-Agent": _SEC_UA},
+                                timeout=30)
+        # Fallback auf direkten SEC-Abruf, falls die Proxy scheitert
+        if proxy and resp.status_code != 200:
+            resp = requests.get(url, headers={"User-Agent": _SEC_UA},
+                                timeout=30)
     except requests.RequestException as e:
         raise SecApiError(f"Exhibit-Download fehlgeschlagen: {e}") from e
     if resp.status_code != 200:
