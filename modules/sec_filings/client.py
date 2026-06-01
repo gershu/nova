@@ -784,28 +784,46 @@ _EPS_BASIC = ["EarningsPerShareBasic",
               "IncomeLossFromContinuingOperationsPerBasicShare"]
 _EPS_DILUTED = ["EarningsPerShareDiluted",
                 "IncomeLossFromContinuingOperationsPerDilutedShare"]
+_CAPEX = ["PaymentsToAcquirePropertyPlantAndEquipment",
+          "PaymentsToAcquireProductiveAssets",
+          "PaymentsForCapitalImprovements"]
 
 
 def fetch_earnings_history_from_filing(filing: dict) -> dict | None:
-    """Gewinnruecklagen + EPS (basic/diluted) + Nettogewinn aus 1 XBRL-Call.
+    """Gewinnruecklagen, EPS, Eigenkapital, Free Cashflow + Net-Debt-Bausteine
+    aus EINEM XBRL-Call.
 
-    RetainedEarnings ist ein Stichtagswert (Bilanz, instant); EPS sind
-    Perioden-Fakten (GuV, duration). Returns None, wenn nichts auffindbar.
+    RetainedEarnings/Equity/Debt/Cash sind Stichtagswerte (Bilanz, instant);
+    EPS, CFO, CapEx sind Perioden-Fakten (duration). Net Debt + verwaesserte
+    Aktien werden mitgeliefert, damit die View daraus (mit Marktpreis) den
+    Enterprise Value bilden kann. Returns None, wenn nichts auffindbar.
     """
     if not filing or not filing.get("accession_no") \
             or not filing.get("period_of_report"):
         return None
     xbrl = fetch_xbrl(filing["accession_no"])
     period = filing["period_of_report"]
-    bs = xbrl.get("BalanceSheets") or {}
+    bs_stmt = xbrl.get("BalanceSheets") or {}
     inc = xbrl.get("StatementsOfIncome") or {}
+    cf = xbrl.get("StatementsOfCashFlows") or {}
 
-    retained = _pick_instant(bs, _RETAINED, period)
+    retained = _pick_instant(bs_stmt, _RETAINED, period)
     eps_basic, _ = _pick(inc, _EPS_BASIC, period)
     eps_diluted, _ = _pick(inc, _EPS_DILUTED, period)
     net_income, _ = _pick(inc, _NET, period)
+    diluted_shares, _ = _pick(inc, _DILUTED_SHARES, period)
 
-    if retained is None and eps_basic is None and eps_diluted is None:
+    bs = map_balance_sheet(bs_stmt, period) if bs_stmt else None
+    equity = bs.equity if bs else None
+    net_debt = bs.net_debt if bs else None
+    total_debt = bs.total_debt if bs else None
+
+    cfo, _ = _pick(cf, _CFO, period)
+    capex, _ = _pick(cf, _CAPEX, period)
+    fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
+
+    if retained is None and eps_basic is None and eps_diluted is None \
+            and equity is None and fcf is None:
         return None
     return {
         "period_end":  period,
@@ -815,6 +833,13 @@ def fetch_earnings_history_from_filing(filing: dict) -> dict | None:
         "eps_basic":   eps_basic,
         "eps_diluted": eps_diluted,
         "net_income":  net_income,
+        "equity":      equity,
+        "cfo":         cfo,
+        "capex":       capex,
+        "fcf":         fcf,
+        "net_debt":    net_debt,
+        "total_debt":  total_debt,
+        "diluted_shares": diluted_shares,
     }
 
 

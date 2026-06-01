@@ -191,6 +191,30 @@ def _load_earnings(ticker: str, n_years: int):
     return rows
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _load_prices(ticker: str, start_iso: str, end_iso: str) -> dict:
+    """Tages-Schlusskurse via yfinance -> {iso_date: close}. {} bei Fehler."""
+    try:
+        import yfinance as yf
+        h = yf.Ticker(ticker).history(start=start_iso, end=end_iso,
+                                      auto_adjust=False)
+        if h is None or h.empty:
+            return {}
+        return {str(idx.date()): float(row["Close"])
+                for idx, row in h.iterrows()}
+    except Exception:  # noqa: BLE001 — Marktdaten optional
+        return {}
+
+
+def _nearest_close(prices: dict, target_iso: str):
+    """Schlusskurs am/letzten Handelstag <= target_iso (sonst frühester)."""
+    if not prices:
+        return None
+    on_before = [d for d in prices if d <= target_iso]
+    key = max(on_before) if on_before else min(prices)
+    return prices.get(key)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_sbc(ticker: str, n_years: int):
     """Letzte N 10-K: SBC + Kontext je Jahr (dicts)."""
@@ -811,9 +835,29 @@ def render_earnings(ticker, n_years):
     epsb, epsd = last.get("eps_basic"), last.get("eps_diluted")
     re_first = first.get("retained_earnings")
     epsd_first = first.get("eps_diluted")
+    eq_last, eq_first = last.get("equity"), first.get("equity")
+    fcf_last = last.get("fcf")
     dil_gap = None
     if epsb not in (None, 0) and epsd is not None:
         dil_gap = (epsb - epsd) / abs(epsb)     # Verwaesserung basic->diluted
+
+    # Enterprise Value (Marktdaten via yfinance): Jahresend-Kurs ×
+    # verwaesserte Aktien + Net Debt. Graceful, wenn keine Kurse.
+    year_ends = [str(d["period_end"])[:10] for d in rows]
+    start_iso = (pd.to_datetime(min(year_ends)) - pd.Timedelta(days=10)
+                 ).date().isoformat()
+    end_iso = date.today().isoformat()
+    prices = _load_prices(ticker, start_iso, end_iso)
+
+    def _ev(d, target_iso):
+        sh, nd = d.get("diluted_shares"), d.get("net_debt")
+        px = _nearest_close(prices, target_iso)
+        if px is None or sh in (None, 0):
+            return None
+        return px * sh + (nd or 0.0)
+
+    ev_by_year = {ye: _ev(d, ye) for d, ye in zip(rows, year_ends)}
+    ev_current = _ev(last, end_iso)        # mit aktuellstem Kurs
 
     checks = []
     if re_last is not None:
@@ -821,6 +865,10 @@ def render_earnings(ticker, n_years):
                        re_last > 0))
     if re_last is not None and re_first is not None:
         checks.append(("Gewinnruecklagen gestiegen", re_last > re_first))
+    if eq_last is not None and eq_first is not None:
+        checks.append(("Eigenkapital gestiegen", eq_last > eq_first))
+    if fcf_last is not None:
+        checks.append(("Free Cash Flow positiv", fcf_last > 0))
     if epsd is not None and epsd_first is not None:
         checks.append(("EPS (verwaessert) gestiegen", epsd > epsd_first))
     if dil_gap is not None:
@@ -837,6 +885,14 @@ def render_earnings(ticker, n_years):
     m[3].metric("Verwaesserung basic→diluted",
                 _pct(dil_gap) if dil_gap is not None else "—",
                 help="(EPS basic − EPS diluted) / EPS basic")
+    m2 = st.columns(3)
+    m2[0].metric("Eigenkapital", _money(eq_last, cur),
+                 help="Total Shareholders' Equity (Stichtag)")
+    m2[1].metric("Free Cash Flow", _money(fcf_last, cur),
+                 help="Operativer Cashflow − CapEx (letztes GJ)")
+    m2[2].metric("Enterprise Value", _money(ev_current, cur),
+                 help="Marktkap. (aktueller Kurs × verw. Aktien) + Net Debt. "
+                      "Marktdaten via yfinance.")
 
     if len(rows) >= 2:
         df = pd.DataFrame([{
@@ -844,6 +900,9 @@ def render_earnings(ticker, n_years):
             "retained": d.get("retained_earnings"),
             "eps_basic": d.get("eps_basic"),
             "eps_diluted": d.get("eps_diluted"),
+            "equity": d.get("equity"),
+            "fcf": d.get("fcf"),
+            "ev": ev_by_year.get(str(d["period_end"])[:10]),
         } for d in rows])
         st.markdown("#### Verlauf (10-K, jaehrlich)")
         t1, t2 = st.columns(2)
@@ -873,18 +932,58 @@ def render_earnings(ticker, n_years):
                          hovermode="x unified")
         t2.plotly_chart(f2, use_container_width=True)
 
+        t3, t4 = st.columns(2)
+        f3 = go.Figure(go.Bar(
+            x=df["period_end"], y=df["equity"], marker_color="#1D9E75",
+            hovertemplate="%{x|%Y-%m-%d}<br>Eigenkapital: "
+                          "%{y:,.0f}<extra></extra>"))
+        f3.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Eigenkapital ({cur})", yaxis_title=cur)
+        t3.plotly_chart(f3, use_container_width=True)
+
+        fcf_col = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+                   for v in df["fcf"]]
+        f4 = go.Figure(go.Bar(
+            x=df["period_end"], y=df["fcf"], marker_color=fcf_col,
+            hovertemplate="%{x|%Y-%m-%d}<br>Free Cash Flow: "
+                          "%{y:,.0f}<extra></extra>"))
+        f4.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Free Cash Flow ({cur})", yaxis_title=cur)
+        t4.plotly_chart(f4, use_container_width=True)
+
+        if df["ev"].notna().any():
+            f5 = go.Figure(go.Scatter(
+                x=df["period_end"], y=df["ev"], mode="lines+markers",
+                name="Enterprise Value", line=dict(color="#444441", width=2),
+                connectgaps=False,
+                hovertemplate="%{x|%Y-%m-%d}<br>EV: %{y:,.0f}<extra></extra>"))
+            f5.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                             title=f"Enterprise Value ({cur}) — "
+                                   "Jahresend-Kurs × Aktien + Net Debt",
+                             yaxis_title=cur)
+            st.plotly_chart(f5, use_container_width=True)
+        else:
+            st.info("Enterprise-Value-Verlauf nicht verfuegbar — keine "
+                    "Kursdaten (yfinance) oder Aktienzahl fehlt.")
+
     with st.expander("Rohwerte je Jahr"):
         st.dataframe(pd.DataFrame([{
             "Jahr": str(d["period_end"])[:10],
             "Gewinnruecklagen": _money(d.get("retained_earnings"), cur),
-            "EPS unverwaessert": _eps(d.get("eps_basic"), cur),
-            "EPS verwaessert": _eps(d.get("eps_diluted"), cur),
-            "Nettogewinn": _money(d.get("net_income"), cur),
+            "Eigenkapital": _money(d.get("equity"), cur),
+            "Free Cash Flow": _money(d.get("fcf"), cur),
+            "EV (approx.)": _money(ev_by_year.get(str(d["period_end"])[:10]),
+                                   cur),
+            "EPS unverw.": _eps(d.get("eps_basic"), cur),
+            "EPS verw.": _eps(d.get("eps_diluted"), cur),
         } for d in rows]), use_container_width=True, hide_index=True)
 
-    st.caption("Gewinnruecklagen (RetainedEarningsAccumulatedDeficit) als "
-               "Bilanz-Stichtagswert; EPS basic/diluted als Jahreswerte aus "
-               "der GuV. Diese Kategorie fliesst nicht in den Gesamt-Score.")
+    st.caption("Gewinnruecklagen, Eigenkapital als Bilanz-Stichtagswerte; "
+               "Free Cash Flow = operativer Cashflow − CapEx; EPS aus der "
+               "GuV. Enterprise Value mischt SEC-Fundamentaldaten mit "
+               "Marktkursen (yfinance): EV = Jahresend-Kurs × verwaesserte "
+               "Aktien + Net Debt — historische Werte sind eine Naeherung. "
+               "Diese Kategorie fliesst nicht in den Gesamt-Score.")
 
 
 # ---------- Gesamt-Score ----------
@@ -1032,7 +1131,7 @@ _TOPICS = {
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
     "Stock-based Compensation — SBC & Verwaesserung": render_sbc,
-    "Gewinnruecklagen & EPS — Verlauf": render_earnings,
+    "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf": render_earnings,
     "GAAP vs non-GAAP — Earnings-Exhibit": render_gaap,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))
