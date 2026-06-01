@@ -24,8 +24,8 @@ import yaml
 from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
-    fetch_balance_sheet_from_filing, fetch_exhibit_text,
-    fetch_insider_transactions, fetch_sbc_from_filing,
+    fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
+    fetch_exhibit_text, fetch_insider_transactions, fetch_sbc_from_filing,
     fetch_statements_from_filing, find_earnings_exhibits, find_filings,
 )
 
@@ -110,6 +110,10 @@ def _div(a, b):
     return float(a) / float(b)
 
 
+def _eps(v, cur: str = "USD") -> str:
+    return "—" if _missing(v) else f"{de_dec(v, 2)} {cur}"
+
+
 def _verdict_box(checks, strong="stark", mixed="solide / gemischt",
                  weak="schwach", lead="Bilanz"):
     """Rendert eine Verdict-Box aus [(name, bool), ...]."""
@@ -172,6 +176,19 @@ def _load_gaap(ticker: str):
         return None, None
     text = fetch_exhibit_text(ex[0]["exhibit_url"])
     return ex[0], analyze_non_gaap(text)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_earnings(ticker: str, n_years: int):
+    """Letzte N 10-K: Gewinnruecklagen + EPS basic/diluted je Jahr."""
+    annuals = find_filings(ticker, n=n_years, forms=("10-K",))
+    rows = []
+    for f in annuals:
+        d = fetch_earnings_history_from_filing(f)
+        if d is not None:
+            rows.append(d)
+    rows.sort(key=lambda d: d.get("period_end") or "")
+    return rows
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -768,6 +785,108 @@ def render_gaap(ticker, n_years):
                "die Ergebnisqualitaet.")
 
 
+def render_earnings(ticker, n_years):
+    try:
+        with st.spinner(f"Lade {n_years} Jahresberichte fuer {ticker} …"):
+            rows = _load_earnings(ticker, n_years)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if not rows:
+        st.warning(f"Keine 10-K mit Gewinnruecklagen/EPS fuer **{ticker}** "
+                   "gefunden.")
+        st.stop()
+
+    last, first = rows[-1], rows[0]
+    cur = "USD"
+    st.markdown(
+        f"### {ticker} — Gewinnruecklagen & EPS  \n"
+        f"Letztes GJ **{str(last['period_end'])[:10]}** "
+        f"({last['form_type']}) · {len(rows)} Jahre geladen")
+
+    re_last = last.get("retained_earnings")
+    epsb, epsd = last.get("eps_basic"), last.get("eps_diluted")
+    re_first = first.get("retained_earnings")
+    epsd_first = first.get("eps_diluted")
+    dil_gap = None
+    if epsb not in (None, 0) and epsd is not None:
+        dil_gap = (epsb - epsd) / abs(epsb)     # Verwaesserung basic->diluted
+
+    checks = []
+    if re_last is not None:
+        checks.append(("Gewinnruecklagen positiv (kein Defizit)",
+                       re_last > 0))
+    if re_last is not None and re_first is not None:
+        checks.append(("Gewinnruecklagen gestiegen", re_last > re_first))
+    if epsd is not None and epsd_first is not None:
+        checks.append(("EPS (verwaessert) gestiegen", epsd > epsd_first))
+    if dil_gap is not None:
+        checks.append(("Geringe Verwaesserung (diluted ≥ 97 % basic)",
+                       dil_gap <= 0.03))
+    _verdict_box(checks, strong="wachsend / einbehaltend",
+                 mixed="gemischt", weak="schrumpfend / verwaessernd",
+                 lead="Gewinnentwicklung")
+
+    m = st.columns(4)
+    m[0].metric("Gewinnruecklagen", _money(re_last, cur))
+    m[1].metric("EPS (unverwaessert)", _eps(epsb, cur))
+    m[2].metric("EPS (verwaessert)", _eps(epsd, cur))
+    m[3].metric("Verwaesserung basic→diluted",
+                _pct(dil_gap) if dil_gap is not None else "—",
+                help="(EPS basic − EPS diluted) / EPS basic")
+
+    if len(rows) >= 2:
+        df = pd.DataFrame([{
+            "period_end": pd.to_datetime(d["period_end"]),
+            "retained": d.get("retained_earnings"),
+            "eps_basic": d.get("eps_basic"),
+            "eps_diluted": d.get("eps_diluted"),
+        } for d in rows])
+        st.markdown("#### Verlauf (10-K, jaehrlich)")
+        t1, t2 = st.columns(2)
+
+        re_col = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+                  for v in df["retained"]]
+        f1 = go.Figure(go.Bar(
+            x=df["period_end"], y=df["retained"], marker_color=re_col,
+            hovertemplate="%{x|%Y-%m-%d}<br>Gewinnruecklagen: "
+                          "%{y:,.0f}<extra></extra>"))
+        f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Gewinnruecklagen ({cur})", yaxis_title=cur)
+        t1.plotly_chart(f1, use_container_width=True)
+
+        f2 = go.Figure()
+        f2.add_trace(go.Scatter(
+            x=df["period_end"], y=df["eps_basic"], mode="lines+markers",
+            name="EPS unverwaessert", line=dict(color="#0F6E56", width=2),
+            connectgaps=False))
+        f2.add_trace(go.Scatter(
+            x=df["period_end"], y=df["eps_diluted"], mode="lines+markers",
+            name="EPS verwaessert", line=dict(color="#B4862B", width=2),
+            connectgaps=False))
+        f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"EPS ({cur})", yaxis_title=cur,
+                         legend=dict(orientation="h", y=-0.25),
+                         hovermode="x unified")
+        t2.plotly_chart(f2, use_container_width=True)
+
+    with st.expander("Rohwerte je Jahr"):
+        st.dataframe(pd.DataFrame([{
+            "Jahr": str(d["period_end"])[:10],
+            "Gewinnruecklagen": _money(d.get("retained_earnings"), cur),
+            "EPS unverwaessert": _eps(d.get("eps_basic"), cur),
+            "EPS verwaessert": _eps(d.get("eps_diluted"), cur),
+            "Nettogewinn": _money(d.get("net_income"), cur),
+        } for d in rows]), use_container_width=True, hide_index=True)
+
+    st.caption("Gewinnruecklagen (RetainedEarningsAccumulatedDeficit) als "
+               "Bilanz-Stichtagswert; EPS basic/diluted als Jahreswerte aus "
+               "der GuV. Diese Kategorie fliesst nicht in den Gesamt-Score.")
+
+
 # ---------- Gesamt-Score ----------
 
 # Anzeige-Label -> Config-Schluessel. Gewichte kommen aus SCORE_CFG.
@@ -913,6 +1032,7 @@ _TOPICS = {
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
     "Stock-based Compensation — SBC & Verwaesserung": render_sbc,
+    "Gewinnruecklagen & EPS — Verlauf": render_earnings,
     "GAAP vs non-GAAP — Earnings-Exhibit": render_gaap,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))

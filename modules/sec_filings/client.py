@@ -777,6 +777,47 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
     }
 
 
+# ---------- Gewinnruecklagen + EPS (Verlauf) ----------
+
+_RETAINED = ["RetainedEarningsAccumulatedDeficit"]
+_EPS_BASIC = ["EarningsPerShareBasic",
+              "IncomeLossFromContinuingOperationsPerBasicShare"]
+_EPS_DILUTED = ["EarningsPerShareDiluted",
+                "IncomeLossFromContinuingOperationsPerDilutedShare"]
+
+
+def fetch_earnings_history_from_filing(filing: dict) -> dict | None:
+    """Gewinnruecklagen + EPS (basic/diluted) + Nettogewinn aus 1 XBRL-Call.
+
+    RetainedEarnings ist ein Stichtagswert (Bilanz, instant); EPS sind
+    Perioden-Fakten (GuV, duration). Returns None, wenn nichts auffindbar.
+    """
+    if not filing or not filing.get("accession_no") \
+            or not filing.get("period_of_report"):
+        return None
+    xbrl = fetch_xbrl(filing["accession_no"])
+    period = filing["period_of_report"]
+    bs = xbrl.get("BalanceSheets") or {}
+    inc = xbrl.get("StatementsOfIncome") or {}
+
+    retained = _pick_instant(bs, _RETAINED, period)
+    eps_basic, _ = _pick(inc, _EPS_BASIC, period)
+    eps_diluted, _ = _pick(inc, _EPS_DILUTED, period)
+    net_income, _ = _pick(inc, _NET, period)
+
+    if retained is None and eps_basic is None and eps_diluted is None:
+        return None
+    return {
+        "period_end":  period,
+        "form_type":   filing["form_type"],
+        "filed_at":    filing["filed_at"],
+        "retained_earnings": retained,
+        "eps_basic":   eps_basic,
+        "eps_diluted": eps_diluted,
+        "net_income":  net_income,
+    }
+
+
 # ---------- Insider Trading (Form 3/4/5) ----------
 
 # Transaktions-Codes (SEC Form 4): die diskretionaeren Markt-Trades sind
