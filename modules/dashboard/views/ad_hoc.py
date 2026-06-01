@@ -1613,18 +1613,45 @@ def render_management(ticker, n_years):
     ceo_name, ceo_ten = _tenure("is_ceo")
     cfo_name, cfo_ten = _tenure("is_cfo")
 
-    # Insider Ownership: juengster Bestand je Owner / ausstehende Aktien
-    held = df[df["shares_following"].notna()].sort_values("txn_dt")
-    latest_hold = held.groupby("owner")["shares_following"].last()
-    insider_shares = float(latest_hold.sum()) if not latest_hold.empty else 0.0
+    # Insider Ownership: juengster Bestand je Person (gruppiert ueber CIK,
+    # robuster als Name); Management = Officers/Direktoren getrennt von
+    # 10%-Eignern. Nenner: ausstehende Aktien (Fallback verwaessert).
+    held = df[df["shares_following"].notna()].copy()
+    if "owner_cik" in held.columns:
+        held["gid"] = held["owner_cik"].fillna(held["owner"])
+    else:
+        held["gid"] = held["owner"]
+    held = held.sort_values("txn_dt")
+    # je Person: juengster Bestand + Klassifikation + Name/Funktion
+    agg = held.groupby("gid").agg(
+        shares=("shares_following", "last"),
+        owner=("owner", "last"),
+        relationship=("relationship", "last"),
+        is_mgmt=("is_officer", "max") if "is_officer" in held.columns
+        else ("shares_following", "size"),
+        is_dir=("is_director", "max") if "is_director" in held.columns
+        else ("shares_following", "size"),
+        is_10=("is_tenpct", "max") if "is_tenpct" in held.columns
+        else ("shares_following", "size"),
+    ) if not held.empty else None
+
     total_shares = None
     try:
-        _sbc = _load_sbc(ticker, max(1, int(n_years)))
-        if _sbc and _sbc[-1].get("diluted_shares"):
-            total_shares = _sbc[-1]["diluted_shares"]
+        _ym = _load_year_metrics(ticker, max(1, int(n_years)))
+        if _ym:
+            total_shares = (_ym[-1].get("shares_outstanding")
+                            or _ym[-1].get("diluted_shares"))
     except Exception:  # noqa: BLE001
         total_shares = None
-    ownership = _div(insider_shares, total_shares)
+
+    if agg is not None and not agg.empty:
+        mgmt_mask = (agg["is_mgmt"].astype(bool) | agg["is_dir"].astype(bool))
+        mgmt_shares = float(agg.loc[mgmt_mask, "shares"].sum())
+        insider_shares = float(agg["shares"].sum())
+    else:
+        mgmt_shares = insider_shares = 0.0
+    ownership = _div(mgmt_shares, total_shares)        # Management-Anteil
+    ownership_all = _div(insider_shares, total_shares)  # alle Insider
 
     # Management-Turnover: 8-K Item 5.02 im Zeitfenster
     try:
@@ -1654,9 +1681,11 @@ def render_management(ticker, n_years):
     m[1].metric("CFO-Tenure",
                 f"{de_dec(cfo_ten, 1)} J" if cfo_ten is not None else "—",
                 help=f"Seit fruehestem Insider-Filing{(' · ' + cfo_name) if cfo_name else ''}")
-    m[2].metric("Insider Ownership",
+    m[2].metric("Insider Ownership (Mgmt)",
                 _pct(ownership) if ownership is not None else "—",
-                help="Σ juengster Insider-Bestaende / ausstehende Aktien")
+                help="Σ Bestaende Officers/Direktoren / ausstehende Aktien. "
+                     f"Alle Insider inkl. 10%-Eigner: "
+                     f"{_pct(ownership_all) if ownership_all is not None else '—'}")
     m[3].metric(f"Mgmt-Wechsel ({int(n_years)} J)",
                 str(turnover),
                 delta=f"{de_dec(per_year, 1)}/Jahr", delta_color="off",
@@ -1675,27 +1704,29 @@ def render_management(ticker, n_years):
                               yaxis_title="Anzahl")
             st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("Groesste Insider-Bestaende"):
-        top = latest_hold.sort_values(ascending=False).head(12)
-        rel_by_owner = (df.dropna(subset=["txn_dt"])
-                        .sort_values("txn_dt").groupby("owner")["relationship"]
-                        .last())
-        st.dataframe(pd.DataFrame([{
-            "Person": o,
-            "Funktion": rel_by_owner.get(o, "—"),
-            "Bestand (Stk.)": de_int(s),
-            "% ausstehend": (_pct(_div(s, total_shares))
-                             if total_shares else "—"),
-        } for o, s in top.items()]), use_container_width=True,
-            hide_index=True)
+    if agg is not None and not agg.empty:
+        with st.expander("Groesste Insider-Bestaende"):
+            top = agg.sort_values("shares", ascending=False).head(12)
+            st.dataframe(pd.DataFrame([{
+                "Person": r["owner"],
+                "Funktion": r["relationship"],
+                "Typ": ("Management" if (r["is_mgmt"] or r["is_dir"])
+                        else "10%-Eigner" if r["is_10"] else "—"),
+                "Bestand (Stk.)": de_int(r["shares"]),
+                "% ausstehend": (_pct(_div(r["shares"], total_shares))
+                                 if total_shares else "—"),
+            } for _gid, r in top.iterrows()]),
+                use_container_width=True, hide_index=True)
 
     st.caption("Tenure approximiert ueber das frueheste Insider-Filing der "
-               "aktuellen Person (Form 3 ≈ Eintritt als Insider) — nicht "
-               "zwingend der Rollenbeginn. Insider Ownership aus den "
-               "juengsten Form-4-Bestaenden / verwaesserten Aktien (10-K); "
-               "enthaelt Officers, Direktoren und 10%-Eigner. Turnover = "
-               "8-K Item 5.02 im Zeitfenster. Eigenstaendig, nicht im "
-               "Gesamt-Score.")
+               "aktuellen Person (per CIK; Form 3 ≈ Eintritt als Insider) — "
+               "nicht zwingend der Rollenbeginn. Insider Ownership: juengste "
+               "Form-4-Bestaende je Person (gruppiert ueber CIK), Management "
+               "= Officers/Direktoren; Nenner ausstehende Aktien (Fallback "
+               "verwaessert). Erfasst nur meldende Insider — ueber Trusts/"
+               "LLCs gehaltene Anteile koennen fehlen, daher eher Unter-"
+               "grenze. Turnover = 8-K Item 5.02 im Zeitfenster. "
+               "Eigenstaendig, nicht im Gesamt-Score.")
 
 
 # ---------- Earnings Quality Score ----------

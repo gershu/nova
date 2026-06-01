@@ -801,6 +801,7 @@ _AMORT_ONLY = ["AmortizationOfIntangibleAssets",
 # Sachanlagen fuer Greenwald-Kapitalintensitaet (Brutto bevorzugt).
 _PPE_GROSS = ["PropertyPlantAndEquipmentGross"]
 _PPE_NET = ["PropertyPlantAndEquipmentNet"]
+_SHARES_OUT = ["CommonStockSharesOutstanding", "CommonStockSharesIssued"]
 
 
 def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
@@ -827,6 +828,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     capex, _ = _pick(cf, _CAPEX, period)
     fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
     diluted_shares, _ = _pick(inc_stmt, _DILUTED_SHARES, period)
+    shares_outstanding = _pick_instant(bs_stmt, _SHARES_OUT, period)
 
     # Kapitalallokation (Mittelverwendung; als positive Betraege fuehren)
     buybacks, _ = _pick(cf, _BUYBACKS, period)
@@ -868,6 +870,7 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         "capex":            capex,
         "fcf":              fcf,
         "diluted_shares":   diluted_shares,
+        "shares_outstanding": shares_outstanding,
         "buybacks":         buybacks,
         "dividends":        dividends,
         "acquisitions":     acquisitions,
@@ -1011,6 +1014,10 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
     rel_dict = owner.get("relationship")
     rel = _relationship_label(rel_dict)
     is_ceo, is_cfo = _role_flags(rel_dict)
+    _rd = rel_dict if isinstance(rel_dict, dict) else {}
+    is_officer = bool(_rd.get("isOfficer"))
+    is_director = bool(_rd.get("isDirector"))
+    is_tenpct = bool(_rd.get("isTenPercentOwner"))
     planned = _record_is_planned(rec)
     filed_at = rec.get("filedAt")
     out: list[dict] = []
@@ -1047,6 +1054,9 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
                 "relationship":  rel,
                 "is_ceo":        is_ceo,
                 "is_cfo":        is_cfo,
+                "is_officer":    is_officer,
+                "is_director":   is_director,
+                "is_tenpct":     is_tenpct,
                 "planned":       planned,
                 "transaction_date": (tx.get("transactionDate") or "")[:10],
                 "code":          coding.get("code"),
