@@ -2208,16 +2208,28 @@ def render_physical(ticker, n_years):
         f"{len(rows)} GJ "
         f"({str(first['period_end'])[:4]}–{str(last['period_end'])[:4]})")
 
-    dates = [pd.to_datetime(d["period_end"]) for d in rows]
-    span = (dates[-1] - dates[0]).days / 365.25
+    def _series_growth(key, valfn=None):
+        """(letzter Nicht-Null-Wert, CAGR ueber erste/letzte Nicht-Null-
+        Punkte). Robust gegen fehlende Werte im juengsten Jahr."""
+        pts = []
+        for d in rows:
+            v = valfn(d) if valfn else d.get(key)
+            if v is not None:
+                pts.append((pd.to_datetime(d["period_end"]), v))
+        if not pts:
+            return None, None
+        last_v = pts[-1][1]
+        if len(pts) < 2:
+            return last_v, None
+        yrs = (pts[-1][0] - pts[0][0]).days / 365.25
+        return last_v, _cagr(pts[0][1], pts[-1][1], yrs)
 
-    def _g(key):
-        a, b = first.get(key), last.get(key)
-        return _cagr(a, b, span)
-
-    g_ppe = _g("ppe_gross")
-    g_emp = _g("employees")
-    g_capex = _g("capex")
+    ppe_last, g_ppe = _series_growth("ppe_gross")
+    capex_last, g_capex = _series_growth(None,
+                                         lambda d: _abs_or(d.get("capex")))
+    emp_last, g_emp = _series_growth("employees")
+    rev_emp_last, g_revemp = _series_growth(
+        None, lambda d: _div(d.get("revenue"), d.get("employees")))
 
     wts = SCORE_CFG["physical_growth"]["weights"]
     comp = [("ppe", g_ppe), ("employees", g_emp), ("capex", g_capex)]
@@ -2228,9 +2240,6 @@ def render_physical(ticker, n_years):
             den += wts[k]
     index = (num / den) if den else None   # gewichtetes Wachstum p.a.
 
-    rev_emp_last = _div(last.get("revenue"), last.get("employees"))
-    rev_emp_first = _div(first.get("revenue"), first.get("employees"))
-
     if index is not None:
         st.markdown(f"## Physical Growth Index: {_pct(index)} p.a.")
         st.caption("Gewichtetes Wachstum der physischen Basis "
@@ -2240,24 +2249,23 @@ def render_physical(ticker, n_years):
                    "Expansion; niedrig/negativ = kapitalleichtes Wachstum.")
 
     m = st.columns(4)
-    m[0].metric("PP&E", _money(last.get("ppe_gross"), cur),
+    m[0].metric("PP&E", _money(ppe_last, cur),
                 delta=_pct(g_ppe) if g_ppe is not None else None,
                 delta_color="off")
-    m[1].metric("CapEx", _money(_abs_or(last.get("capex")), cur),
+    m[1].metric("CapEx", _money(capex_last, cur),
                 delta=_pct(g_capex) if g_capex is not None else None,
                 delta_color="off")
     m[2].metric("Mitarbeiter",
-                de_int(last.get("employees")) if last.get("employees")
-                else "—",
+                de_int(emp_last) if emp_last else "—",
                 delta=_pct(g_emp) if g_emp is not None else None,
                 delta_color="off")
     m[3].metric("Umsatz / Mitarbeiter",
                 _money(rev_emp_last, cur) if rev_emp_last is not None
                 else "—",
-                delta=(_pct(_cagr(rev_emp_first, rev_emp_last, span))
-                       if (rev_emp_first and rev_emp_last) else None),
+                delta=_pct(g_revemp) if g_revemp is not None else None,
                 delta_color="off",
-                help="Produktivitaet: Umsatz je Mitarbeiter")
+                help="Produktivitaet: Umsatz je Mitarbeiter (letzter "
+                     "verfuegbarer Wert)")
 
     df = pd.DataFrame([{
         "period_end": pd.to_datetime(d["period_end"]),
@@ -2296,11 +2304,12 @@ def render_physical(ticker, n_years):
                          yaxis_title=cur)
         st.plotly_chart(f3, use_container_width=True)
 
-    if not emp_map:
+    if emp_last is None:
         with st.expander("Mitarbeiter — Diagnose"):
             st.write({"URL": emp_detail.get("url"),
                       "Status": emp_detail.get("status"),
-                      "Fehler": emp_detail.get("error")})
+                      "Fehler": emp_detail.get("error"),
+                      "Hinweis": "auch 10-K-Textextraktion ohne Treffer"})
     st.caption("PP&E aus der SEC company-concept-API (us-gaap, "
                "Net/face bevorzugt — robuster als xbrl-to-json, das es bei "
                "manchen Filern ab gewissen Jahren nicht mehr fuehrt); CapEx "
