@@ -1062,6 +1062,17 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
 _INSIDER_PAGE = 50          # API-Hardlimit fuer 'size'
 
 
+def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:
+    """8-K Item 5.02 (Abgang/Bestellung von Direktoren/Officers).
+
+    Proxy fuer Management-Turnover. Returns [{filed_at, accession_no}, ...].
+    """
+    filings = _query_raw(
+        f'ticker:{ticker} AND formType:"8-K" AND items:"5.02"', n)
+    return [{"filed_at": f.get("filedAt"),
+             "accession_no": f.get("accessionNo")} for f in filings]
+
+
 def fetch_insider_transactions(ticker: str, *, n: int = 300) -> list[dict]:
     """Bis zu N juengste Form-3/4/5-Records -> flache Transaktionsliste.
 

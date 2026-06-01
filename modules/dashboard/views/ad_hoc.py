@@ -25,9 +25,9 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_exhibit_text, fetch_insider_transactions, fetch_sbc_from_filing,
-    fetch_statements_from_filing, fetch_year_metrics_from_filing,
-    find_earnings_exhibits, find_filings,
+    fetch_exhibit_text, fetch_insider_transactions, fetch_mgmt_changes,
+    fetch_sbc_from_filing, fetch_statements_from_filing,
+    fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
 )
 
 
@@ -220,6 +220,12 @@ def _load_returns(ticker: str, n_years: int):
 def _load_insider(ticker: str):
     """Flache Insider-Transaktionsliste (Form 3/4/5)."""
     return fetch_insider_transactions(ticker, n=300)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_mgmt_changes(ticker: str):
+    """8-K Item 5.02 Filings (Management-Wechsel)."""
+    return fetch_mgmt_changes(ticker, n=50)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1550,6 +1556,128 @@ def render_moat(ticker, n_years):
                "nicht im Gesamt-Score.")
 
 
+# ---------- Management ----------
+
+def render_management(ticker, n_years):
+    try:
+        with st.spinner(f"Lade Insider- & Filing-Daten fuer {ticker} …"):
+            tx = _load_insider(ticker)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+    if not tx:
+        st.warning(f"Keine Insider-Filings fuer **{ticker}** — Management-"
+                   "Kennzahlen nicht ableitbar.")
+        st.stop()
+
+    df = pd.DataFrame(tx)
+    df["filed_dt"] = pd.to_datetime(df["filed_at"], errors="coerce", utc=True)
+    df["txn_dt"] = pd.to_datetime(df["transaction_date"], errors="coerce")
+    today = pd.Timestamp.utcnow()
+
+    st.markdown(f"### {ticker} — Management")
+
+    def _tenure(role_col):
+        sub = df[df.get(role_col) == True] if role_col in df.columns else \
+            df.iloc[0:0]
+        if sub.empty:
+            return None, None
+        cur = sub.sort_values("txn_dt").iloc[-1]["owner"]   # aktuellste Person
+        first = df[df["owner"] == cur]["filed_dt"].min()
+        if pd.isna(first):
+            return cur, None
+        return cur, (today - first).days / 365.25
+
+    ceo_name, ceo_ten = _tenure("is_ceo")
+    cfo_name, cfo_ten = _tenure("is_cfo")
+
+    # Insider Ownership: juengster Bestand je Owner / ausstehende Aktien
+    held = df[df["shares_following"].notna()].sort_values("txn_dt")
+    latest_hold = held.groupby("owner")["shares_following"].last()
+    insider_shares = float(latest_hold.sum()) if not latest_hold.empty else 0.0
+    total_shares = None
+    try:
+        _sbc = _load_sbc(ticker, max(1, int(n_years)))
+        if _sbc and _sbc[-1].get("diluted_shares"):
+            total_shares = _sbc[-1]["diluted_shares"]
+    except Exception:  # noqa: BLE001
+        total_shares = None
+    ownership = _div(insider_shares, total_shares)
+
+    # Management-Turnover: 8-K Item 5.02 im Zeitfenster
+    try:
+        changes = _load_mgmt_changes(ticker)
+    except Exception:  # noqa: BLE001
+        changes = []
+    cutoff = today - pd.Timedelta(days=int(n_years) * 365)
+    chg_dts = pd.to_datetime([c.get("filed_at") for c in changes],
+                             errors="coerce", utc=True)
+    turnover = int((chg_dts >= cutoff).sum()) if len(chg_dts) else 0
+    per_year = turnover / max(1, int(n_years))
+
+    checks = []
+    if ceo_ten is not None:
+        checks.append(("CEO-Tenure ≥ 5 Jahre", ceo_ten >= 5))
+    if ownership is not None:
+        checks.append(("Insider Ownership ≥ 5 %", ownership >= 0.05))
+    checks.append((f"Management-Turnover ≤ 1/Jahr ({int(n_years)} J)",
+                   per_year <= 1.0))
+    _verdict_box(checks, strong="stabil / engagiert", mixed="durchschnittlich",
+                 weak="instabil / wenig Eigenanteil", lead="Management")
+
+    m = st.columns(4)
+    m[0].metric("CEO-Tenure",
+                f"{de_dec(ceo_ten, 1)} J" if ceo_ten is not None else "—",
+                help=f"Seit fruehestem Insider-Filing{(' · ' + ceo_name) if ceo_name else ''}")
+    m[1].metric("CFO-Tenure",
+                f"{de_dec(cfo_ten, 1)} J" if cfo_ten is not None else "—",
+                help=f"Seit fruehestem Insider-Filing{(' · ' + cfo_name) if cfo_name else ''}")
+    m[2].metric("Insider Ownership",
+                _pct(ownership) if ownership is not None else "—",
+                help="Σ juengster Insider-Bestaende / ausstehende Aktien")
+    m[3].metric(f"Mgmt-Wechsel ({int(n_years)} J)",
+                str(turnover),
+                delta=f"{de_dec(per_year, 1)}/Jahr", delta_color="off",
+                help="8-K Item 5.02 (Abgang/Bestellung Direktoren/Officers)")
+
+    if len(chg_dts):
+        cdf = pd.DataFrame({"dt": chg_dts})
+        cdf = cdf[cdf["dt"] >= cutoff]
+        if not cdf.empty:
+            cdf["Jahr"] = cdf["dt"].dt.year
+            per = cdf.groupby("Jahr").size().reset_index(name="Wechsel")
+            fig = go.Figure(go.Bar(x=per["Jahr"], y=per["Wechsel"],
+                                   marker_color="#B4862B"))
+            fig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                              title="Management-Wechsel je Jahr (8-K 5.02)",
+                              yaxis_title="Anzahl")
+            st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Groesste Insider-Bestaende"):
+        top = latest_hold.sort_values(ascending=False).head(12)
+        rel_by_owner = (df.dropna(subset=["txn_dt"])
+                        .sort_values("txn_dt").groupby("owner")["relationship"]
+                        .last())
+        st.dataframe(pd.DataFrame([{
+            "Person": o,
+            "Funktion": rel_by_owner.get(o, "—"),
+            "Bestand (Stk.)": de_int(s),
+            "% ausstehend": (_pct(_div(s, total_shares))
+                             if total_shares else "—"),
+        } for o, s in top.items()]), use_container_width=True,
+            hide_index=True)
+
+    st.caption("Tenure approximiert ueber das frueheste Insider-Filing der "
+               "aktuellen Person (Form 3 ≈ Eintritt als Insider) — nicht "
+               "zwingend der Rollenbeginn. Insider Ownership aus den "
+               "juengsten Form-4-Bestaenden / verwaesserten Aktien (10-K); "
+               "enthaelt Officers, Direktoren und 10%-Eigner. Turnover = "
+               "8-K Item 5.02 im Zeitfenster. Eigenstaendig, nicht im "
+               "Gesamt-Score.")
+
+
 # ---------- Earnings Quality Score ----------
 
 _EQ_CATS = {
@@ -1813,13 +1941,15 @@ _TOPICS = {
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,
+    "Management — Tenure, Ownership, Turnover": render_management,
     "Stock-based Compensation — SBC & Verwaesserung": render_sbc,
     "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf": render_earnings,
     "GAAP vs non-GAAP — Earnings-Exhibit": render_gaap,
 }
 _topic = st.selectbox("Thema", list(_TOPICS.keys()))
 
-_yr_label = ("Lookback (Jahre)" if _topic.startswith("Insider")
+_yr_label = ("Lookback (Jahre)"
+             if _topic.startswith("Insider") or _topic.startswith("Management")
              else "Jahre (10-K)")
 _c1, _c2 = st.columns([3, 1])
 _ticker = _c1.text_input(
