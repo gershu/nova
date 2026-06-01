@@ -25,7 +25,7 @@ from modules.dashboard.components.format import _missing, de_dec, de_int
 from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
-    fetch_beneficial_ownership, fetch_exhibit_text,
+    fetch_beneficial_ownership_detail, fetch_exhibit_text,
     fetch_insider_first_filing, fetch_insider_transactions,
     fetch_mgmt_changes, fetch_sbc_from_filing, fetch_statements_from_filing,
     fetch_year_metrics_from_filing, find_earnings_exhibits, find_filings,
@@ -242,11 +242,12 @@ def _load_mgmt_changes(ticker: str):
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _load_beneficial(ticker: str):
-    """Exakte Management-Beteiligung aus der DEF 14A (Gruppe)."""
+    """Exakte Management-Beteiligung aus der DEF 14A (Gruppe) + Diagnose."""
     try:
-        return fetch_beneficial_ownership(ticker)
-    except Exception:  # noqa: BLE001
-        return None
+        return fetch_beneficial_ownership_detail(ticker)
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{e.__class__.__name__}: {e}", "group_pct": None,
+                "group_shares": None}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -1747,6 +1748,18 @@ def render_management(ticker, n_years):
                                  if total_shares else "—"),
             } for _gid, r in top.iterrows()]),
                 use_container_width=True, hide_index=True)
+
+    if bo and own_def14a is None:
+        with st.expander("DEF-14A-Ownership — Diagnose"):
+            st.write({
+                "URL": bo.get("url"),
+                "eingereicht": str(bo.get("filed_at"))[:10],
+                "Textlaenge": bo.get("text_len"),
+                "Fehler": bo.get("error"),
+            })
+            if bo.get("snippet"):
+                st.caption("Textausschnitt um 'as a group':")
+                st.code(bo["snippet"])
 
     bo_note = (f" Quelle DEF 14A vom {str(bo['filed_at'])[:10]}."
                if bo and bo.get("group_pct") is not None else "")

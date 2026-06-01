@@ -1167,16 +1167,48 @@ def parse_beneficial_ownership(text: str) -> dict | None:
 
 def fetch_beneficial_ownership(ticker: str) -> dict | None:
     """DEF 14A laden + Management-Beteiligung (Gruppe) extrahieren."""
+    d = fetch_beneficial_ownership_detail(ticker)
+    if d.get("group_pct") is None and d.get("group_shares") is None:
+        return None
+    return {"group_shares": d.get("group_shares"),
+            "group_pct": d.get("group_pct"),
+            "filed_at": d.get("filed_at"), "link": d.get("link")}
+
+
+def fetch_beneficial_ownership_detail(ticker: str) -> dict:
+    """Wie fetch_beneficial_ownership, aber mit Diagnose-Feldern (URL,
+    Textlaenge, Snippet, Fehler) — auch wenn das Parsing scheitert."""
+    out = {"url": None, "filed_at": None, "link": None, "text_len": 0,
+           "snippet": None, "group_shares": None, "group_pct": None,
+           "error": None}
     pr = find_latest_proxy(ticker)
     if not pr or not pr.get("url"):
-        return None
-    text = fetch_exhibit_text(pr["url"])
+        out["error"] = "keine DEF 14A / kein Dokument-URL"
+        return out
+    out["url"], out["filed_at"], out["link"] = (
+        pr["url"], pr.get("filed_at"), pr.get("link"))
+    try:
+        text = fetch_exhibit_text(pr["url"])
+    except SecApiError as e:
+        out["error"] = f"Download fehlgeschlagen: {e}"
+        return out
+    out["text_len"] = len(text or "")
     res = parse_beneficial_ownership(text)
+    if res:
+        out["group_shares"] = res["group_shares"]
+        out["group_pct"] = res["group_pct"]
+    low = (text or "").lower()
+    for m in re.finditer(r"as a group", low):
+        pre = low[max(0, m.start() - 140):m.start()]
+        if "director" in pre or "officer" in pre:
+            out["snippet"] = text[max(0, m.start() - 70):m.start() + 200]
+            break
     if res is None:
-        return None
-    res["filed_at"] = pr.get("filed_at")
-    res["link"] = pr.get("link")
-    return res
+        out["error"] = ("Gruppe-Zeile gefunden, aber nicht parsbar"
+                        if out["snippet"] else
+                        "'directors/officers as a group'-Zeile nicht "
+                        "gefunden")
+    return out
 
 
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:
