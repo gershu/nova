@@ -130,6 +130,31 @@ def _eps(v, cur: str = "USD") -> str:
     return "—" if _missing(v) else f"{de_dec(v, 2)} {cur}"
 
 
+def _trend_ampel(vals, up: float = 0.5, down: float = -0.5):
+    """Trend einer Quoten-Reihe (Bruchteile) -> (cur, slope_pp_p.a., emoji, dc).
+
+    slope = lineare Regressionssteigung in %-Punkten je Periode. Ampel:
+    >= up steigend (gruen), <= down fallend (rot), sonst stabil (gelb).
+    """
+    pts = [(i, v * 100.0) for i, v in enumerate(vals) if v is not None]
+    if not pts:
+        return None, None, "⚪", "off"
+    cur = pts[-1][1] / 100.0
+    if len(pts) < 2:
+        return cur, None, "⚪", "off"
+    n = len(pts)
+    mx = sum(p[0] for p in pts) / n
+    my = sum(p[1] for p in pts) / n
+    denom = sum((p[0] - mx) ** 2 for p in pts)
+    slope = (sum((p[0] - mx) * (p[1] - my) for p in pts) / denom
+             if denom else 0.0)
+    if slope >= up:
+        return cur, slope, "🟢", "normal"
+    if slope <= down:
+        return cur, slope, "🔴", "normal"
+    return cur, slope, "🟡", "off"
+
+
 def _verdict_box(checks, strong="stark", mixed="solide / gemischt",
                  weak="schwach", lead="Bilanz"):
     """Rendert eine Verdict-Box aus [(name, bool), ...]."""
@@ -540,16 +565,27 @@ def render_returns(ticker, n_years):
                  mixed="durchschnittlich", weak="kapitalineffizient",
                  lead="Kapitalrendite")
 
+    # Trendampel statt Momentaufnahme: aktueller Wert + Steigung pp/Jahr
+    _allret = [_returns(i, b) for i, b in rows]
+    _specs = [
+        ("roic", "ROIC", "NOPAT / (Schulden + EK − Cash). "
+         "NOPAT = operatives Ergebnis × (1 − eff. Steuersatz)"),
+        ("roce", "ROCE", "Operatives Ergebnis / (Bilanzsumme − kurzfr. "
+         "Verbindl.)"),
+        ("roe", "ROE", "Nettogewinn / Eigenkapital"),
+        ("roa", "ROA", "Nettogewinn / Bilanzsumme"),
+    ]
     m = st.columns(4)
-    m[0].metric("ROIC", _pct(rl["roic"]),
-                help="NOPAT / (Schulden + EK − Cash). "
-                     "NOPAT = operatives Ergebnis × (1 − eff. Steuersatz)")
-    m[1].metric("ROCE", _pct(rl["roce"]),
-                help="Operatives Ergebnis / (Bilanzsumme − kurzfr. Verbindl.)")
-    m[2].metric("ROE", _pct(rl["roe"]),
-                help="Nettogewinn / Eigenkapital")
-    m[3].metric("ROA", _pct(rl["roa"]),
-                help="Nettogewinn / Bilanzsumme")
+    for col, (key, label, helptext) in zip(m, _specs):
+        cur, slope, emoji, dc = _trend_ampel([r[key] for r in _allret])
+        col.metric(
+            f"{emoji} {label}",
+            _pct(cur) if cur is not None else "—",
+            delta=(f"{slope:+.1f} pp/J" if slope is not None else None),
+            delta_color=dc, help=helptext)
+    st.caption("Trendampel: aktueller Wert + lineare Steigung in %-Punkten "
+               "pro Jahr ueber den geladenen Zeitraum. 🟢 steigend · "
+               "🟡 stabil (±0,5 pp/J) · 🔴 fallend · ⚪ zu wenig Historie.")
 
     if len(rows) >= 2:
         trend = [{
