@@ -62,6 +62,12 @@ _DEFAULT_SCORE_CFG = {
         "meaningful_sell_pct": 0.20,
         "signal": {"bullish_min": 35, "bearish_max": -20},
     },
+    "earnings_quality": {
+        "weights": {"sbc": 0.25, "acquisition": 0.15, "restructuring": 0.15,
+                    "litigation": 0.15, "tax": 0.15, "one_time": 0.15},
+        "bands": {"strong": 70, "mixed": 40},
+        "sbc_thresholds": {"clean": 0.05, "heavy": 0.15},
+    },
     "moat": {
         "weights": {"gross_margin_trend": 0.22, "roic_stability": 0.22,
                     "fcf_margin": 0.18, "rnd_efficiency": 0.13,
@@ -1544,6 +1550,123 @@ def render_moat(ticker, n_years):
                "nicht im Gesamt-Score.")
 
 
+# ---------- Earnings Quality Score ----------
+
+_EQ_CATS = {
+    "acquisition":   (["Akquisitionskosten"], "Akquisitionskosten"),
+    "restructuring": (["Restrukturierung"], "Restrukturierungen"),
+    "litigation":    (["Rechtsstreit/Settlement"], "Rechtsstreitigkeiten"),
+    "tax":           (["Steueranpassungen"], "Steuertricks"),
+    "one_time":      (["Einmaleffekte", "Wertminderung"], "Einmaleffekte"),
+}
+
+
+def _cat_subscore(categories: dict, labels) -> float:
+    """1.0 wenn keine Erwaehnung, 0.5 bei 1, 0.0 bei wiederkehrend (>=2)."""
+    total = sum(categories.get(k, 0) for k in labels)
+    if total == 0:
+        return 1.0
+    return 0.5 if total == 1 else 0.0
+
+
+def render_quality(ticker, n_years):
+    eq = SCORE_CFG["earnings_quality"]
+    wts, bands = eq["weights"], eq["bands"]
+    sbc_t = eq["sbc_thresholds"]
+
+    # SBC quantitativ (juengstes 10-K)
+    sbc_sub = None
+    sbc_detail = "keine Daten"
+    try:
+        with st.spinner(f"Lade SBC/Cashflow fuer {ticker} …"):
+            sbc_rows = _load_sbc(ticker, n_years)
+    except Exception:  # noqa: BLE001
+        sbc_rows = []
+    if sbc_rows:
+        _m = _sbc_metrics(sbc_rows)
+        ratio = _m["sbc_cfo"]
+        if ratio is not None:
+            sbc_sub = (1.0 if ratio <= sbc_t["clean"]
+                       else 0.0 if ratio > sbc_t["heavy"] else 0.5)
+            sbc_detail = f"SBC/op. CF {_pct(ratio, 1)}"
+
+    # Sonder-Add-backs aus dem Earnings-Exhibit
+    try:
+        with st.spinner("Lade Earnings-Exhibit …"):
+            _meta, ana = _load_gaap(ticker)
+    except Exception:  # noqa: BLE001
+        _meta, ana = None, None
+    cats = ana["categories"] if ana else None
+
+    st.markdown(f"### {ticker} — Earnings Quality Score")
+
+    rows = [("sbc", "SBC (Aktienverguetung)", sbc_sub, sbc_detail)]
+    for key, (labels, label) in _EQ_CATS.items():
+        if cats is None:
+            rows.append((key, label, None, "kein Exhibit"))
+        else:
+            sub = _cat_subscore(cats, labels)
+            cnt = sum(cats.get(x, 0) for x in labels)
+            detail = ("nicht erwaehnt" if cnt == 0
+                      else f"{cnt}× erwaehnt (Add-back)")
+            rows.append((key, label, sub, detail))
+
+    num = den = 0.0
+    for key, _lbl, sub, _d in rows:
+        if sub is not None:
+            num += sub * wts[key]
+            den += wts[key]
+    if den == 0:
+        st.error("Weder SBC- noch Exhibit-Daten verfuegbar."); st.stop()
+    score = round(100 * num / den)
+    n_ok = sum(1 for _k, _l, s, _d in rows if s is not None)
+
+    if score >= bands["strong"]:
+        st.success(f"## {score}/100 — hohe Ergebnisqualitaet")
+    elif score >= bands["mixed"]:
+        st.info(f"## {score}/100 — mittlere Qualitaet")
+    else:
+        st.warning(f"## {score}/100 — niedrige Qualitaet (viele "
+                   "Bereinigungen)")
+    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/6 auswertbare "
+               "Dimensionen (fehlende ausgeklammert, Gewichte renormiert). "
+               "Hoeher = sauberere, weniger bereinigte Gewinne.")
+
+    bar = pd.DataFrame([{
+        "Dimension": lbl,
+        "Score": round(100 * sub) if sub is not None else None,
+        "Detail": det,
+    } for _k, lbl, sub, det in rows])
+    fig = go.Figure(go.Bar(
+        x=bar["Score"], y=bar["Dimension"], orientation="h",
+        marker_color=["#1D9E75" if (s is not None and s >= 70)
+                      else "#B4862B" if (s is not None and s >= 40)
+                      else "#A32D2D" if s is not None else "#CFCDC6"
+                      for s in bar["Score"]],
+        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
+        textposition="auto", customdata=bar["Detail"],
+        hovertemplate="%{y}: %{x}/100<br>%{customdata}<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis=dict(range=[0, 100], title="Teil-Score"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(pd.DataFrame([{
+        "Dimension": lbl,
+        "Gewicht": f"{int(wts[k] * 100)} %",
+        "Score": f"{round(100 * sub)}/100" if sub is not None else "n/a",
+        "Detail": det,
+    } for k, lbl, sub, det in rows]), use_container_width=True,
+        hide_index=True)
+
+    st.caption("Earnings Quality = wie wenig die Gewinne von weichen "
+               "Bereinigungen abhaengen. SBC quantitativ (SBC/operativer "
+               "Cashflow); Akquisitionskosten, Restrukturierungen, "
+               "Rechtsstreitigkeiten, Steuertricks und Einmaleffekte aus "
+               "den Add-back-Kategorien des Earnings-Exhibits "
+               "(Textheuristik). Wiederkehrende Add-backs senken den Score "
+               "staerker. Eigenstaendig, nicht im Gesamt-Score.")
+
+
 # ---------- Gesamt-Score ----------
 
 # Anzeige-Label -> Config-Schluessel. Gewichte kommen aus SCORE_CFG.
@@ -1686,6 +1809,7 @@ st.caption(
 _TOPICS = {
     "★ Gesamt-Score (alle 5 Themen)": render_score,
     "★ Moat-Score (6 Faktoren)": render_moat,
+    "★ Earnings Quality Score (6 Faktoren)": render_quality,
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,

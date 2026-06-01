@@ -56,6 +56,25 @@ insider_conviction:
     bullish_min:  35       # Netto-Punkte >= -> bullisch
     bearish_max: -20       # Netto-Punkte <= -> bearisch; dazwischen neutral
 
+# Earnings Quality Score (eigenstaendig). Je sauberer die Gewinne (wenig
+# SBC, keine wiederkehrenden Sonder-Add-backs), desto hoeher der Score.
+# SBC quantitativ (SBC/operativer CF); restliche 5 aus den Add-back-
+# Kategorien des Earnings-Exhibits.
+earnings_quality:
+  weights:
+    sbc:           0.25
+    acquisition:   0.15
+    restructuring: 0.15
+    litigation:    0.15
+    tax:           0.15
+    one_time:      0.15
+  bands:
+    strong: 70
+    mixed:  40
+  sbc_thresholds:
+    clean: 0.05    # SBC/operativer CF <= clean -> voller Score
+    heavy: 0.15    # > heavy -> 0 Punkte
+
 # ---------------------------------------------------------------------
 # Moat-Score (eigenstaendig, separater Modus). Sechs Teil-Signale,
 # jedes 0..1; gewichteter Mittelwert -> 0-100. Nicht auswertbare

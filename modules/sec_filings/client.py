@@ -592,6 +592,9 @@ NON_GAAP_ADJUSTMENTS = {
     "Rechtsstreit/Settlement": ["litigation", "legal settlement"],
     "Steueranpassungen": ["discrete tax", "tax effects of",
                           "non-gaap tax", "income tax adjustment"],
+    "Einmaleffekte": ["one-time", "one time", "nonrecurring",
+                      "non-recurring", "special item", "special charge",
+                      "unusual item"],
     "Waehrung (constant currency)": ["constant currency"],
 }
 
