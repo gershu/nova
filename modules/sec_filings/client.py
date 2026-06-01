@@ -1164,16 +1164,25 @@ def parse_beneficial_ownership(text: str) -> dict | None:
     """
     low = (text or "").lower()
     for m in re.finditer(r"as a group", low):
-        pre = low[max(0, m.start() - 140):m.start()]
+        pre = low[max(0, m.start() - 160):m.start()]
         if "director" not in pre and "officer" not in pre:
             continue
-        seg = text[m.end():m.end() + 240]
-        sh = re.search(r"([\d][\d,]{3,})", seg)        # >= 4 Zeichen
-        shares = float(sh.group(1).replace(",", "")) if sh else None
+        seg = text[m.end():m.end() + 220]
         pc = re.search(r"(\d{1,2}(?:\.\d+)?)\s*%", seg)
-        pct = float(pc.group(1)) / 100 if pc else None
-        if shares is not None or pct is not None:
-            return {"group_shares": shares, "group_pct": pct}
+        if pc:
+            # Aktien = letzte Komma-Zahl VOR dem Prozentwert (Tabellenzeile)
+            before = seg[:pc.start()]
+            nums = re.findall(r"[\d][\d,]{3,}", before)
+            shares = float(nums[-1].replace(",", "")) if nums else None
+            return {"group_shares": shares,
+                    "group_pct": float(pc.group(1)) / 100, "lt_one": False}
+        # Aktienzahl direkt gefolgt von '*' = weniger als 1 % (kein Prozent)
+        if re.search(r"[\d][\d,]{2,}\s*\*", seg):
+            sh = re.search(r"([\d][\d,]{3,})", seg)
+            return {"group_shares":
+                    float(sh.group(1).replace(",", "")) if sh else None,
+                    "group_pct": None, "lt_one": True}
+        # sonst: beschreibender Satz (z.B. 'shares ... outstanding') -> weiter
     return None
 
 
@@ -1247,9 +1256,11 @@ def fetch_institutional_holdings(ticker: str, *, n: int = 50) -> dict:
     Hinweis: keine Vollaggregation aller Filer (Kosten/Pagination) — eine
     Stichprobe der zuletzt gemeldeten Positionen.
     """
+    # Nach Positionswert sortieren -> groesste Halter zuerst (nicht die
+    # zuletzt einreichenden Klein-RIAs).
     payload = {"query": f"holdings.ticker:{ticker}", "from": "0",
                "size": str(min(int(n), 50)),
-               "sort": [{"filedAt": {"order": "desc"}}]}
+               "sort": [{"value": {"order": "desc"}}]}
     try:
         resp = requests.post(FORM13F_URL, json=payload,
                              headers={"Authorization": _api_key()},

@@ -1694,8 +1694,13 @@ def render_management(ticker, n_years):
     # Exakter Wert aus DEF 14A (Gruppe Direktoren+Officers), wenn parsbar
     bo = _load_beneficial(ticker)
     own_def14a = bo.get("group_pct") if bo else None
-    ownership = own_def14a if own_def14a is not None else own_form4
-    own_source = "DEF 14A" if own_def14a is not None else "Form 4 (Schaetzung)"
+    own_lt1 = bool(bo and bo.get("lt_one") and own_def14a is None)
+    if own_def14a is not None:
+        ownership, own_source = own_def14a, "DEF 14A"
+    elif own_lt1:
+        ownership, own_source = 0.005, "DEF 14A <1%"   # < 1 % fuer Check
+    else:
+        ownership, own_source = own_form4, "Form 4 (Schaetzung)"
 
     # Management-Turnover: 8-K Item 5.02 im Zeitfenster
     try:
@@ -1726,7 +1731,8 @@ def render_management(ticker, n_years):
                 f"{de_dec(cfo_ten, 1)} J" if cfo_ten is not None else "—",
                 help=f"Seit fruehestem Insider-Filing{(' · ' + cfo_name) if cfo_name else ''}")
     m[2].metric(f"Insider Ownership ({own_source})",
-                _pct(ownership) if ownership is not None else "—",
+                ("< 1 %" if own_lt1 else
+                 _pct(ownership) if ownership is not None else "—"),
                 help="Management-Beteiligung (Direktoren + Officers als "
                      "Gruppe). DEF 14A = exakte Proxy-Angabe; sonst Form-4-"
                      f"Schaetzung. Form-4-Wert: "
@@ -1842,7 +1848,7 @@ def render_management(ticker, n_years):
                    "Anteile daher Untergrenze. 13F meldet mit bis zu 45 "
                    "Tagen Verzug und nur Long-US-Positionen.")
 
-    if bo and own_def14a is None:
+    if bo and own_def14a is None and not own_lt1:
         with st.expander("DEF-14A-Ownership — Diagnose"):
             st.write({
                 "URL": bo.get("url"),
