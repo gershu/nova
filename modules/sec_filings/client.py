@@ -1007,6 +1007,7 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
     """Ein Form-4-Record -> flache Transaktionszeilen (non-deriv + deriv)."""
     owner = rec.get("reportingOwner") or {}
     owner_name = owner.get("name") or "—"
+    owner_cik = owner.get("cik")
     rel_dict = owner.get("relationship")
     rel = _relationship_label(rel_dict)
     is_ceo, is_cfo = _role_flags(rel_dict)
@@ -1042,6 +1043,7 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
             out.append({
                 "filed_at":      filed_at,
                 "owner":         owner_name,
+                "owner_cik":     owner_cik,
                 "relationship":  rel,
                 "is_ceo":        is_ceo,
                 "is_cfo":        is_cfo,
@@ -1062,22 +1064,9 @@ def _flatten_insider_record(rec: dict) -> list[dict]:
 _INSIDER_PAGE = 50          # API-Hardlimit fuer 'size'
 
 
-def fetch_insider_first_filing(ticker: str, owner_name: str) -> str | None:
-    """Fruehestes Insider-Filing (filedAt) einer Person beim Emittenten.
-
-    Gezielte Abfrage (sort filedAt asc, size 1) — unabhaengig davon, wie
-    weit das juengste Fenster zurueckreicht. Approximiert den Eintritt als
-    Insider (Tenure-Beginn). None, wenn kein Treffer.
-    """
-    if not owner_name or owner_name == "—":
-        return None
-    safe = owner_name.replace('"', " ").strip()
-    payload = {
-        "query": f'issuer.tradingSymbol:{ticker} AND '
-                 f'reportingOwner.name:"{safe}"',
-        "from": "0", "size": "1",
-        "sort": [{"filedAt": {"order": "asc"}}],
-    }
+def _insider_first(query: str) -> str | None:
+    payload = {"query": query, "from": "0", "size": "1",
+               "sort": [{"filedAt": {"order": "asc"}}]}
     try:
         resp = requests.post(
             INSIDER_URL, json=payload,
@@ -1090,6 +1079,28 @@ def fetch_insider_first_filing(ticker: str, owner_name: str) -> str | None:
     body = resp.json() or {}
     recs = body.get("transactions") or body.get("data") or []
     return recs[0].get("filedAt") if recs else None
+
+
+def fetch_insider_first_filing(ticker: str, owner_name: str,
+                               owner_cik=None) -> str | None:
+    """Fruehestes Insider-Filing (filedAt) einer Person beim Emittenten.
+
+    Bevorzugt die exakte CIK (robust); faellt auf den Namen zurueck.
+    Gezielte Abfrage (sort filedAt asc, size 1) — unabhaengig davon, wie
+    weit das juengste Fenster zurueckreicht. None, wenn kein Treffer.
+    """
+    if owner_cik not in (None, "", 0):
+        cik = str(owner_cik).lstrip("0") or "0"
+        res = _insider_first(
+            f'issuer.tradingSymbol:{ticker} AND reportingOwner.cik:{cik}')
+        if res:
+            return res
+    if owner_name and owner_name != "—":
+        safe = owner_name.replace('"', " ").strip()
+        return _insider_first(
+            f'issuer.tradingSymbol:{ticker} AND '
+            f'reportingOwner.name:"{safe}"')
+    return None
 
 
 def fetch_mgmt_changes(ticker: str, *, n: int = 50) -> list[dict]:

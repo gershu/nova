@@ -230,10 +230,10 @@ def _load_mgmt_changes(ticker: str):
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def _load_first_filing(ticker: str, owner: str):
+def _load_first_filing(ticker: str, owner: str, owner_cik=None):
     """Fruehestes Insider-Filing einer Person (Tenure-Beginn)."""
     try:
-        return fetch_insider_first_filing(ticker, owner)
+        return fetch_insider_first_filing(ticker, owner, owner_cik)
     except Exception:  # noqa: BLE001
         return None
 
@@ -1594,11 +1594,14 @@ def render_management(ticker, n_years):
             df.iloc[0:0]
         if sub.empty:
             return None, None
-        cur = sub.sort_values("txn_dt").iloc[-1]["owner"]   # aktuellste Person
+        cur_row = sub.sort_values("txn_dt").iloc[-1]   # aktuellste Person
+        cur = cur_row["owner"]
+        cur_cik = cur_row.get("owner_cik") if "owner_cik" in sub.columns \
+            else None
         # Gezielte Abfrage des fruehesten Filings (Fenster reicht oft nicht
-        # weit genug zurueck); Fenster-Minimum als Fallback.
+        # weit genug zurueck); Fenster-Minimum als Fallback. CIK bevorzugt.
         first = df[df["owner"] == cur]["filed_dt"].min()
-        f_iso = _load_first_filing(ticker, cur)
+        f_iso = _load_first_filing(ticker, cur, cur_cik)
         if f_iso:
             f_dt = pd.to_datetime(f_iso, utc=True, errors="coerce")
             if pd.notna(f_dt) and (pd.isna(first) or f_dt < first):
