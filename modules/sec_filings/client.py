@@ -1167,7 +1167,10 @@ def parse_beneficial_ownership(text: str) -> dict | None:
         pre = low[max(0, m.start() - 160):m.start()]
         if "director" not in pre and "officer" not in pre:
             continue
-        seg = text[m.end():m.end() + 220]
+        seg = text[m.end():m.end() + 400]
+        # beschreibenden Satz '... shares ... outstanding' aussortieren
+        if "outstanding" in seg[:170].lower():
+            continue
         pc = re.search(r"(\d{1,2}(?:\.\d+)?)\s*%", seg)
         if pc:
             # Aktien = letzte Komma-Zahl VOR dem Prozentwert (Tabellenzeile)
@@ -1218,12 +1221,25 @@ def fetch_beneficial_ownership_detail(ticker: str) -> dict:
     if res:
         out["group_shares"] = res["group_shares"]
         out["group_pct"] = res["group_pct"]
+        out["lt_one"] = res.get("lt_one", False)
     low = (text or "").lower()
+    snip_first = None
     for m in re.finditer(r"as a group", low):
         pre = low[max(0, m.start() - 140):m.start()]
-        if "director" in pre or "officer" in pre:
-            out["snippet"] = text[max(0, m.start() - 70):m.start() + 200]
+        if "director" not in pre and "officer" not in pre:
+            continue
+        snip = text[max(0, m.start() - 70):m.start() + 400]
+        if snip_first is None:
+            snip_first = snip
+        after = text[m.end():m.end() + 400]
+        if "outstanding" in after[:170].lower():
+            continue                      # beschreibender Satz
+        # bevorzugt den Treffer mit Prozent/Stern (= Tabellenzeile)
+        if re.search(r"\d\s*%|[\d][\d,]{2,}\s*\*", after):
+            out["snippet"] = snip
             break
+    if out["snippet"] is None:
+        out["snippet"] = snip_first
     if res is None:
         out["error"] = ("Gruppe-Zeile gefunden, aber nicht parsbar"
                         if out["snippet"] else
