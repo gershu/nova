@@ -1194,11 +1194,14 @@ def render_earnings(ticker, n_years):
                  help="Marktkap. (aktueller Kurs × verw. Aktien) + Net Debt. "
                       "Marktdaten via yfinance.")
 
-    # EV/FCF + Earnings Yield (EBIT/EV) — Bewertung, aktueller EV
+    # EV/FCF + Earnings Yield (EBIT/EV) + klassisches Earnings Yield
     evfcf = (ev_current / fcf_last
              if (ev_current and fcf_last and fcf_last > 0) else None)
     ey = _div(last.get("operating_income"), ev_current)
-    m3 = st.columns(2)
+    mcap_current = (ev_current - (last.get("net_debt") or 0.0)
+                    if ev_current is not None else None)
+    classic_ey = _div(last.get("net_income"), mcap_current)
+    m3 = st.columns(3)
     m3[0].metric("EV / FCF",
                  f"{de_dec(evfcf, 1)}x" if evfcf is not None else "—",
                  help="Enterprise Value / Free Cash Flow (aktueller EV, "
@@ -1207,6 +1210,10 @@ def render_earnings(ticker, n_years):
                  _pct(ey) if ey is not None else "—",
                  help="Operatives Ergebnis / Enterprise Value (Greenblatt). "
                       "Hoeher = guenstiger.")
+    m3[2].metric("Earnings Yield (klassisch)",
+                 _pct(classic_ey) if classic_ey is not None else "—",
+                 help="Nettogewinn / Marktkapitalisierung (inverses KGV). "
+                      "Marktkap. = EV − Net Debt.")
 
     if len(rows) >= 2:
         df = pd.DataFrame([{
@@ -1222,6 +1229,12 @@ def render_earnings(ticker, n_years):
                           and d.get("fcf") and d["fcf"] > 0) else None),
             "eyield": _div(d.get("operating_income"),
                            ev_by_year.get(str(d["period_end"])[:10])),
+            "classic_ey": _div(
+                d.get("net_income"),
+                (ev_by_year.get(str(d["period_end"])[:10])
+                 - (d.get("net_debt") or 0.0))
+                if ev_by_year.get(str(d["period_end"])[:10]) is not None
+                else None),
         } for d in rows])
         st.markdown("#### Verlauf (10-K, jaehrlich)")
         t1, t2 = st.columns(2)
@@ -1297,15 +1310,23 @@ def render_earnings(ticker, n_years):
                              title="EV / FCF (x)", yaxis_title="x")
             t5.plotly_chart(f6, use_container_width=True)
 
-            f7 = go.Figure(go.Scatter(
+            f7 = go.Figure()
+            f7.add_trace(go.Scatter(
                 x=df["period_end"], y=df["eyield"] * 100.0,
-                mode="lines+markers", name="Earnings Yield",
+                mode="lines+markers", name="EBIT/EV",
                 line=dict(color="#B4862B", width=2), connectgaps=False,
-                hovertemplate="%{x|%Y-%m-%d}<br>Earnings Yield: "
+                hovertemplate="%{x|%Y-%m-%d}<br>EBIT/EV: "
+                              "%{y:.1f}%<extra></extra>"))
+            f7.add_trace(go.Scatter(
+                x=df["period_end"], y=df["classic_ey"] * 100.0,
+                mode="lines+markers", name="NI/MCap (klassisch)",
+                line=dict(color="#0F6E56", width=2), connectgaps=False,
+                hovertemplate="%{x|%Y-%m-%d}<br>NI/MCap: "
                               "%{y:.1f}%<extra></extra>"))
             f7.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                             title="Earnings Yield EBIT/EV (%)",
-                             yaxis_title="%")
+                             title="Earnings Yield (%)", yaxis_title="%",
+                             legend=dict(orientation="h", y=-0.25),
+                             hovermode="x unified")
             t6.plotly_chart(f7, use_container_width=True)
 
     with st.expander("Rohwerte je Jahr"):
