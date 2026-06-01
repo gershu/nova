@@ -26,7 +26,8 @@ from modules.sec_filings.client import (
     INSIDER_CODE_LABELS, SecApiError, analyze_non_gaap,
     fetch_balance_sheet_from_filing, fetch_earnings_history_from_filing,
     fetch_exhibit_text, fetch_insider_transactions, fetch_sbc_from_filing,
-    fetch_statements_from_filing, find_earnings_exhibits, find_filings,
+    fetch_statements_from_filing, fetch_year_metrics_from_filing,
+    find_earnings_exhibits, find_filings,
 )
 
 
@@ -53,6 +54,21 @@ _DEFAULT_SCORE_CFG = {
                              "dilution_cagr_max": 0.01},
         "gaap_vs_non_gaap": {"mentions_max": 15, "categories_max": 3},
         "insider": {"cluster_buyers_min": 3},
+    },
+    "moat": {
+        "weights": {"gross_margin_trend": 0.22, "roic_stability": 0.22,
+                    "fcf_margin": 0.18, "rnd_efficiency": 0.13,
+                    "market_share_proxy": 0.15, "buybacks": 0.10},
+        "bands": {"strong": 70, "mixed": 40},
+        "thresholds": {
+            "gross_margin": {"improve_pp": 1.0, "stable_pp": -1.0},
+            "roic_stability": {"mean_min": 0.12, "cv_max": 0.35},
+            "fcf_margin": {"high": 0.15, "mid": 0.05},
+            "rnd_efficiency": {"high": 1.5, "mid": 0.5},
+            "market_share_proxy": {"rev_cagr_high": 0.10,
+                                   "rev_cagr_mid": 0.03},
+            "buybacks": {"shrink_cagr": -0.01, "dilute_cagr": 0.01},
+        },
     },
 }
 
@@ -176,6 +192,19 @@ def _load_gaap(ticker: str):
         return None, None
     text = fetch_exhibit_text(ex[0]["exhibit_url"])
     return ex[0], analyze_non_gaap(text)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_year_metrics(ticker: str, n_years: int):
+    """Letzte N 10-K: komplette Jahres-Metriken (GuV+Bilanz+CF) je Jahr."""
+    annuals = find_filings(ticker, n=n_years, forms=("10-K",))
+    rows = []
+    for f in annuals:
+        d = fetch_year_metrics_from_filing(f)
+        if d is not None:
+            rows.append(d)
+    rows.sort(key=lambda d: d.get("period_end") or "")
+    return rows
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -986,6 +1015,201 @@ def render_earnings(ticker, n_years):
                "Diese Kategorie fliesst nicht in den Gesamt-Score.")
 
 
+# ---------- Moat-Score ----------
+
+def _roic_year(d):
+    """ROIC eines Jahres aus dem year-metrics-dict."""
+    opinc, eq, td = d.get("operating_income"), d.get("equity"), \
+        d.get("total_debt")
+    if opinc is None or eq is None or td is None:
+        return None
+    eff = _div(d.get("tax_expense"), d.get("pretax_income"))
+    if eff is None or not (0.0 <= eff <= 0.6):
+        eff = 0.21
+    inv = td + eq - (d.get("cash_and_sti") or 0.0)
+    if inv <= 0:
+        return None
+    return (opinc * (1 - eff)) / inv
+
+
+def _cagr(first, last, years):
+    if first is None or last is None or first <= 0 or last <= 0 or years < 1:
+        return None
+    return (last / first) ** (1 / years) - 1
+
+
+def _moat_signals(rows) -> dict:
+    """Sechs Teil-Signale -> {name: (score|None, detail)}."""
+    import statistics
+    t = SCORE_CFG["moat"]["thresholds"]
+    dates = [pd.to_datetime(d["period_end"]) for d in rows]
+    span_yrs = ((dates[-1] - dates[0]).days / 365.25) if len(dates) >= 2 \
+        else 0.0
+    out: dict[str, tuple] = {}
+
+    # 1) Gross-Margin-Trend
+    gm = [(d["gross_profit"] / d["revenue"]) for d in rows
+          if d.get("gross_profit") is not None and d.get("revenue")]
+    if len(gm) >= 2:
+        slope_pp = (gm[-1] - gm[0]) * 100
+        gt = t["gross_margin"]
+        sc = (1.0 if slope_pp >= gt["improve_pp"]
+              else 0.5 if slope_pp >= gt["stable_pp"] else 0.0)
+        out["gross_margin_trend"] = (
+            sc, f"Marge {_pct(gm[-1], 0)}, Δ {slope_pp:+.1f} pp")
+    else:
+        out["gross_margin_trend"] = (None, "zu wenig Daten")
+
+    # 2) ROIC-Stabilitaet
+    roics = [r for r in (_roic_year(d) for d in rows) if r is not None]
+    if len(roics) >= 2:
+        mean = statistics.fmean(roics)
+        cv = (statistics.pstdev(roics) / abs(mean)) if mean else 9.9
+        rt = t["roic_stability"]
+        if mean >= rt["mean_min"] and cv <= rt["cv_max"]:
+            sc = 1.0
+        elif mean >= rt["mean_min"] * 0.6 and cv <= rt["cv_max"] * 1.8:
+            sc = 0.5
+        else:
+            sc = 0.0
+        out["roic_stability"] = (sc, f"Ø {_pct(mean, 0)}, CV {de_dec(cv, 2)}")
+    else:
+        out["roic_stability"] = (None, "zu wenig Daten")
+
+    # 3) FCF-Marge (letztes Jahr)
+    last = rows[-1]
+    fm = _div(last.get("fcf"), last.get("revenue"))
+    if fm is not None:
+        ft = t["fcf_margin"]
+        sc = 1.0 if fm >= ft["high"] else 0.5 if fm >= ft["mid"] else 0.0
+        out["fcf_margin"] = (sc, f"{_pct(fm, 1)} vom Umsatz")
+    else:
+        out["fcf_margin"] = (None, "keine FCF-/Umsatzdaten")
+
+    # 4) R&D-Effizienz: Umsatzzuwachs je F&E-Dollar ueber die Periode
+    rd_sum = sum(d["rd_expense"] for d in rows
+                 if d.get("rd_expense"))
+    rev_first, rev_last = rows[0].get("revenue"), last.get("revenue")
+    if rd_sum and rev_first is not None and rev_last is not None:
+        eff = (rev_last - rev_first) / rd_sum
+        et = t["rnd_efficiency"]
+        sc = 1.0 if eff >= et["high"] else 0.5 if eff >= et["mid"] else 0.0
+        out["rnd_efficiency"] = (sc, f"{de_dec(eff, 1)}x Umsatz/F&E")
+    else:
+        out["rnd_efficiency"] = (None, "keine F&E ausgewiesen")
+
+    # 5) Marktanteil-Proxy: Umsatz-CAGR
+    rev_cagr = _cagr(rev_first, rev_last, span_yrs)
+    if rev_cagr is not None:
+        mt = t["market_share_proxy"]
+        sc = (1.0 if rev_cagr >= mt["rev_cagr_high"]
+              else 0.5 if rev_cagr >= mt["rev_cagr_mid"] else 0.0)
+        out["market_share_proxy"] = (
+            sc, f"Umsatz-CAGR {_pct(rev_cagr, 1)} (Proxy)")
+    else:
+        out["market_share_proxy"] = (None, "zu wenig Daten")
+
+    # 6) Aktienrueckkaeufe: Aktien-CAGR (schrumpfend = gut)
+    sh = [d.get("diluted_shares") for d in rows if d.get("diluted_shares")]
+    sh_cagr = (_cagr(sh[0], sh[-1], span_yrs) if len(sh) >= 2 else None)
+    if sh_cagr is not None:
+        bt = t["buybacks"]
+        sc = (1.0 if sh_cagr <= bt["shrink_cagr"]
+              else 0.0 if sh_cagr >= bt["dilute_cagr"] else 0.5)
+        out["buybacks"] = (sc, f"Aktien {_pct(sh_cagr, 1)} p.a.")
+    else:
+        out["buybacks"] = (None, "zu wenig Daten")
+
+    return out
+
+
+_MOAT_LABELS = {
+    "gross_margin_trend": "Gross-Margin-Trend",
+    "roic_stability":     "ROIC-Stabilitaet",
+    "fcf_margin":         "FCF-Marge",
+    "rnd_efficiency":     "R&D-Effizienz",
+    "market_share_proxy": "Marktanteil (Proxy)",
+    "buybacks":           "Aktienrueckkaeufe",
+}
+
+
+def render_moat(ticker, n_years):
+    try:
+        with st.spinner(f"Lade {n_years} Jahresberichte fuer {ticker} …"):
+            rows = _load_year_metrics(ticker, n_years)
+    except SecApiError as e:
+        st.error(f"sec-api.io: {e}"); st.stop()
+    except Exception as e:  # noqa: BLE001
+        st.error(f"Unerwarteter Fehler: {e.__class__.__name__}: {e}")
+        st.stop()
+
+    if len(rows) < 2:
+        st.warning(f"Mind. 2 Jahresberichte noetig — fuer **{ticker}** nur "
+                   f"{len(rows)} gefunden. Mehr Jahre waehlen?")
+        st.stop()
+
+    st.markdown(
+        f"### {ticker} — Moat-Score  \n"
+        f"{len(rows)} Geschaeftsjahre "
+        f"({str(rows[0]['period_end'])[:4]}–{str(rows[-1]['period_end'])[:4]})")
+
+    sig = _moat_signals(rows)
+    wts = SCORE_CFG["moat"]["weights"]
+    bands = SCORE_CFG["moat"]["bands"]
+
+    num = den = 0.0
+    for name, (sc, _d) in sig.items():
+        if sc is not None:
+            num += sc * wts.get(name, 0)
+            den += wts.get(name, 0)
+    if den == 0:
+        st.error("Keine Moat-Signale auswertbar."); st.stop()
+    score = round(100 * num / den)
+    n_ok = sum(1 for _, (sc, _d) in sig.items() if sc is not None)
+
+    if score >= bands["strong"]:
+        st.success(f"## {score}/100 — breiter Moat")
+    elif score >= bands["mixed"]:
+        st.info(f"## {score}/100 — schmaler Moat")
+    else:
+        st.warning(f"## {score}/100 — kein klarer Moat")
+    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/6 auswertbare Signale "
+               f"(fehlende ausgeklammert, Gewichte renormiert).")
+
+    bar = pd.DataFrame([{
+        "Signal": _MOAT_LABELS[k],
+        "Score": round(100 * sig[k][0]) if sig[k][0] is not None else None,
+        "Detail": sig[k][1],
+    } for k in wts])
+    fig = go.Figure(go.Bar(
+        x=bar["Score"], y=bar["Signal"], orientation="h",
+        marker_color=["#1D9E75" if (s is not None and s >= 70)
+                      else "#B4862B" if (s is not None and s >= 40)
+                      else "#A32D2D" if s is not None else "#CFCDC6"
+                      for s in bar["Score"]],
+        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
+        textposition="auto",
+        customdata=bar["Detail"],
+        hovertemplate="%{y}: %{x}/100<br>%{customdata}<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis=dict(range=[0, 100], title="Teil-Score"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(pd.DataFrame([{
+        "Signal": _MOAT_LABELS[k],
+        "Gewicht": f"{int(wts[k] * 100)} %",
+        "Score": (f"{round(100 * sig[k][0])}/100"
+                  if sig[k][0] is not None else "n/a"),
+        "Detail": sig[k][1],
+    } for k in wts]), use_container_width=True, hide_index=True)
+
+    st.caption("Moat-Score = gewichteter Mittelwert von sechs Teil-Signalen "
+               "aus Mehrjahres-Fundamentaldaten. Marktanteil ist ein Proxy "
+               "(Umsatz-CAGR), da echte Marktanteilsdaten nicht in SEC-"
+               "Filings stehen. Heuristik, kein Anlageurteil; eigenstaendig, "
+               "nicht im Gesamt-Score.")
+
+
 # ---------- Gesamt-Score ----------
 
 # Anzeige-Label -> Config-Schluessel. Gewichte kommen aus SCORE_CFG.
@@ -1127,6 +1351,7 @@ st.caption(
 
 _TOPICS = {
     "★ Gesamt-Score (alle 5 Themen)": render_score,
+    "★ Moat-Score (6 Faktoren)": render_moat,
     "Balance Sheet — Bilanzstaerke": render_balance,
     "Return on Capital — ROIC / ROCE / ROE / ROA": render_returns,
     "Insider Sales / Buys — Form 3/4/5": render_insider,

@@ -777,6 +777,56 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
     }
 
 
+# ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
+
+def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
+    """GuV + Bilanz + Cashflow eines Geschaeftsjahres aus EINEM XBRL-Call.
+
+    Liefert alle Bausteine fuer den Moat-Score: Marge, ROIC, FCF, F&E,
+    Aktienzahl. Returns None, wenn weder Umsatz noch Nettogewinn da sind.
+    """
+    if not filing or not filing.get("accession_no") \
+            or not filing.get("period_of_report"):
+        return None
+    xbrl = fetch_xbrl(filing["accession_no"])
+    period = filing["period_of_report"]
+    inc_stmt = xbrl.get("StatementsOfIncome") or {}
+    bs_stmt = xbrl.get("BalanceSheets") or {}
+    cf = xbrl.get("StatementsOfCashFlows") or {}
+
+    inc = map_income_statement(inc_stmt, period) if inc_stmt else None
+    bs = map_balance_sheet(bs_stmt, period) if bs_stmt else None
+    if inc is None and bs is None:
+        return None
+
+    cfo, _ = _pick(cf, _CFO, period)
+    capex, _ = _pick(cf, _CAPEX, period)
+    fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
+    diluted_shares, _ = _pick(inc_stmt, _DILUTED_SHARES, period)
+
+    if inc is not None and inc.revenue is None and inc.net_income is None:
+        return None
+    return {
+        "period_end":       period,
+        "form_type":        filing["form_type"],
+        "revenue":          inc.revenue if inc else None,
+        "gross_profit":     inc.gross_profit if inc else None,
+        "rd_expense":       inc.rd_expense if inc else None,
+        "operating_income": inc.operating_income if inc else None,
+        "pretax_income":    inc.pretax_income if inc else None,
+        "tax_expense":      inc.tax_expense if inc else None,
+        "net_income":       inc.net_income if inc else None,
+        "equity":           bs.equity if bs else None,
+        "total_debt":       bs.total_debt if bs else None,
+        "cash_and_sti":     bs.cash_and_sti if bs else None,
+        "net_debt":         bs.net_debt if bs else None,
+        "cfo":              cfo,
+        "capex":            capex,
+        "fcf":              fcf,
+        "diluted_shares":   diluted_shares,
+    }
+
+
 # ---------- Gewinnruecklagen + EPS (Verlauf) ----------
 
 _RETAINED = ["RetainedEarningsAccumulatedDeficit"]
