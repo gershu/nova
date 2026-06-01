@@ -779,6 +779,16 @@ def fetch_sbc_from_filing(filing: dict) -> dict | None:
 
 # ---------- Komplette Jahres-Metriken (fuer Moat-Score) ----------
 
+# Kapitalallokation (Cashflow, als positive Mittelabfluesse berichtet).
+_BUYBACKS = ["PaymentsForRepurchaseOfCommonStock",
+             "PaymentsForRepurchaseOfEquity"]
+_DIVIDENDS = ["PaymentsOfDividendsCommonStock", "PaymentsOfDividends",
+              "Dividends", "DividendsCommonStockCash"]
+_ACQUISITIONS = ["PaymentsToAcquireBusinessesNetOfCashAcquired",
+                 "PaymentsToAcquireBusinessesAndInterestInAffiliates",
+                 "PaymentsToAcquireBusinessesGross"]
+
+
 def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     """GuV + Bilanz + Cashflow eines Geschaeftsjahres aus EINEM XBRL-Call.
 
@@ -804,6 +814,11 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
     fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
     diluted_shares, _ = _pick(inc_stmt, _DILUTED_SHARES, period)
 
+    # Kapitalallokation (Mittelverwendung; als positive Betraege fuehren)
+    buybacks, _ = _pick(cf, _BUYBACKS, period)
+    dividends, _ = _pick(cf, _DIVIDENDS, period)
+    acquisitions, _ = _pick(cf, _ACQUISITIONS, period)
+
     if inc is not None and inc.revenue is None and inc.net_income is None:
         return None
     return {
@@ -824,6 +839,9 @@ def fetch_year_metrics_from_filing(filing: dict) -> dict | None:
         "capex":            capex,
         "fcf":              fcf,
         "diluted_shares":   diluted_shares,
+        "buybacks":         buybacks,
+        "dividends":        dividends,
+        "acquisitions":     acquisitions,
     }
 
 

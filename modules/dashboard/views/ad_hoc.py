@@ -591,6 +591,75 @@ def render_returns(ticker, n_years):
             {"Posten": "Bilanzsumme", "Wert": _money(bs_l.total_assets, cur)},
         ]), use_container_width=True, hide_index=True)
 
+    # ---- FCF-Verwendung (Kapitalallokation) -----------------------------
+    st.markdown("#### FCF-Verwendung (Kapitalallokation)")
+    try:
+        with st.spinner("Lade Kapitalallokation …"):
+            cap = _load_year_metrics(ticker, n_years)
+    except SecApiError as e:
+        st.warning(f"Kapitalallokation nicht ladbar: {e}")
+        cap = []
+    except Exception:  # noqa: BLE001
+        cap = []
+
+    if not cap:
+        st.info("Keine Cashflow-Daten zur Kapitalallokation gefunden.")
+        return
+
+    def _abs(v):
+        return abs(v) if v is not None else None
+
+    cl = cap[-1]
+    bb, dv = _abs(cl.get("buybacks")), _abs(cl.get("dividends"))
+    cx, aq = _abs(cl.get("capex")), _abs(cl.get("acquisitions"))
+    fcf_l = cl.get("fcf")
+    shareholder = (bb or 0) + (dv or 0)
+    payout = _div(shareholder, fcf_l)
+
+    mm = st.columns(4)
+    mm[0].metric("Rueckkaeufe", _money(bb, cur))
+    mm[1].metric("Dividenden", _money(dv, cur))
+    mm[2].metric("Reinvestition (CapEx)", _money(cx, cur))
+    mm[3].metric("Akquisitionen", _money(aq, cur))
+    st.metric("Ausschuettungsquote (Rueckkauf + Dividende) / FCF",
+              _pct(payout) if payout is not None else "—",
+              help="Anteil des Free Cash Flow, der an Aktionaere zurueck "
+                   "floss (letztes GJ)")
+
+    if len(cap) >= 2:
+        af = pd.DataFrame([{
+            "period_end": pd.to_datetime(d["period_end"]),
+            "Rueckkaeufe": _abs(d.get("buybacks")),
+            "Dividenden": _abs(d.get("dividends")),
+            "Reinvestition": _abs(d.get("capex")),
+            "Akquisitionen": _abs(d.get("acquisitions")),
+        } for d in cap])
+        fig = go.Figure()
+        for name, color in [("Rueckkaeufe", "#0F6E56"),
+                            ("Dividenden", "#5DCAA5"),
+                            ("Reinvestition", "#1D9E75"),
+                            ("Akquisitionen", "#B4862B")]:
+            fig.add_trace(go.Bar(
+                name=name, x=af["period_end"], y=af[name],
+                marker_color=color,
+                hovertemplate=(f"%{{x|%Y-%m-%d}}<br>{name}: "
+                               "%{y:,.0f}<extra></extra>")))
+        fig.add_trace(go.Scatter(
+            name="Free Cash Flow", x=af["period_end"],
+            y=[d.get("fcf") for d in cap], mode="lines+markers",
+            line=dict(color="#444441", width=2, dash="dot")))
+        fig.update_layout(barmode="stack", height=340,
+                          margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=cur, legend=dict(orientation="h",
+                                                       y=-0.2),
+                          hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("Mittelverwendung aus dem Cashflow-Statement (Rueckkaeufe, "
+               "Dividenden, CapEx, Akquisitionen) als positive Betraege; "
+               "FCF-Linie zum Vergleich. Zeigt, wie das Management den "
+               "freien Cashflow allokiert.")
+
 
 def render_insider(ticker, n_years):
     try:
