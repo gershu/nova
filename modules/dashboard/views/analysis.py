@@ -307,6 +307,13 @@ def render_business(ticker: str, src) -> None:
                            title=f"Umsatz ({cur})", yaxis_title=cur)
         st.plotly_chart(fig2, use_container_width=True)
 
+    # --- Umsatz & GuV (Segmente, Kostenaufteilung, Sankey) ---
+    with st.expander("Umsatz & GuV — Segmente, Kostenaufteilung, Sankey"):
+        try:
+            _render_revenue_guv(ticker, src)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"Umsatz & GuV nicht ladbar: {e.__class__.__name__}")
+
     # --- Physical Growth (button-gated, da Mitarbeiter-Text teuer) ---
     with st.expander("Physical Growth (PP&E, CapEx, Mitarbeiter)"):
         if st.button("Physical Growth laden", key=f"phys_{ticker}"):
@@ -314,6 +321,123 @@ def render_business(ticker: str, src) -> None:
         else:
             st.caption("Laedt PP&E/CapEx/Mitarbeiter + Index on-Demand "
                        "(mehrere API-Calls).")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _segments(ticker: str):
+    return cd.revenue_segments(ticker)
+
+
+def _render_revenue_guv(ticker: str, src) -> None:
+    """Umsatz & GuV (aus Thesis): Segmente, Kostenaufteilung, GuV-Sankey."""
+    cur = src.currency or "USD"
+    inc = _income(ticker)
+    rows = [r for r in (inc.get("rows") or [])
+            if (r.get("form_type") or "").upper().startswith("10-K")] \
+        or (inc.get("rows") or [])
+
+    # --- Umsatz-Segmente (Stacked Bar) ---
+    seg = _segments(ticker)
+    srows = seg.get("rows") or []
+    if srows:
+        axes = list(dict.fromkeys(r["axis"] for r in srows))
+        ax = (st.selectbox("Segment-Achse", axes, key=f"seg_{ticker}")
+              if len(axes) > 1 else axes[0])
+        ssel = [r for r in srows if r["axis"] == ax]
+        sdf = pd.DataFrame(ssel)
+        piv = sdf.pivot_table(index="period_end", columns="member_label",
+                              values="value", aggfunc="first")
+        fig = go.Figure()
+        pal = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB", "#3B6D11",
+               "#639922", "#97C459", "#C0DD97"]
+        for i, col in enumerate(piv.columns):
+            fig.add_trace(go.Bar(name=str(col),
+                                 x=pd.to_datetime(piv.index), y=piv[col],
+                                 marker_color=pal[i % len(pal)]))
+        fig.update_layout(barmode="stack", height=320,
+                          margin=dict(l=10, r=10, t=30, b=10),
+                          title=f"Umsatz-Segmente ({cur})",
+                          legend=dict(orientation="h", y=-0.25))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("Keine Segment-Daten verfuegbar.")
+
+    # --- Kostenaufteilung (absolut, Stacked Bar) ---
+    if len(rows) >= 2:
+        def _rest(r):
+            o = r.get("operating_expense")
+            if o is None:
+                return None
+            return max(0.0, o - (r.get("rd_expense") or 0)
+                       - (r.get("sga_expense") or 0))
+        cdf = pd.DataFrame([{
+            "pe": pd.to_datetime(r["period_end"]),
+            "Herstellkosten": r.get("cost_of_revenue"),
+            "F&E": r.get("rd_expense"),
+            "Vertrieb & Verw.": r.get("sga_expense"),
+            "Uebriger OpEx": _rest(r),
+            "Operatives Ergebnis": r.get("operating_income"),
+        } for r in rows])
+        fig = go.Figure()
+        for name, color in [("Herstellkosten", "#A32D2D"),
+                            ("F&E", "#C75B5B"), ("Vertrieb & Verw.", "#E08A8A"),
+                            ("Uebriger OpEx", "#B4B2A9"),
+                            ("Operatives Ergebnis", "#1D9E75")]:
+            fig.add_trace(go.Bar(name=name, x=cdf["pe"], y=cdf[name],
+                                 marker_color=color))
+        fig.update_layout(barmode="stack", height=320,
+                          margin=dict(l=10, r=10, t=30, b=10),
+                          title=f"Kostenaufteilung absolut ({cur})",
+                          legend=dict(orientation="h", y=-0.25))
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- GuV-Sankey (juengste Periode) ---
+    if rows:
+        r = rows[-1]
+        _sankey_guv(r, cur)
+
+
+def _sankey_guv(r: dict, cur: str) -> None:
+    def g(k):
+        v = r.get(k)
+        return None if _missing(v) else float(v)
+    rev, cogs, gross = g("revenue"), g("cost_of_revenue"), g("gross_profit")
+    rd, sga, opex = g("rd_expense"), g("sga_expense"), g("operating_expense")
+    opinc, tax, net = g("operating_income"), g("tax_expense"), g("net_income")
+    if rev is None or net is None:
+        return
+    labels, idx, colors = [], {}, []
+    GREEN, RED, GRAY = "#3B6D11", "#A32D2D", "#444441"
+
+    def node(key, name, color):
+        idx[key] = len(labels); labels.append(name); colors.append(color)
+    node("rev", "Umsatz", GRAY)
+    for k, n, c in [("cogs", "Herstellkosten", RED),
+                    ("gross", "Bruttogewinn", GREEN),
+                    ("opex", "Betriebsaufwand", RED), ("rd", "F&E", RED),
+                    ("sga", "Vertrieb & Verw.", RED),
+                    ("opinc", "Operatives Ergebnis", GREEN),
+                    ("tax", "Steuern", RED), ("net", "Nettogewinn", GREEN)]:
+        node(k, n, c)
+    S, T, V = [], [], []
+
+    def link(a, b, v):
+        if v and v > 0 and a in idx and b in idx:
+            S.append(idx[a]); T.append(idx[b]); V.append(v)
+    link("rev", "cogs", cogs); link("rev", "gross", gross)
+    link("gross", "opex", opex); link("gross", "opinc", opinc)
+    link("opex", "rd", rd); link("opex", "sga", sga)
+    link("opinc", "tax", tax); link("opinc", "net", net)
+    if not V:
+        return
+    fig = go.Figure(go.Sankey(
+        arrangement="snap",
+        node=dict(label=labels, color=colors, pad=18, thickness=14,
+                  line=dict(color="white", width=1)),
+        link=dict(source=S, target=T, value=V)))
+    fig.update_layout(height=360, margin=dict(l=10, r=10, t=24, b=10),
+                      title=f"GuV-Struktur {str(r['period_end'])[:10]} ({cur})")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_balance_tab(ticker: str, src) -> None:
