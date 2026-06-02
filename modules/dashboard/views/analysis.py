@@ -12,9 +12,13 @@ Phase 3 (Wiederverwendung der vorhandenen Ad-Hoc-/Thesis-Bausteine).
 
 from __future__ import annotations
 
+import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from modules.dashboard import company_data as cd
+from modules.dashboard import finmetrics as fm
+from modules.dashboard.components.format import _missing, de_dec
 
 # DB optional (Universums-Auswahl) — defensiv.
 try:
@@ -33,6 +37,113 @@ def _resolve(ticker: str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _income(ticker: str):
     return cd.income_history(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _year_metrics(ticker: str):
+    return cd.year_metrics(ticker)
+
+
+def _pct(v, places: int = 1) -> str:
+    return "—" if _missing(v) else de_dec(float(v) * 100.0, places) + " %"
+
+
+def _money(v, cur: str = "USD") -> str:
+    if _missing(v):
+        return "—"
+    a = abs(float(v))
+    if a >= 1e9:
+        return f"{de_dec(v / 1e9, 2)} Mrd {cur}"
+    if a >= 1e6:
+        return f"{de_dec(v / 1e6, 1)} Mio {cur}"
+    return f"{de_dec(v, 0)} {cur}"
+
+
+def render_business(ticker: str, src) -> None:
+    """Tab 1 — Ist das Geschaeft gut? (Wachstum, Margen, Renditen, FCF)."""
+    cur = src.currency or "USD"
+    inc = _income(ticker)
+    rows = [r for r in (inc.get("rows") or [])
+            if (r.get("form_type") or "").upper().startswith("10-K")] \
+        or (inc.get("rows") or [])
+    if not rows:
+        st.info("Keine GuV-Daten verfuegbar.")
+        return
+
+    # --- Umsatzwachstum ---
+    rev_pts = [(pd.to_datetime(r["period_end"]), r["revenue"]) for r in rows
+               if r.get("revenue") is not None]
+    rev_cagr = None
+    if len(rev_pts) >= 2:
+        yrs = (rev_pts[-1][0] - rev_pts[0][0]).days / 365.25
+        rev_cagr = fm.cagr(rev_pts[0][1], rev_pts[-1][1], yrs)
+
+    # --- Renditen je Jahr (Trendampel) ---
+    ym = _year_metrics(ticker).get("rows") or []
+    rets = [fm.returns_from_metrics(d) for d in ym]
+    fcf_pts = [(pd.to_datetime(d["period_end"]),
+                fm.safe_div(d.get("fcf"), d.get("revenue"))) for d in ym]
+    fcf_margin_last = fcf_pts[-1][1] if fcf_pts else None
+
+    st.markdown("#### Wachstum & Rendite")
+    m = st.columns(5)
+    m[0].metric("Umsatz-CAGR", _pct(rev_cagr) if rev_cagr is not None
+                else "—", help="Jaehrliches Umsatzwachstum ueber den Zeitraum")
+    for col, key, label in zip(
+            m[1:], ("roic", "roce", "roe"),
+            ("ROIC", "ROCE", "ROE")):
+        cv, slope, emoji, dcc = fm.trend_ampel([r[key] for r in rets])
+        col.metric(f"{emoji} {label}", _pct(cv) if cv is not None else "—",
+                   delta=(f"{slope:+.1f} pp/J" if slope is not None
+                          else None), delta_color=dcc)
+    cvr, slr, er, dr = fm.trend_ampel([r["roa"] for r in rets])
+    m2 = st.columns(5)
+    m2[0].metric(f"{er} ROA", _pct(cvr) if cvr is not None else "—",
+                 delta=(f"{slr:+.1f} pp/J" if slr is not None else None),
+                 delta_color=dr)
+    m2[1].metric("FCF-Marge", _pct(fcf_margin_last))
+    st.caption("Renditen mit Trendampel (lineare Steigung pp/Jahr). ROIC = "
+               "NOPAT/(Schulden+EK−Cash). Renditen/FCF aus on-Demand-"
+               "Jahresdaten; GuV-Quelle: " + inc.get("source", "—") + ".")
+
+    # --- Margen-Trend ---
+    msr = fm.margin_series(rows)
+    df = pd.DataFrame([{
+        "period_end": pd.to_datetime(x["period_end"]),
+        "Bruttomarge": (x["gross"] * 100 if x["gross"] is not None else None),
+        "Operative Marge": (x["operating"] * 100
+                            if x["operating"] is not None else None),
+        "Nettomarge": (x["net"] * 100 if x["net"] is not None else None),
+    } for x in msr])
+    if len(df) >= 2:
+        st.markdown("#### Margen-Trend")
+        fig = go.Figure()
+        for name, color in [("Bruttomarge", "#0F6E56"),
+                            ("Operative Marge", "#1D9E75"),
+                            ("Nettomarge", "#5DCAA5")]:
+            fig.add_trace(go.Scatter(
+                x=df["period_end"], y=df[name], name=name,
+                mode="lines+markers", line=dict(color=color, width=2),
+                connectgaps=False,
+                hovertemplate=f"%{{x|%Y}}<br>{name}: %{{y:.1f}}%"
+                              "<extra></extra>"))
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title="%", legend=dict(orientation="h",
+                                                       y=-0.2),
+                          hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Umsatzverlauf ---
+    rdf = pd.DataFrame([{"period_end": pd.to_datetime(r["period_end"]),
+                         "revenue": r.get("revenue")} for r in rows])
+    if len(rdf) >= 2:
+        fig2 = go.Figure(go.Bar(x=rdf["period_end"], y=rdf["revenue"],
+                                marker_color="#0F6E56",
+                                hovertemplate="%{x|%Y}<br>%{y:,.0f}"
+                                              "<extra></extra>"))
+        fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                           title=f"Umsatz ({cur})", yaxis_title=cur)
+        st.plotly_chart(fig2, use_container_width=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -138,8 +249,16 @@ with tabs[0]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tabs 1-6 (Phase-3-Platzhalter) ----
-for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
+# ---- Frage-Tab 1: Geschaeft (Phase 3) ----
+with tabs[1]:
+    st.markdown(f"#### {_QUESTIONS[0][1]}")
+    try:
+        render_business(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Geschaeft nicht ladbar: {e.__class__.__name__}: {e}")
+
+# ---- Frage-Tabs 2-6 (Phase-3-Platzhalter, folgen) ----
+for i, (short, full, desc) in enumerate(_QUESTIONS[1:], start=2):
     with tabs[i]:
         st.markdown(f"#### {full}")
         st.info(f"Folgt in Phase 3. Geplante Inhalte: {desc}")

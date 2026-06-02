@@ -148,6 +148,23 @@ def income_history(ticker: str, *, n_years: int = 12,
     return {"source": "on-demand", "rows": rows}
 
 
+def year_metrics(ticker: str, *, n_years: int = 10,
+                 src: Source | None = None) -> dict:
+    """Komplette Jahres-Metriken je 10-K (GuV+Bilanz+Cashflow).
+
+    Bilanz/Cashflow sind NICHT persistiert -> immer on-Demand (auch fuer
+    Universums-Werte). Returns {source:'on-demand', rows:[year-metric dict]}.
+    """
+    src = src or resolve(ticker)
+    rows = []
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+        d = _sec.fetch_year_metrics_from_filing(f)
+        if d is not None:
+            rows.append(d)
+    rows.sort(key=lambda d: d.get("period_end") or "")
+    return {"source": "on-demand", "rows": rows}
+
+
 def revenue_segments(ticker: str, *, src: Source | None = None) -> dict:
     """Umsatz-Segmente (unified): {source, rows:[{period_end, axis, member,
     member_label, value}, …]}. DB bevorzugt, sonst on-Demand (juengstes 10-K).
