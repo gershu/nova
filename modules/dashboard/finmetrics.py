@@ -83,6 +83,112 @@ def returns_from_metrics(d: dict, tax_fallback: float = 0.21) -> dict:
             "nopat": nopat, "inv_cap": inv, "eff_tax": eff}
 
 
+def split_factor(splits: dict, period_iso: str) -> float:
+    """Kumulierter Split-Faktor NACH period_iso (Anpassung auf heute)."""
+    f = 1.0
+    for d, r in (splits or {}).items():
+        if d > period_iso:
+            f *= r
+    return f
+
+
+def split_adjust_shares(rows: list[dict], splits: dict) -> list[dict]:
+    """diluted_shares je Periode split-bereinigt (neue Dicts, Input unberuehrt)."""
+    if not splits:
+        return rows
+    out = []
+    for d in rows:
+        sh = d.get("diluted_shares")
+        if sh:
+            out.append(dict(d, diluted_shares=sh * split_factor(
+                splits, str(d.get("period_end"))[:10])))
+        else:
+            out.append(d)
+    return out
+
+
+def moat_signals(rows: list[dict], t: dict) -> dict:
+    """Sechs Moat-Teilsignale -> {name: (score|None, detail)}.
+
+    rows: Jahres-Metriken (diluted_shares idealerweise split-bereinigt),
+    t: thresholds-dict (config moat.thresholds).
+    """
+    import statistics
+    dates = [_to_date(d["period_end"]) for d in rows]
+    span = ((dates[-1] - dates[0]).days / 365.25) if len(dates) >= 2 else 0.0
+    out: dict = {}
+
+    gm = [(d["gross_profit"] / d["revenue"]) for d in rows
+          if d.get("gross_profit") is not None and d.get("revenue")]
+    if len(gm) >= 2:
+        slope_pp = (gm[-1] - gm[0]) * 100
+        gt = t["gross_margin"]
+        sc = (1.0 if slope_pp >= gt["improve_pp"]
+              else 0.5 if slope_pp >= gt["stable_pp"] else 0.0)
+        out["gross_margin_trend"] = (sc, f"Marge {gm[-1] * 100:.0f}%, "
+                                     f"Δ {slope_pp:+.1f} pp")
+    else:
+        out["gross_margin_trend"] = (None, "zu wenig Daten")
+
+    roics = [returns_from_metrics(d)["roic"] for d in rows]
+    roics = [r for r in roics if r is not None]
+    if len(roics) >= 2:
+        mean = statistics.fmean(roics)
+        cv = (statistics.pstdev(roics) / abs(mean)) if mean else 9.9
+        rt = t["roic_stability"]
+        sc = (1.0 if (mean >= rt["mean_min"] and cv <= rt["cv_max"])
+              else 0.5 if (mean >= rt["mean_min"] * 0.6
+                           and cv <= rt["cv_max"] * 1.8) else 0.0)
+        out["roic_stability"] = (sc, f"Ø {mean * 100:.0f}%, CV {cv:.2f}")
+    else:
+        out["roic_stability"] = (None, "zu wenig Daten")
+
+    last = rows[-1]
+    fm_ = safe_div(last.get("fcf"), last.get("revenue"))
+    if fm_ is not None:
+        ft = t["fcf_margin"]
+        sc = 1.0 if fm_ >= ft["high"] else 0.5 if fm_ >= ft["mid"] else 0.0
+        out["fcf_margin"] = (sc, f"{fm_ * 100:.1f}% vom Umsatz")
+    else:
+        out["fcf_margin"] = (None, "keine FCF-/Umsatzdaten")
+
+    rd_sum = sum(d["rd_expense"] for d in rows if d.get("rd_expense"))
+    rev_first, rev_last = rows[0].get("revenue"), last.get("revenue")
+    if rd_sum and rev_first is not None and rev_last is not None:
+        eff = (rev_last - rev_first) / rd_sum
+        et = t["rnd_efficiency"]
+        sc = 1.0 if eff >= et["high"] else 0.5 if eff >= et["mid"] else 0.0
+        out["rnd_efficiency"] = (sc, f"{eff:.1f}x Umsatz/F&E")
+    else:
+        out["rnd_efficiency"] = (None, "keine F&E ausgewiesen")
+
+    rev_cagr = cagr(rev_first, rev_last, span)
+    if rev_cagr is not None:
+        mt = t["market_share_proxy"]
+        sc = (1.0 if rev_cagr >= mt["rev_cagr_high"]
+              else 0.5 if rev_cagr >= mt["rev_cagr_mid"] else 0.0)
+        out["market_share_proxy"] = (sc, f"Umsatz-CAGR {rev_cagr * 100:.1f}% "
+                                     "(Proxy)")
+    else:
+        out["market_share_proxy"] = (None, "zu wenig Daten")
+
+    sh = [d.get("diluted_shares") for d in rows if d.get("diluted_shares")]
+    sh_cagr = (cagr(sh[0], sh[-1], span) if len(sh) >= 2 else None)
+    if sh_cagr is not None:
+        bt = t["buybacks"]
+        sc = (1.0 if sh_cagr <= bt["shrink_cagr"]
+              else 0.0 if sh_cagr >= bt["dilute_cagr"] else 0.5)
+        out["buybacks"] = (sc, f"Aktien {sh_cagr * 100:+.1f}% p.a.")
+    else:
+        out["buybacks"] = (None, "zu wenig Daten")
+    return out
+
+
+def _to_date(s):
+    import datetime as _dt
+    return _dt.date.fromisoformat(str(s)[:10])
+
+
 def margin_series(rows: list[dict]) -> list[dict]:
     """Pro Periode Brutto-/operative/Netto-Marge (Anteil am Umsatz)."""
     out = []

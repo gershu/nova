@@ -21,6 +21,7 @@ from datetime import date
 from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
 from modules.dashboard import market as mkt
+from modules.dashboard.score_config import CFG as _SCORE
 from modules.dashboard.components.format import _missing, de_dec
 
 # DB optional (Universums-Auswahl) — defensiv.
@@ -65,6 +66,18 @@ def _latest_price(ticker: str):
 @st.cache_data(ttl=86400, show_spinner=False)
 def _prices(ticker: str, start_iso: str, end_iso: str):
     return mkt.price_history(ticker, start_iso, end_iso)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _splits(ticker: str):
+    return mkt.splits(ticker)
+
+
+_MOAT_LABELS = {
+    "gross_margin_trend": "Gross-Margin-Trend", "roic_stability":
+    "ROIC-Stabilitaet", "fcf_margin": "FCF-Marge", "rnd_efficiency":
+    "R&D-Effizienz", "market_share_proxy": "Marktanteil (Proxy)",
+    "buybacks": "Aktienrueckkaeufe"}
 
 
 def _pct(v, places: int = 1) -> str:
@@ -314,6 +327,65 @@ def render_valuation_tab(ticker: str, src) -> None:
                "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
 
 
+def render_moat_tab(ticker: str, src) -> None:
+    """Tab 2 — Hat das Unternehmen einen Burggraben? (Moat-Score)."""
+    rows = _year_metrics(ticker).get("rows") or []
+    if len(rows) < 2:
+        st.info("Mind. 2 Jahresberichte fuer den Moat-Score noetig.")
+        return
+    rows = fm.split_adjust_shares(rows, _splits(ticker))   # gegen Split-Bias
+
+    mcfg = _SCORE["moat"]
+    sig = fm.moat_signals(rows, mcfg["thresholds"])
+    wts, bands = mcfg["weights"], mcfg["bands"]
+
+    num = den = 0.0
+    for name, (sc, _d) in sig.items():
+        if sc is not None:
+            num += sc * wts.get(name, 0); den += wts.get(name, 0)
+    if den == 0:
+        st.info("Keine Moat-Signale auswertbar."); return
+    score = round(100 * num / den)
+    n_ok = sum(1 for _, (sc, _d) in sig.items() if sc is not None)
+
+    box = (st.success if score >= bands["strong"]
+           else st.info if score >= bands["mixed"] else st.warning)
+    verdict = ("breiter Moat" if score >= bands["strong"]
+               else "schmaler Moat" if score >= bands["mixed"]
+               else "kein klarer Moat")
+    box(f"## {score}/100 — {verdict}")
+    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/6 auswertbare Signale "
+               "(fehlende ausgeklammert, renormiert).")
+
+    bar = pd.DataFrame([{
+        "Signal": _MOAT_LABELS[k],
+        "Score": round(100 * sig[k][0]) if sig[k][0] is not None else None,
+        "Detail": sig[k][1]} for k in wts])
+    fig = go.Figure(go.Bar(
+        x=bar["Score"], y=bar["Signal"], orientation="h",
+        marker_color=["#1D9E75" if (s is not None and s >= 70)
+                      else "#B4862B" if (s is not None and s >= 40)
+                      else "#A32D2D" if s is not None else "#CFCDC6"
+                      for s in bar["Score"]],
+        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
+        textposition="auto", customdata=bar["Detail"],
+        hovertemplate="%{y}: %{x}/100<br>%{customdata}<extra></extra>"))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis=dict(range=[0, 100], title="Teil-Score"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.dataframe(pd.DataFrame([{
+        "Signal": _MOAT_LABELS[k], "Gewicht": f"{int(wts[k] * 100)} %",
+        "Score": (f"{round(100 * sig[k][0])}/100"
+                  if sig[k][0] is not None else "n/a"),
+        "Detail": sig[k][1]} for k in wts]),
+        use_container_width=True, hide_index=True)
+
+    if src.in_universe:
+        st.caption("Peers/Branche & Dominanz: folgt bei der Thesis-"
+                   "Integration (Phase 4, nur Universums-Werte).")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _universe_symbols() -> list[str]:
     if _run_query is None:
@@ -441,9 +513,17 @@ with tabs[6]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Bewertung nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tabs 2/4/5 (Phase-3-Platzhalter, folgen) ----
+# ---- Frage-Tab 2: Burggraben (Phase 3) ----
+with tabs[2]:
+    st.markdown(f"#### {_QUESTIONS[1][1]}")
+    try:
+        render_moat_tab(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Burggraben nicht ladbar: {e.__class__.__name__}: {e}")
+
+# ---- Frage-Tabs 4/5 (Phase-3-Platzhalter, folgen) ----
 for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
-    if i in (1, 3, 6):
+    if i in (1, 2, 3, 6):
         continue
     with tabs[i]:
         st.markdown(f"#### {full}")
