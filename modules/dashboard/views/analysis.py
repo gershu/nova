@@ -118,6 +118,83 @@ def _earnings_hist(ticker: str):
     return cd.earnings_history(ticker)
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def _ppe_series(ticker: str):
+    return cd.ppe_series(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _emp_map(ticker: str):
+    return cd.employee_map(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _emp_text(accession_no: str):
+    return cd.employee_from_text(accession_no)
+
+
+def _render_physical(ticker: str, cur: str) -> None:
+    """Physical Growth Index (PP&E/CapEx/Mitarbeiter) — Button-gated."""
+    rows = _year_metrics(ticker).get("rows") or []
+    if len(rows) < 2:
+        st.info("Mind. 2 Jahre noetig."); return
+    ppe_m = _ppe_series(ticker)
+    if ppe_m:
+        rows = [dict(d, ppe_gross=(_series_at(ppe_m, str(d["period_end"])[:10])
+                                   or d.get("ppe_gross"))) for d in rows]
+    emp_m = _emp_map(ticker)
+    if emp_m:
+        rows = [dict(d, employees=(_series_at(emp_m, str(d["period_end"])[:10])
+                                   or d.get("employees"))) for d in rows]
+    if not any(d.get("employees") for d in rows):
+        rows = [dict(d, employees=(d.get("employees")
+                     or _emp_text(d.get("accession_no")))) for d in rows]
+
+    def _sg(key, valfn=None):
+        pts = []
+        for d in rows:
+            v = valfn(d) if valfn else d.get(key)
+            if v is not None:
+                pts.append((pd.to_datetime(d["period_end"]), v))
+        if not pts:
+            return None, None
+        if len(pts) < 2:
+            return pts[-1][1], None
+        yrs = (pts[-1][0] - pts[0][0]).days / 365.25
+        return pts[-1][1], fm.cagr(pts[0][1], pts[-1][1], yrs)
+
+    ppe_last, g_ppe = _sg("ppe_gross")
+    cx_last, g_cx = _sg(None, lambda d: _abs_or(d.get("capex")))
+    emp_last, g_emp = _sg("employees")
+    revemp_last, g_re = _sg(None, lambda d: fm.safe_div(d.get("revenue"),
+                                                        d.get("employees")))
+    w = _SCORE["physical_growth"]["weights"]
+    comp = [("ppe", g_ppe), ("employees", g_emp), ("capex", g_cx)]
+    num = den = 0.0
+    for k, g in comp:
+        if g is not None:
+            num += w[k] * g; den += w[k]
+    idx = (num / den) if den else None
+    if idx is not None:
+        st.markdown(f"**Physical Growth Index: {_pct(idx)} p.a.**")
+    m = st.columns(4)
+    m[0].metric("PP&E", _money(ppe_last, cur),
+                delta=_pct(g_ppe) if g_ppe is not None else None,
+                delta_color="off")
+    m[1].metric("CapEx", _money(cx_last, cur),
+                delta=_pct(g_cx) if g_cx is not None else None,
+                delta_color="off")
+    m[2].metric("Mitarbeiter", de_dec(emp_last, 0) if emp_last else "—",
+                delta=_pct(g_emp) if g_emp is not None else None,
+                delta_color="off")
+    m[3].metric("Umsatz / Mitarbeiter",
+                _money(revemp_last, cur) if revemp_last is not None else "—",
+                delta=_pct(g_re) if g_re is not None else None,
+                delta_color="off")
+    st.caption("Index = 0,4·ΔPP&E + 0,3·ΔMitarbeiter + 0,3·ΔCapEx (CAGR). "
+               "PP&E via company-concept, Mitarbeiter via dei/10-K-Text.")
+
+
 _MOAT_LABELS = {
     "gross_margin_trend": "Gross-Margin-Trend", "roic_stability":
     "ROIC-Stabilitaet", "fcf_margin": "FCF-Marge", "rnd_efficiency":
@@ -229,6 +306,14 @@ def render_business(ticker: str, src) -> None:
         fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
                            title=f"Umsatz ({cur})", yaxis_title=cur)
         st.plotly_chart(fig2, use_container_width=True)
+
+    # --- Physical Growth (button-gated, da Mitarbeiter-Text teuer) ---
+    with st.expander("Physical Growth (PP&E, CapEx, Mitarbeiter)"):
+        if st.button("Physical Growth laden", key=f"phys_{ticker}"):
+            _render_physical(ticker, cur)
+        else:
+            st.caption("Laedt PP&E/CapEx/Mitarbeiter + Index on-Demand "
+                       "(mehrere API-Calls).")
 
 
 def render_balance_tab(ticker: str, src) -> None:

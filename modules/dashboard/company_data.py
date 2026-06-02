@@ -165,6 +165,32 @@ def year_metrics(ticker: str, *, n_years: int = 10,
     return {"source": "on-demand", "rows": rows}
 
 
+def ppe_series(ticker: str, *, src: Source | None = None) -> dict:
+    """PP&E-Zeitreihe (us-gaap Net, Fallback Gross) via company-concept."""
+    cik = _cik(ticker, src)
+    m = _sec.fetch_concept_series(cik, "us-gaap",
+                                  "PropertyPlantAndEquipmentNet")
+    if not m:
+        m = _sec.fetch_concept_series(cik, "us-gaap",
+                                      "PropertyPlantAndEquipmentGross")
+    return m
+
+
+def employee_map(ticker: str, *, src: Source | None = None) -> dict:
+    """Mitarbeiter-Zeitreihe (dei company-concept) {iso: anzahl}."""
+    return _sec.fetch_employee_counts_detail(_cik(ticker, src)).get("map") \
+        or {}
+
+
+def employee_from_text(accession_no: str):
+    """Mitarbeiterzahl aus 10-K Item 1 (Textextraktion), Fallback."""
+    try:
+        from modules.sec_filings.extractor import fetch_employees_from_filing
+        return fetch_employees_from_filing(accession_no)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def balance(ticker: str, *, src: Source | None = None):
     """Juengste Bilanz (BalanceSheet-Dataclass) — on-Demand. None wenn keine."""
     src = src or resolve(ticker)
