@@ -36,18 +36,11 @@
         <string>exec /Users/novaadm/nova/scripts/ib_gateway_start.sh</string>
     </array>
 
-    <!-- ON-DEMAND: kein RunAtLoad/KeepAlive. Das Gateway belegt den IBKR-
-         Account NICHT permanent (damit direkte TWS-/Mobile-Nutzung moeglich
-         bleibt). Start nur bei Bedarf:
-           scripts/ib_gateway_ctl.sh start   (intern launchctl kickstart)
-         Stop:  scripts/ib_gateway_ctl.sh stop
-         Der Agent bleibt geladen, laeuft aber nur nach explizitem kickstart
-         und bleibt nach 'stop' aus, bis er erneut angefordert wird. -->
     <key>RunAtLoad</key>
-    <false/>
+    <true/>
 
     <key>KeepAlive</key>
-    <false/>
+    <true/>
 
     <!-- Mindestens 60s zwischen Restart-Versuchen — verhindert
          API-Hammering bei kaputter Config oder waehrend IBKR-Wartung. -->

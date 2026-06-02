@@ -193,13 +193,12 @@ daemons:
     port_check: 8501
 
   - label: lab.ib.gateway
-    title: IB Gateway (On-Demand, via IBC)
+    title: IB Gateway (via IBC)
     group: long_running
-    schedule: "On-Demand"
-    # ON-DEMAND: laeuft nur bei Bedarf (scripts/ib_gateway_ctl.sh), damit der
-    # IBKR-Account fuer direkte TWS-/Mobile-Nutzung frei bleibt. Bewusst KEIN
-    # port_check -> 'aus' ist kein Fehlerzustand im Health-Dashboard.
-    # Status: scripts/ib_gateway_ctl.sh status
+    schedule: "Permanent"
+    # KEIN process_check — Gateway laeuft als 'java'-Prozess, port lauscht
+    # ist die belastbare Aussage.
+    port_check: 4001
 
   - label: ollama
     title: Ollama (LLM-Server)

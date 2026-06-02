@@ -31,11 +31,8 @@ ReadOnlyLogin=no
 # 'accept' = eingehende API-Verbindungen automatisch zulassen (sonst Dialog).
 AcceptIncomingConnectionAction=accept
 
-# Wenn schon eine Session laeuft: 'primary' = uebernehmen (kickt deine
-# manuelle TWS-Sitzung!), 'secondary' = dieser (Gateway-)Instanz weicht der
-# bestehenden Sitzung. 'human-first': 'secondary', damit dein direkter
-# IB-Login Vorrang hat und nicht vom Gateway verdraengt wird.
-ExistingSessionDetectedAction=secondary
+# Wenn schon eine Session laeuft: 'primary' = uebernehmen, 'manual' = fragen.
+ExistingSessionDetectedAction=primary
 
 # Diverse Disclaimer und Hinweis-Dialoge wegklicken.
 DismissPasswordExpiryWarning=yes

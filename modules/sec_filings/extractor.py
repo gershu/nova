@@ -20,50 +20,12 @@ Fuer den Screener brauchen wir typischerweise: 10-K Item 1, 1A, 7.
 
 from __future__ import annotations
 
-import re
-
 import requests
 
 from .client import QUERY_URL, SecApiError, _api_key
 
 
 EXTRACTOR_URL = "https://api.sec-api.io/extractor"
-
-# Mitarbeiterzahl aus 10-K Item 1 (Business). dei:EntityNumberOfEmployees
-# ist meist NICHT XBRL-getaggt -> Textextraktion.
-_EMP_RE = re.compile(
-    r"([\d][\d,]{2,})\s+(?:full[\s-]?time\s+|regular\s+|total\s+|"
-    r"approximately\s+)?(?:employees|persons|people|full[\s-]?time)",
-    re.IGNORECASE)
-
-
-def parse_employees(text: str):
-    """Erste plausible Mitarbeiterzahl (>= 50) aus einem Textabschnitt."""
-    if not text:
-        return None
-    for m in _EMP_RE.finditer(text):
-        try:
-            v = float(m.group(1).replace(",", ""))
-        except (TypeError, ValueError):
-            continue
-        if v >= 50:
-            return v
-    return None
-
-
-def fetch_employees_from_filing(accession_no: str):
-    """Mitarbeiterzahl aus 10-K Item 1 (Business) via Extractor. None bei
-    Fehlschlag (2 API-Calls: Query + Extractor)."""
-    if not accession_no:
-        return None
-    try:
-        url = find_filing_url(accession_no)
-        if not url:
-            return None
-        text = fetch_section(url, "1")
-    except SecApiError:
-        return None
-    return parse_employees(text)
 
 
 def find_filing_url(accession_no: str) -> str | None:
