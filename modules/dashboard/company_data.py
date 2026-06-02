@@ -165,6 +165,26 @@ def year_metrics(ticker: str, *, n_years: int = 10,
     return {"source": "on-demand", "rows": rows}
 
 
+def balance(ticker: str, *, src: Source | None = None):
+    """Juengste Bilanz (BalanceSheet-Dataclass) — on-Demand. None wenn keine."""
+    src = src or resolve(ticker)
+    f = _sec.find_latest_filing(src.ticker)
+    return _sec.fetch_balance_sheet_from_filing(f) if f else None
+
+
+def balance_history(ticker: str, *, n_years: int = 6,
+                    src: Source | None = None) -> list:
+    """Bilanz-Historie (letzte N 10-K) als BalanceSheet-Liste — on-Demand."""
+    src = src or resolve(ticker)
+    out = []
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+        bs = _sec.fetch_balance_sheet_from_filing(f)
+        if bs is not None:
+            out.append(bs)
+    out.sort(key=lambda b: b.period_end or "")
+    return out
+
+
 def revenue_segments(ticker: str, *, src: Source | None = None) -> dict:
     """Umsatz-Segmente (unified): {source, rows:[{period_end, axis, member,
     member_label, value}, …]}. DB bevorzugt, sonst on-Demand (juengstes 10-K).

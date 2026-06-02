@@ -44,6 +44,16 @@ def _year_metrics(ticker: str):
     return cd.year_metrics(ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _balance(ticker: str):
+    return cd.balance(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _balance_hist(ticker: str):
+    return cd.balance_history(ticker)
+
+
 def _pct(v, places: int = 1) -> str:
     return "—" if _missing(v) else de_dec(float(v) * 100.0, places) + " %"
 
@@ -144,6 +154,91 @@ def render_business(ticker: str, src) -> None:
         fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
                            title=f"Umsatz ({cur})", yaxis_title=cur)
         st.plotly_chart(fig2, use_container_width=True)
+
+
+def render_balance_tab(ticker: str, src) -> None:
+    """Tab 3 — Ist die Bilanz solide?"""
+    cur = src.currency or "USD"
+    bs = _balance(ticker)
+    if bs is None:
+        st.info("Keine Bilanzdaten verfuegbar.")
+        return
+
+    cr = fm.safe_div(bs.assets_current, bs.liabilities_current)
+    inv = bs.inventory or 0.0
+    quick = fm.safe_div((bs.assets_current or 0.0) - inv,
+                        bs.liabilities_current)
+    de = fm.safe_div(bs.total_debt, bs.equity)
+    eqr = fm.safe_div(bs.equity, bs.total_assets)
+    intang = (bs.goodwill or 0.0) + (bs.intangibles or 0.0)
+    intang_pct = fm.safe_div(intang, bs.total_assets)
+    nd = bs.net_debt
+
+    # Leichte Bewertung (Schwellen analog Balance-Sheet-Score)
+    checks = []
+    if cr is not None:
+        checks.append(("Current Ratio > 1,5", cr > 1.5))
+    if nd is not None:
+        checks.append(("Netto-Cash", nd < 0))
+    if de is not None:
+        checks.append(("Debt/Equity < 0,5", de < 0.5))
+    if eqr is not None:
+        checks.append(("Eigenkapitalquote > 40 %", eqr > 0.40))
+    if checks:
+        passed = sum(1 for _, ok in checks if ok)
+        r = passed / len(checks)
+        lines = "  \n".join(f"{'✅' if ok else '❌'} {n}"
+                            for n, ok in checks)
+        box = st.success if r >= 0.75 else st.info if r >= 0.5 else st.warning
+        verdict = ("stark" if r >= 0.75 else "solide" if r >= 0.5
+                   else "schwach")
+        box(f"Bilanz wirkt **{verdict}** — {passed}/{len(checks)}  \n{lines}")
+
+    st.caption(f"Stichtag {str(bs.period_end)[:10]} ({bs.form_type}).")
+    m = st.columns(3)
+    m[0].metric("Current Ratio", de_dec(cr, 2) if not _missing(cr) else "—")
+    m[1].metric("Quick Ratio",
+                de_dec(quick, 2) if not _missing(quick) else "—")
+    m[2].metric("Debt / Equity", de_dec(de, 2) if not _missing(de) else "—")
+    m2 = st.columns(3)
+    m2[0].metric("Net Debt" if (nd or 0) >= 0 else "Net Cash",
+                 _money(abs(nd) if nd is not None else None, cur))
+    m2[1].metric("Eigenkapitalquote", _pct(eqr))
+    m2[2].metric("Goodwill + Intangibles", _pct(intang_pct))
+
+    hist = _balance_hist(ticker)
+    if len(hist) >= 2:
+        bdf = pd.DataFrame([{
+            "period_end": pd.to_datetime(b.period_end),
+            "current_ratio": fm.safe_div(b.assets_current,
+                                         b.liabilities_current),
+            "debt_to_equity": fm.safe_div(b.total_debt, b.equity),
+            "net_debt": b.net_debt,
+        } for b in hist])
+        st.markdown("#### Trend (10-K, jaehrlich)")
+        t1, t2 = st.columns(2)
+        f1 = go.Figure()
+        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["current_ratio"],
+                                name="Current Ratio", mode="lines+markers",
+                                line=dict(color="#0F6E56", width=2)))
+        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["debt_to_equity"],
+                                name="Debt/Equity", mode="lines+markers",
+                                line=dict(color="#A32D2D", width=2)))
+        f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title="Current Ratio & Debt/Equity",
+                         legend=dict(orientation="h", y=-0.2),
+                         hovermode="x unified")
+        t1.plotly_chart(f1, use_container_width=True)
+        nd_col = ["#1D9E75" if (v is not None and v < 0) else "#A32D2D"
+                  for v in bdf["net_debt"]]
+        f2 = go.Figure(go.Bar(x=bdf["period_end"], y=bdf["net_debt"],
+                              marker_color=nd_col,
+                              hovertemplate="%{x|%Y}<br>%{y:,.0f}"
+                                            "<extra></extra>"))
+        f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Net Debt ({cur}) — gruen = Netto-Cash",
+                         yaxis_title=cur)
+        t2.plotly_chart(f2, use_container_width=True)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -257,8 +352,18 @@ with tabs[1]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Geschaeft nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tabs 2-6 (Phase-3-Platzhalter, folgen) ----
-for i, (short, full, desc) in enumerate(_QUESTIONS[1:], start=2):
+# ---- Frage-Tab 3: Bilanz (Phase 3) ----
+with tabs[3]:
+    st.markdown(f"#### {_QUESTIONS[2][1]}")
+    try:
+        render_balance_tab(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Bilanz nicht ladbar: {e.__class__.__name__}: {e}")
+
+# ---- Frage-Tabs 2/4/5/6 (Phase-3-Platzhalter, folgen) ----
+for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
+    if i in (1, 3):
+        continue
     with tabs[i]:
         st.markdown(f"#### {full}")
         st.info(f"Folgt in Phase 3. Geplante Inhalte: {desc}")
