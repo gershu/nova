@@ -211,6 +211,56 @@ def earnings_nongaap(ticker: str, *, src: Source | None = None) -> dict:
         return {"categories": None, "error": f"{e.__class__.__name__}: {e}"}
 
 
+# ---- Management-Quellen (on-Demand, einheitliche Oberflaeche) ----
+
+def _cik(ticker: str, src: Source | None = None):
+    src = src or resolve(ticker)
+    try:
+        return _sec.get_issuer_cik(src.ticker)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def insider_tx(ticker: str, *, src: Source | None = None) -> list:
+    src = src or resolve(ticker)
+    return _sec.fetch_insider_transactions(src.ticker, n=300,
+                                           issuer_cik=_cik(ticker, src))
+
+
+def first_filing(ticker: str, owner: str, owner_cik=None,
+                 *, src: Source | None = None):
+    src = src or resolve(ticker)
+    try:
+        return _sec.fetch_insider_first_filing(src.ticker, owner, owner_cik,
+                                               issuer_cik=_cik(ticker, src))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def mgmt_changes(ticker: str, *, src: Source | None = None) -> list:
+    src = src or resolve(ticker)
+    try:
+        return _sec.fetch_mgmt_changes(src.ticker, n=50)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def beneficial(ticker: str, *, src: Source | None = None) -> dict:
+    src = src or resolve(ticker)
+    try:
+        return _sec.fetch_beneficial_ownership_detail(src.ticker)
+    except Exception as e:  # noqa: BLE001
+        return {"group_pct": None, "error": f"{e.__class__.__name__}: {e}"}
+
+
+def institutional(ticker: str, *, src: Source | None = None) -> dict:
+    src = src or resolve(ticker)
+    try:
+        return _sec.fetch_institutional_holdings(src.ticker, n=50)
+    except Exception as e:  # noqa: BLE001
+        return {"holdings": [], "error": f"{e.__class__.__name__}: {e}"}
+
+
 def revenue_segments(ticker: str, *, src: Source | None = None) -> dict:
     """Umsatz-Segmente (unified): {source, rows:[{period_end, axis, member,
     member_label, value}, …]}. DB bevorzugt, sonst on-Demand (juengstes 10-K).

@@ -83,6 +83,31 @@ def _nongaap(ticker: str):
     return cd.earnings_nongaap(ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _insider_tx(ticker: str):
+    return cd.insider_tx(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _mgmt_changes(ticker: str):
+    return cd.mgmt_changes(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _beneficial(ticker: str):
+    return cd.beneficial(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _institutional(ticker: str):
+    return cd.institutional(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _first_filing(ticker: str, owner: str, cik):
+    return cd.first_filing(ticker, owner, cik)
+
+
 _MOAT_LABELS = {
     "gross_margin_trend": "Gross-Margin-Trend", "roic_stability":
     "ROIC-Stabilitaet", "fcf_margin": "FCF-Marge", "rnd_efficiency":
@@ -465,6 +490,156 @@ def render_earnings_real_tab(ticker: str, src) -> None:
                "vs. ausgewiesener Gewinn.")
 
 
+def render_management_tab(ticker: str, src) -> None:
+    """Tab 4 — Ist das Management gut? (Conviction, Tenure, Ownership,
+    Turnover, Kapitalallokation, SBC/Verwaesserung)."""
+    cur = src.currency or "USD"
+    tx = _insider_tx(ticker)
+    ym = _year_metrics(ticker).get("rows") or []
+    shares_out = None
+    if ym:
+        shares_out = ym[-1].get("shares_outstanding") \
+            or ym[-1].get("diluted_shares")
+
+    # --- Insider Conviction ---
+    conv = fm.insider_conviction(tx, n_years=3,
+                                 cfg=_SCORE["insider_conviction"]) if tx \
+        else None
+    if conv:
+        box = (st.success if conv["label"] == "Bullisch"
+               else st.warning if conv["label"] == "Bearisch" else st.info)
+        lines = "  \n".join(f"{'➕' if p > 0 else '➖'} {n}: {p:+d}"
+                            for n, p in conv["fired"]) or "keine Signale"
+        box(f"**Insider-Signal: {conv['label']}** · Netto {conv['points']:+d}"
+            f"  \n{lines}")
+        if conv["routine"]:
+            st.caption(f"{conv['routine']} Routine-Verkauf/e (10b5-1) "
+                       "ausgeklammert.")
+
+    # --- Tenure + Turnover ---
+    df = pd.DataFrame(tx) if tx else pd.DataFrame()
+
+    def _tenure(flag):
+        if df.empty or flag not in df.columns:
+            return None, None
+        sub = df[df[flag] == True]  # noqa: E712
+        if sub.empty:
+            return None, None
+        sub = sub.assign(_d=pd.to_datetime(sub["transaction_date"],
+                                           errors="coerce"))
+        cur_row = sub.sort_values("_d").iloc[-1]
+        owner = cur_row["owner"]
+        cik = cur_row.get("owner_cik") if "owner_cik" in sub.columns else None
+        f_iso = _first_filing(ticker, owner, cik)
+        if not f_iso:
+            return owner, None
+        yrs = (pd.Timestamp.utcnow()
+               - pd.to_datetime(f_iso, utc=True, errors="coerce")).days \
+            / 365.25
+        return owner, yrs
+
+    ceo_name, ceo_t = _tenure("is_ceo")
+    cfo_name, cfo_t = _tenure("is_cfo")
+    changes = _mgmt_changes(ticker)
+    cutoff = pd.Timestamp.utcnow() - pd.Timedelta(days=5 * 365)
+    cdts = pd.to_datetime([c.get("filed_at") for c in changes],
+                          errors="coerce", utc=True)
+    turnover = int((cdts >= cutoff).sum()) if len(cdts) else 0
+
+    tm = st.columns(4)
+    tm[0].metric("CEO-Tenure",
+                 f"{de_dec(ceo_t, 1)} J" if ceo_t is not None else "—")
+    tm[1].metric("CFO-Tenure",
+                 f"{de_dec(cfo_t, 1)} J" if cfo_t is not None else "—")
+    tm[2].metric("Mgmt-Wechsel (5 J)", str(turnover),
+                 help="8-K Item 5.02")
+    tm[3].metric("Insider Käufer/Verkäufer",
+                 f"{conv['n_buyers']}/{conv['n_sellers']}" if conv else "—")
+
+    # --- Ownership-Struktur ---
+    mgmt_pct = strat_pct = inst_pct = None
+    if not df.empty and "shares_following" in df.columns and shares_out:
+        held = df[df["shares_following"].notna()].copy()
+        held["gid"] = (held["owner_cik"].fillna(held["owner"])
+                       if "owner_cik" in held.columns else held["owner"])
+        held = held.sort_values("transaction_date")
+        agg = held.groupby("gid").agg(
+            shares=("shares_following", "last"),
+            off=("is_officer", "max") if "is_officer" in held else
+            ("shares_following", "size"),
+            dir=("is_director", "max") if "is_director" in held else
+            ("shares_following", "size"),
+            ten=("is_tenpct", "max") if "is_tenpct" in held else
+            ("shares_following", "size"))
+        mgmt_mask = agg["off"].astype(bool) | agg["dir"].astype(bool)
+        mgmt_pct = fm.safe_div(float(agg.loc[mgmt_mask, "shares"].sum()),
+                               shares_out)
+        strat_pct = fm.safe_div(
+            float(agg.loc[agg["ten"].astype(bool) & ~mgmt_mask,
+                          "shares"].sum()), shares_out)
+    bo = _beneficial(ticker)
+    insider_pct = bo.get("group_pct")
+    if insider_pct is None:
+        insider_pct = mgmt_pct
+    inst = _institutional(ticker)
+    if inst.get("holdings") and shares_out:
+        ih = pd.DataFrame(inst["holdings"])
+        ih = ih[ih["shares"].notna()]
+        if not ih.empty:
+            ih["pdt"] = pd.to_datetime(ih["period"], errors="coerce")
+            cq = ih[ih["pdt"] == ih["pdt"].max()] if ih["pdt"].notna().any() \
+                else ih
+            inst_pct = fm.safe_div(
+                float(cq.drop_duplicates("manager")["shares"].sum()),
+                shares_out)
+    parts = [v for v in (insider_pct, inst_pct, strat_pct) if v is not None]
+    strong = min(sum(parts), 1.0) if parts else None
+    free = max(0.0, 1 - strong) if strong is not None else None
+    om = st.columns(4)
+    om[0].metric("Free Float", _pct(free) if free is not None else "—")
+    om[1].metric("Institutionell", _pct(inst_pct))
+    om[2].metric("Insider", _pct(insider_pct))
+    om[3].metric("Strong Hands", _pct(strong) if strong is not None else "—",
+                 help="Institutionell + Insider + Strategisch (Naeherung)")
+
+    # --- Kapitalallokation + SBC/Verwaesserung ---
+    if ym:
+        last = ym[-1]
+        def _a(v):
+            return abs(v) if v is not None else None
+        bb, dv = _a(last.get("buybacks")), _a(last.get("dividends"))
+        cx, aq = _a(last.get("capex")), _a(last.get("acquisitions"))
+        payout = fm.safe_div((bb or 0) + (dv or 0), last.get("fcf"))
+        km = st.columns(4)
+        km[0].metric("Rueckkaeufe", _money(bb, cur))
+        km[1].metric("Dividenden", _money(dv, cur))
+        km[2].metric("Reinvestition (CapEx)", _money(cx, cur))
+        km[3].metric("Ausschuettungsquote",
+                     _pct(payout) if payout is not None else "—",
+                     help="(Rueckkauf + Dividende) / FCF")
+
+        sbc = _sbc(ticker)
+        sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
+        adj = fm.split_adjust_shares(ym, _splits(ticker))
+        sh = [(d["period_end"], d["diluted_shares"]) for d in adj
+              if d.get("diluted_shares")]
+        dil = None
+        if len(sh) >= 2:
+            yrs = (pd.to_datetime(sh[-1][0])
+                   - pd.to_datetime(sh[0][0])).days / 365.25
+            dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
+        sm = st.columns(2)
+        sm[0].metric("SBC / operativer CF", _pct(sbc_cfo))
+        sm[1].metric("Aktien p.a. (Verwaesserung)",
+                     _pct(dil) if dil is not None else "—",
+                     help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
+
+    st.caption("Tenure via fruehestes Insider-Filing (CIK). Ownership: "
+               "DEF-14A (Insider) + 13F-Top-Sample (institutionell) + "
+               "10%-Eigner (strategisch) — Anteile sind Untergrenzen. "
+               "Conviction klammert 10b5-1-Routine-Verkaeufe aus.")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _universe_symbols() -> list[str]:
     if _run_query is None:
@@ -608,13 +783,13 @@ with tabs[5]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Gewinnqualitaet nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tab 4 (Phase-3-Platzhalter, folgt) ----
-for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
-    if i in (1, 2, 3, 5, 6):
-        continue
-    with tabs[i]:
-        st.markdown(f"#### {full}")
-        st.info(f"Folgt in Phase 3. Geplante Inhalte: {desc}")
+# ---- Frage-Tab 4: Management (Phase 3) ----
+with tabs[4]:
+    st.markdown(f"#### {_QUESTIONS[3][1]}")
+    try:
+        render_management_tab(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Management nicht ladbar: {e.__class__.__name__}: {e}")
 
 # ---- Portfolio & Signale ----
 with tabs[-1]:

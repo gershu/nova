@@ -280,6 +280,69 @@ def owner_earnings(rows: list[dict]):
     return out, method
 
 
+def insider_conviction(tx: list[dict], n_years: int, cfg: dict) -> dict:
+    """Insider Conviction Score aus flachen Form-4-Transaktionen.
+
+    Gewichtet CEO-/CFO-Kauf, Cluster, Erstkauf; zieht nur *bedeutende*
+    (nicht-10b5-1) Verkaeufe ab. Returns Summary inkl. label/points/fired.
+    """
+    import datetime as _dt
+    cutoff = (_dt.date.today()
+              - _dt.timedelta(days=int(n_years) * 365)).isoformat()
+    rows = [t for t in tx if (t.get("transaction_date") or "") >= cutoff]
+    buys = [t for t in rows if t.get("code") == "P"]
+    sells = [t for t in rows if t.get("code") == "S"]
+    buy_val = sum((t.get("value") or 0) for t in buys)
+    sell_val = sum((t.get("value") or 0) for t in sells)
+    n_buyers = len({t.get("owner") for t in buys})
+    n_sellers = len({t.get("owner") for t in sells})
+    ceo_buy = any(t.get("is_ceo") for t in buys)
+    cfo_buy = any(t.get("is_cfo") for t in buys)
+    cm = cfg["cluster_buyers_min"]
+    cluster = n_buyers >= cm
+    first = set()
+    for t in buys:
+        sf, sh = t.get("shares_following"), t.get("shares")
+        if sf is not None and sh is not None and (sf - sh) <= 0.05 * max(sf, 1):
+            first.add(t.get("owner"))
+    first_buyers = len(first)
+    pct = cfg["meaningful_sell_pct"]
+    meaningful = routine = 0
+    for t in sells:
+        if t.get("planned"):
+            routine += 1; continue
+        sf, sh = t.get("shares_following"), t.get("shares")
+        frac = (sh / (sh + sf)) if (sf is not None and sh is not None
+                                    and (sh + sf) > 0) else None
+        if frac is None or frac >= pct:
+            meaningful += 1
+    w = cfg["weights"]
+    pts, fired = 0, []
+    if ceo_buy:
+        pts += w["ceo_buy"]; fired.append(("CEO-Kauf", w["ceo_buy"]))
+    if cfo_buy:
+        pts += w["cfo_buy"]; fired.append(("CFO-Kauf", w["cfo_buy"]))
+    if cluster:
+        pts += w["cluster_buy"]
+        fired.append((f"Cluster ({n_buyers})", w["cluster_buy"]))
+    if first_buyers > 0:
+        pts += w["first_buy"]
+        fired.append((f"Erstkauf ({first_buyers})", w["first_buy"]))
+    if meaningful > 0:
+        pts -= w["meaningful_sell"]
+        fired.append((f"Bedeutender Verkauf ({meaningful})",
+                      -w["meaningful_sell"]))
+    sg = cfg["signal"]
+    label = ("Bullisch" if pts >= sg["bullish_min"]
+             else "Bearisch" if pts <= sg["bearish_max"] else "Neutral")
+    return {"label": label, "points": pts, "buy_val": buy_val,
+            "sell_val": sell_val, "n_buyers": n_buyers,
+            "n_sellers": n_sellers, "ceo_buy": ceo_buy, "cfo_buy": cfo_buy,
+            "cluster": cluster, "first_buyers": first_buyers,
+            "meaningful": meaningful, "routine": routine, "fired": fired,
+            "df_rows": rows}
+
+
 def margin_series(rows: list[dict]) -> list[dict]:
     """Pro Periode Brutto-/operative/Netto-Marge (Anteil am Umsatz)."""
     out = []
