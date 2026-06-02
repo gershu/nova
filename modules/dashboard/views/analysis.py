@@ -73,6 +73,16 @@ def _splits(ticker: str):
     return mkt.splits(ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sbc(ticker: str):
+    return cd.sbc_latest(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _nongaap(ticker: str):
+    return cd.earnings_nongaap(ticker)
+
+
 _MOAT_LABELS = {
     "gross_margin_trend": "Gross-Margin-Trend", "roic_stability":
     "ROIC-Stabilitaet", "fcf_margin": "FCF-Marge", "rnd_efficiency":
@@ -386,6 +396,75 @@ def render_moat_tab(ticker: str, src) -> None:
                    "Integration (Phase 4, nur Universums-Werte).")
 
 
+def render_earnings_real_tab(ticker: str, src) -> None:
+    """Tab 5 — Sind die Gewinne echt? (Earnings Quality, Owner Earnings)."""
+    cur = src.currency or "USD"
+
+    # --- Earnings-Quality-Score ---
+    sbc = _sbc(ticker)
+    sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
+    ng = _nongaap(ticker)
+    eq = fm.earnings_quality(sbc_cfo, ng.get("categories"),
+                             _SCORE["earnings_quality"])
+    score, bands = eq["score"], eq["bands"]
+    if score is not None:
+        box = (st.success if score >= bands["strong"]
+               else st.info if score >= bands["mixed"] else st.warning)
+        v = ("hohe Qualitaet" if score >= bands["strong"]
+             else "mittel" if score >= bands["mixed"]
+             else "niedrig (viele Bereinigungen)")
+        box(f"## {score}/100 — {v}")
+        st.caption(f"{eq['n_ok']}/6 Dimensionen auswertbar. Hoeher = "
+                   "sauberere, weniger bereinigte Gewinne.")
+    if ng.get("categories") is None:
+        st.caption(f"Kein Earnings-Exhibit auswertbar ({ng.get('error')}) — "
+                   "nur SBC bewertet.")
+    st.dataframe(pd.DataFrame([{
+        "Dimension": lbl,
+        "Score": f"{round(100 * sub)}/100" if sub is not None else "n/a",
+        "Detail": det} for _k, lbl, sub, det in eq["rows"]]),
+        use_container_width=True, hide_index=True)
+
+    # --- Owner Earnings vs Nettogewinn vs FCF ---
+    ym = _year_metrics(ticker).get("rows") or []
+    if ym:
+        oe_series, method = fm.owner_earnings(ym)
+        last = oe_series[-1]
+        st.markdown("#### Owner Earnings vs Nettogewinn vs FCF")
+        m = st.columns(3)
+        m[0].metric("Owner Earnings", _money(last["oe"], cur),
+                    help="Nettogewinn + D&A − Maintenance CapEx (Greenwald, "
+                         f"{method})")
+        m[1].metric("Nettogewinn", _money(last["ni"], cur))
+        m[2].metric("Free Cash Flow", _money(last["fcf"], cur))
+        if len(oe_series) >= 2:
+            odf = pd.DataFrame([{
+                "period_end": pd.to_datetime(o["period_end"]),
+                "oe": o["oe"], "ni": o["ni"], "fcf": o["fcf"]}
+                for o in oe_series])
+            fig = go.Figure()
+            fig.add_trace(go.Bar(name="Owner Earnings", x=odf["period_end"],
+                                 y=odf["oe"], marker_color="#0F6E56"))
+            fig.add_trace(go.Scatter(name="Nettogewinn", x=odf["period_end"],
+                                     y=odf["ni"], mode="lines+markers",
+                                     line=dict(color="#A32D2D", width=2)))
+            fig.add_trace(go.Scatter(name="Free Cash Flow",
+                                     x=odf["period_end"], y=odf["fcf"],
+                                     mode="lines+markers",
+                                     line=dict(color="#444441", width=2,
+                                               dash="dot")))
+            fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                              yaxis_title=cur, legend=dict(orientation="h",
+                                                           y=-0.2),
+                              hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("SBC quantitativ (SBC/operativer CF); Akquisitions-/"
+               "Restrukturierungs-/Rechtsstreit-/Steuer-/Einmal-Add-backs "
+               "aus dem Earnings-Exhibit. Owner Earnings = Cash-Realitaet "
+               "vs. ausgewiesener Gewinn.")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _universe_symbols() -> list[str]:
     if _run_query is None:
@@ -521,9 +600,17 @@ with tabs[2]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Burggraben nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tabs 4/5 (Phase-3-Platzhalter, folgen) ----
+# ---- Frage-Tab 5: Gewinne echt (Phase 3) ----
+with tabs[5]:
+    st.markdown(f"#### {_QUESTIONS[4][1]}")
+    try:
+        render_earnings_real_tab(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Gewinnqualitaet nicht ladbar: {e.__class__.__name__}: {e}")
+
+# ---- Frage-Tab 4 (Phase-3-Platzhalter, folgt) ----
 for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
-    if i in (1, 2, 3, 6):
+    if i in (1, 2, 3, 5, 6):
         continue
     with tabs[i]:
         st.markdown(f"#### {full}")

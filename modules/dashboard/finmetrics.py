@@ -189,6 +189,97 @@ def _to_date(s):
     return _dt.date.fromisoformat(str(s)[:10])
 
 
+# ---- Earnings Quality ----
+
+EQ_CATS = {
+    "acquisition":   (["Akquisitionskosten"], "Akquisitionskosten"),
+    "restructuring": (["Restrukturierung"], "Restrukturierungen"),
+    "litigation":    (["Rechtsstreit/Settlement"], "Rechtsstreitigkeiten"),
+    "tax":           (["Steueranpassungen"], "Steuertricks"),
+    "one_time":      (["Einmaleffekte", "Wertminderung"], "Einmaleffekte"),
+}
+
+
+def _cat_subscore(categories: dict, labels) -> float:
+    total = sum((categories or {}).get(k, 0) for k in labels)
+    if total == 0:
+        return 1.0
+    return 0.5 if total == 1 else 0.0
+
+
+def earnings_quality(sbc_cfo, categories, eqcfg: dict) -> dict:
+    """Earnings-Quality-Score: SBC quantitativ + 5 Add-back-Kategorien.
+
+    sbc_cfo: SBC/operativer Cashflow (oder None). categories: {label:count}
+    aus dem Earnings-Exhibit (oder None, wenn kein Exhibit). Returns
+    {score|None, rows:[(label, sub, detail)], bands, n_ok}.
+    """
+    wts = eqcfg["weights"]
+    sbc_t = eqcfg["sbc_thresholds"]
+    rows = []
+    sbc_sub, sbc_det = None, "keine Daten"
+    if sbc_cfo is not None:
+        sbc_sub = (1.0 if sbc_cfo <= sbc_t["clean"]
+                   else 0.0 if sbc_cfo > sbc_t["heavy"] else 0.5)
+        sbc_det = f"SBC/op. CF {sbc_cfo * 100:.1f}%"
+    rows.append(("sbc", "SBC (Aktienverguetung)", sbc_sub, sbc_det))
+    for key, (labels, label) in EQ_CATS.items():
+        if categories is None:
+            rows.append((key, label, None, "kein Exhibit"))
+        else:
+            cnt = sum(categories.get(x, 0) for x in labels)
+            rows.append((key, label, _cat_subscore(categories, labels),
+                         "nicht erwaehnt" if cnt == 0
+                         else f"{cnt}x erwaehnt (Add-back)"))
+    num = den = 0.0
+    for key, _lbl, sub, _d in rows:
+        if sub is not None:
+            num += sub * wts[key]; den += wts[key]
+    score = round(100 * num / den) if den else None
+    n_ok = sum(1 for _k, _l, s, _d in rows if s is not None)
+    return {"score": score, "rows": rows, "bands": eqcfg["bands"],
+            "n_ok": n_ok}
+
+
+def owner_earnings(rows: list[dict]):
+    """Owner Earnings (Buffett) je Jahr: NI + D&A − Maintenance CapEx.
+
+    Maintenance CapEx per Greenwald: Kapitalintensitaet (PP&E/Umsatz,
+    Fallback CapEx/Umsatz) × Umsatzzuwachs = Wachstums-CapEx; Maintenance
+    = Gesamt-CapEx − Wachstums-CapEx. Returns (series, method).
+    """
+    def _abs(v):
+        return abs(v) if v is not None else None
+    ppe_r = [(d["ppe_gross"] / d["revenue"]) for d in rows
+             if d.get("ppe_gross") is not None and d.get("revenue")]
+    cap_r = [(_abs(d.get("capex")) / d["revenue"]) for d in rows
+             if d.get("capex") is not None and d.get("revenue")]
+    if ppe_r:
+        intensity, method = sum(ppe_r) / len(ppe_r), "PP&E/Umsatz"
+    elif cap_r:
+        intensity, method = sum(cap_r) / len(cap_r), "CapEx/Umsatz"
+    else:
+        intensity, method = None, "—"
+    out, prev_rev = [], None
+    for d in rows:
+        ni, da = d.get("net_income"), d.get("dep_amort")
+        cx, rev = _abs(d.get("capex")), d.get("revenue")
+        maint = None
+        if cx is not None:
+            if intensity is not None and prev_rev is not None \
+                    and rev is not None:
+                growth = intensity * max(0.0, rev - prev_rev)
+                maint = min(cx, max(0.0, cx - growth))
+            else:
+                maint = cx
+        oe = (ni + (da or 0.0) - maint
+              if (ni is not None and maint is not None) else None)
+        out.append({"period_end": d["period_end"], "oe": oe, "ni": ni,
+                    "fcf": d.get("fcf"), "maint": maint})
+        prev_rev = rev
+    return out, method
+
+
 def margin_series(rows: list[dict]) -> list[dict]:
     """Pro Periode Brutto-/operative/Netto-Marge (Anteil am Umsatz)."""
     out = []

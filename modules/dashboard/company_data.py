@@ -185,6 +185,32 @@ def balance_history(ticker: str, *, n_years: int = 6,
     return out
 
 
+def sbc_latest(ticker: str, *, src: Source | None = None) -> dict | None:
+    """SBC + Kontext des juengsten 10-K (on-Demand). None wenn keins."""
+    src = src or resolve(ticker)
+    fil = _sec.find_filings(src.ticker, n=1, forms=("10-K",))
+    return _sec.fetch_sbc_from_filing(fil[0]) if fil else None
+
+
+def earnings_nongaap(ticker: str, *, src: Source | None = None) -> dict:
+    """Add-back-Kategorien aus dem juengsten Earnings-8-K-Exhibit.
+
+    Returns {categories|None, mentions, adds_back_sbc, filed_at, error}.
+    """
+    src = src or resolve(ticker)
+    try:
+        ex = _sec.find_earnings_exhibits(src.ticker, n=1)
+        if not ex or not ex[0].get("exhibit_url"):
+            return {"categories": None, "error": "kein Earnings-Exhibit"}
+        text = _sec.fetch_exhibit_text(ex[0]["exhibit_url"])
+        ana = _sec.analyze_non_gaap(text)
+        return {"categories": ana["categories"], "mentions": ana["mentions"],
+                "adds_back_sbc": ana["adds_back_sbc"],
+                "filed_at": ex[0].get("filed_at"), "error": None}
+    except Exception as e:  # noqa: BLE001
+        return {"categories": None, "error": f"{e.__class__.__name__}: {e}"}
+
+
 def revenue_segments(ticker: str, *, src: Source | None = None) -> dict:
     """Umsatz-Segmente (unified): {source, rows:[{period_end, axis, member,
     member_label, value}, …]}. DB bevorzugt, sonst on-Demand (juengstes 10-K).
