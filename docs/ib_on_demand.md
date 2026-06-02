@@ -16,15 +16,34 @@ Username nur **eine** aktive Sitzung — darum laeuft das Gateway jetzt nur noch
 - **Health** (`config/daemons.yaml`): `lab.ib.gateway` ist `On-Demand`, kein
   `port_check` mehr — „aus" ist kein Fehler mehr im Dashboard.
 
-## Einrichtung (einmalig, als der GUI-User stefan_mac)
+## User-Topologie (wichtig!)
+
+- **novaadm** — technischer User, **keine GUI-Session**. Hier laufen die
+  nova-Daemons. `launchctl bootstrap gui/$(id -u) …` schlaegt hier fehl
+  (`125: Domain does not support specified action`), weil novaadm keine
+  Aqua-Session hat.
+- **stefan_mac** — GUI-User. Das IB Gateway laeuft als LaunchAgent in
+  **seiner** gui-Domain.
+
+`ib_gateway_ctl.sh` spricht daher **immer** stefan_macs GUI-Domain an
+(`NOVA_GUI_USER`, default `stefan_mac`): als stefan_mac direkt, als root via
+`launchctl asuser`. Als novaadm (non-root) ist keine Steuerung moeglich →
+dann als stefan_mac oder mit sudo ausfuehren.
+
+## Einrichtung (einmalig, **als stefan_mac** in der GUI-Session)
 
 ```bash
+# NICHT als novaadm! Muss in stefan_macs Aqua-Session laufen.
 cp ~/nova/dotfiles/launchd/de.gershu.nova.lab.ib.gateway.plist \
    ~/Library/LaunchAgents/
 launchctl bootout   gui/$(id -u)/de.gershu.nova.lab.ib.gateway 2>/dev/null
 launchctl bootstrap gui/$(id -u) \
    ~/Library/LaunchAgents/de.gershu.nova.lab.ib.gateway.plist
 ```
+
+Alternativ als root von novaadm aus:
+`sudo launchctl asuser $(id -u stefan_mac) launchctl bootstrap
+gui/$(id -u stefan_mac) /Users/stefan_mac/Library/LaunchAgents/de.gershu.nova.lab.ib.gateway.plist`
 
 ## Bedienung
 

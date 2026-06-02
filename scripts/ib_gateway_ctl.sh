@@ -23,10 +23,35 @@ set -euo pipefail
 LABEL="de.gershu.nova.lab.ib.gateway"
 PORT="${NOVA_IB_API_PORT:-4001}"
 HOLD="${NOVA_IB_HOLD_FILE:-$HOME/.nova_ib_hold}"
-DOMAIN="gui/$(id -u)"
 
 [[ -f "$HOME/.nova_env" ]] && source "$HOME/.nova_env" 2>/dev/null || true
 PORT="${NOVA_IB_API_PORT:-$PORT}"
+
+# Das Gateway laeuft als GUI-LaunchAgent unter stefan_mac (nova-Daemons
+# laufen dagegen als novaadm, ohne GUI). Darum IMMER die GUI-Domain von
+# stefan_mac ansprechen — nicht die des aufrufenden Users.
+GUI_USER="${NOVA_GUI_USER:-stefan_mac}"
+GUI_UID="$(id -u "$GUI_USER" 2>/dev/null || true)"
+ME_UID="$(id -u)"
+DOMAIN="gui/${GUI_UID}"
+
+_lc() {  # launchctl-Subkommando in stefan_macs GUI-Domain ausfuehren
+  if [[ -z "$GUI_UID" ]]; then
+    echo "[ib] Fehler: GUI-User '$GUI_USER' nicht gefunden (NOVA_GUI_USER setzen)." >&2
+    return 71
+  fi
+  if [[ "$ME_UID" == "$GUI_UID" ]]; then
+    launchctl "$@"
+  elif [[ "$ME_UID" -eq 0 ]]; then
+    launchctl asuser "$GUI_UID" launchctl "$@"
+  else
+    echo "[ib] Fehler: als '$(id -un)' kein Zugriff auf die GUI-Domain von" \
+         "$GUI_USER." >&2
+    echo "       -> als $GUI_USER ausfuehren, oder mit sudo (root nutzt" \
+         "launchctl asuser)." >&2
+    return 70
+  fi
+}
 
 _port_open() { lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; }
 
@@ -42,8 +67,8 @@ _start() {
     return 3
   fi
   if _port_open; then echo "[ib] laeuft bereits (Port $PORT)."; return 0; fi
-  echo "[ib] starte Gateway via launchctl kickstart …"
-  launchctl kickstart "$DOMAIN/$LABEL"
+  echo "[ib] starte Gateway via launchctl kickstart ($DOMAIN) …"
+  _lc kickstart "$DOMAIN/$LABEL" || return $?
   if _wait_port "${1:-120}"; then
     echo "[ib] up (Port $PORT)."
   else
@@ -53,7 +78,7 @@ _start() {
 
 _stop() {
   echo "[ib] stoppe Gateway …"
-  launchctl kill TERM "$DOMAIN/$LABEL" 2>/dev/null || true
+  _lc kill TERM "$DOMAIN/$LABEL" 2>/dev/null || true
   pkill -f "ibgateway" 2>/dev/null || true
   pkill -f "IBC" 2>/dev/null || true
   local i
