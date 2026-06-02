@@ -375,6 +375,84 @@ def render_valuation_tab(ticker: str, src) -> None:
     st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
                "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
 
+    # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf ---
+    eh = _earnings_hist(ticker)
+    if len(eh) >= 2:
+        with st.expander("Gewinnruecklagen, EPS, Equity, FCF & EV — "
+                         "Verlauf"):
+            splits = _splits(ticker)
+            yends = [str(d["period_end"])[:10] for d in eh]
+            start = (pd.to_datetime(min(yends)) - pd.Timedelta(days=10)) \
+                .date().isoformat()
+            px = _prices(ticker, start, date.today().isoformat())
+
+            def _evy(d):
+                sh = d.get("diluted_shares")
+                if sh:
+                    sh *= fm.split_factor(splits, str(d["period_end"])[:10])
+                c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
+                return (c * sh + (d.get("net_debt") or 0.0)
+                        if (c and sh) else None)
+
+            def _adj(d, key):
+                v = d.get(key)
+                return (v / fm.split_factor(splits, str(d["period_end"])[:10])
+                        if v is not None else None)
+
+            edf = pd.DataFrame([{
+                "pe": pd.to_datetime(d["period_end"]),
+                "retained": d.get("retained_earnings"),
+                "equity": d.get("equity"), "fcf": d.get("fcf"),
+                "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
+                "ev": _evy(d)} for d in eh])
+
+            t1, t2 = st.columns(2)
+            rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+                  for v in edf["retained"]]
+            f1 = go.Figure(go.Bar(x=edf["pe"], y=edf["retained"],
+                                  marker_color=rc))
+            f1.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                             title=f"Gewinnruecklagen ({cur})")
+            t1.plotly_chart(f1, use_container_width=True)
+            f2 = go.Figure(go.Bar(x=edf["pe"], y=edf["equity"],
+                                  marker_color="#1D9E75"))
+            f2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                             title=f"Eigenkapital ({cur})")
+            t2.plotly_chart(f2, use_container_width=True)
+
+            t3, t4 = st.columns(2)
+            f3 = go.Figure()
+            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_b"],
+                                    name="EPS unverw.", mode="lines+markers",
+                                    line=dict(color="#0F6E56", width=2),
+                                    connectgaps=False))
+            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_d"],
+                                    name="EPS verw.", mode="lines+markers",
+                                    line=dict(color="#B4862B", width=2),
+                                    connectgaps=False))
+            f3.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                             title=f"EPS ({cur}, split-bereinigt)",
+                             legend=dict(orientation="h", y=-0.3))
+            t3.plotly_chart(f3, use_container_width=True)
+            fc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+                  for v in edf["fcf"]]
+            f4 = go.Figure(go.Bar(x=edf["pe"], y=edf["fcf"], marker_color=fc))
+            f4.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                             title=f"Free Cash Flow ({cur})")
+            t4.plotly_chart(f4, use_container_width=True)
+
+            if edf["ev"].notna().any():
+                f5 = go.Figure(go.Scatter(
+                    x=edf["pe"], y=edf["ev"], mode="lines+markers",
+                    line=dict(color="#444441", width=2), connectgaps=False))
+                f5.update_layout(height=260,
+                                 margin=dict(l=10, r=10, t=30, b=10),
+                                 title=f"Enterprise Value ({cur}, "
+                                       "Jahresend-Kurs × Aktien + Net Debt)")
+                st.plotly_chart(f5, use_container_width=True)
+            st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
+                       "Naeherung (Jahresend-Kurs).")
+
 
 def render_moat_tab(ticker: str, src) -> None:
     """Tab 2 — Hat das Unternehmen einen Burggraben? (Moat-Score)."""
