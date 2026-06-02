@@ -108,6 +108,16 @@ def _first_filing(ticker: str, owner: str, cik):
     return cd.first_filing(ticker, owner, cik)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sbc_hist(ticker: str):
+    return cd.sbc_history(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _earnings_hist(ticker: str):
+    return cd.earnings_history(ticker)
+
+
 _MOAT_LABELS = {
     "gross_margin_trend": "Gross-Margin-Trend", "roic_stability":
     "ROIC-Stabilitaet", "fcf_margin": "FCF-Marge", "rnd_efficiency":
@@ -117,6 +127,10 @@ _MOAT_LABELS = {
 
 def _pct(v, places: int = 1) -> str:
     return "—" if _missing(v) else de_dec(float(v) * 100.0, places) + " %"
+
+
+def _abs_or(v):
+    return abs(v) if v is not None else None
 
 
 def _money(v, cur: str = "USD") -> str:
@@ -633,6 +647,63 @@ def render_management_tab(ticker: str, src) -> None:
         sm[1].metric("Aktien p.a. (Verwaesserung)",
                      _pct(dil) if dil is not None else "—",
                      help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
+
+    # --- FCF-Verwendung (Jahres-Trend) ---
+    if len(ym) >= 2:
+        with st.expander("FCF-Verwendung (Kapitalallokation, Verlauf)"):
+            af = pd.DataFrame([{
+                "period_end": pd.to_datetime(d["period_end"]),
+                "Rueckkaeufe": _abs_or(d.get("buybacks")),
+                "Dividenden": _abs_or(d.get("dividends")),
+                "Reinvestition": _abs_or(d.get("capex")),
+                "Akquisitionen": _abs_or(d.get("acquisitions")),
+            } for d in ym])
+            fig = go.Figure()
+            for name, color in [("Rueckkaeufe", "#0F6E56"),
+                                ("Dividenden", "#5DCAA5"),
+                                ("Reinvestition", "#1D9E75"),
+                                ("Akquisitionen", "#B4862B")]:
+                fig.add_trace(go.Bar(name=name, x=af["period_end"],
+                                     y=af[name], marker_color=color))
+            fig.add_trace(go.Scatter(
+                name="Free Cash Flow", x=af["period_end"],
+                y=[d.get("fcf") for d in ym], mode="lines+markers",
+                line=dict(color="#444441", width=2, dash="dot")))
+            fig.update_layout(barmode="stack", height=320,
+                              margin=dict(l=10, r=10, t=10, b=10),
+                              yaxis_title=cur, legend=dict(orientation="h",
+                                                           y=-0.2),
+                              hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption("Mittelverwendung (positive Betraege) + FCF-Linie. "
+                       "Zeigt, wie der freie Cashflow allokiert wird.")
+
+    # --- Stock-based Compensation (Verlauf) ---
+    sbc_rows = _sbc_hist(ticker)
+    if len(sbc_rows) >= 2:
+        with st.expander("Stock-based Compensation (SBC) — Verlauf"):
+            sdf = pd.DataFrame([{
+                "period_end": pd.to_datetime(d["period_end"]),
+                "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
+                "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
+            } for d in sbc_rows])
+            f1 = go.Figure()
+            f1.add_trace(go.Scatter(
+                x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
+                name="SBC / Umsatz", mode="lines+markers",
+                line=dict(color="#A32D2D", width=2), connectgaps=False))
+            f1.add_trace(go.Scatter(
+                x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
+                name="SBC / operativer CF", mode="lines+markers",
+                line=dict(color="#B4862B", width=2), connectgaps=False))
+            f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                             title="SBC-Belastung", yaxis_title="%",
+                             legend=dict(orientation="h", y=-0.25),
+                             hovermode="x unified")
+            st.plotly_chart(f1, use_container_width=True)
+            st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
+                       "SBC-Quote = wachsende nicht-zahlungswirksame "
+                       "Verguetung.")
 
     st.caption("Tenure via fruehestes Insider-Filing (CIK). Ownership: "
                "DEF-14A (Insider) + 13F-Top-Sample (institutionell) + "

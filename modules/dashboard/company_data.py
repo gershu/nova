@@ -192,6 +192,32 @@ def sbc_latest(ticker: str, *, src: Source | None = None) -> dict | None:
     return _sec.fetch_sbc_from_filing(fil[0]) if fil else None
 
 
+def sbc_history(ticker: str, *, n_years: int = 6,
+                src: Source | None = None) -> list:
+    """SBC + Kontext je 10-K (letzte N Jahre) — on-Demand."""
+    src = src or resolve(ticker)
+    out = []
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+        d = _sec.fetch_sbc_from_filing(f)
+        if d is not None:
+            out.append(d)
+    out.sort(key=lambda d: d.get("period_end") or "")
+    return out
+
+
+def earnings_history(ticker: str, *, n_years: int = 8,
+                     src: Source | None = None) -> list:
+    """Gewinnruecklagen/EPS/Equity/FCF/EV-Bausteine je 10-K — on-Demand."""
+    src = src or resolve(ticker)
+    out = []
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+        d = _sec.fetch_earnings_history_from_filing(f)
+        if d is not None:
+            out.append(d)
+    out.sort(key=lambda d: d.get("period_end") or "")
+    return out
+
+
 def earnings_nongaap(ticker: str, *, src: Source | None = None) -> dict:
     """Add-back-Kategorien aus dem juengsten Earnings-8-K-Exhibit.
 
