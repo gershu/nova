@@ -16,8 +16,11 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from datetime import date
+
 from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
+from modules.dashboard import market as mkt
 from modules.dashboard.components.format import _missing, de_dec
 
 # DB optional (Universums-Auswahl) — defensiv.
@@ -52,6 +55,16 @@ def _balance(ticker: str):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _balance_hist(ticker: str):
     return cd.balance_history(ticker)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _latest_price(ticker: str):
+    return mkt.latest_close(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _prices(ticker: str, start_iso: str, end_iso: str):
+    return mkt.price_history(ticker, start_iso, end_iso)
 
 
 def _pct(v, places: int = 1) -> str:
@@ -241,6 +254,66 @@ def render_balance_tab(ticker: str, src) -> None:
         t2.plotly_chart(f2, use_container_width=True)
 
 
+def render_valuation_tab(ticker: str, src) -> None:
+    """Tab 6 — Ist die Bewertung attraktiv? (EV, EV/FCF, Yields, KGV, Kurs)."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker).get("rows") or []
+    if not ym:
+        st.info("Keine Jahresdaten verfuegbar.")
+        return
+    last = ym[-1]
+    price = _latest_price(ticker)
+    shares = last.get("shares_outstanding") or last.get("diluted_shares")
+
+    if price is None or not shares:
+        st.info("Bewertung braucht Marktpreis × Aktien — nicht verfuegbar "
+                "(yfinance) bzw. keine Aktienzahl.")
+    else:
+        mcap = price * shares
+        ev = mcap + (last.get("net_debt") or 0.0)
+        ev_fcf = (ev / last["fcf"]
+                  if (last.get("fcf") and last["fcf"] > 0) else None)
+        ey_ebit = fm.safe_div(last.get("operating_income"), ev)
+        ey_class = fm.safe_div(last.get("net_income"), mcap)
+        pe = (mcap / last["net_income"]
+              if (last.get("net_income") and last["net_income"] > 0)
+              else None)
+
+        m = st.columns(3)
+        m[0].metric("Enterprise Value", _money(ev, cur),
+                    help="Marktkap. (Kurs × Aktien) + Net Debt")
+        m[1].metric("EV / FCF",
+                    f"{de_dec(ev_fcf, 1)}x" if ev_fcf is not None else "—",
+                    help="Niedriger = guenstiger")
+        m[2].metric("KGV (P/E)",
+                    f"{de_dec(pe, 1)}" if pe is not None else "—")
+        m2 = st.columns(3)
+        m2[0].metric("Earnings Yield (EBIT/EV)", _pct(ey_ebit),
+                     help="Operatives Ergebnis / EV (Greenblatt)")
+        m2[1].metric("Earnings Yield (klassisch)", _pct(ey_class),
+                     help="Nettogewinn / Marktkapitalisierung")
+        m2[2].metric("Marktkapitalisierung", _money(mcap, cur),
+                     help=f"Kurs {de_dec(price, 2)} {cur} × "
+                          f"{de_dec(shares / 1e9, 2)} Mrd Aktien")
+
+    # --- Kurs-Chart (2 Jahre) ---
+    end_iso = date.today().isoformat()
+    start_iso = (pd.to_datetime(end_iso) - pd.Timedelta(days=730)) \
+        .date().isoformat()
+    px = _prices(ticker, start_iso, end_iso)
+    if px:
+        pdf = pd.DataFrame(
+            [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
+        fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
+                                   line=dict(color="#0F6E56", width=1.5)))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                          title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
+               "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _universe_symbols() -> list[str]:
     if _run_query is None:
@@ -360,9 +433,17 @@ with tabs[3]:
     except Exception as e:  # noqa: BLE001
         st.warning(f"Bilanz nicht ladbar: {e.__class__.__name__}: {e}")
 
-# ---- Frage-Tabs 2/4/5/6 (Phase-3-Platzhalter, folgen) ----
+# ---- Frage-Tab 6: Bewertung (Phase 3) ----
+with tabs[6]:
+    st.markdown(f"#### {_QUESTIONS[5][1]}")
+    try:
+        render_valuation_tab(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Bewertung nicht ladbar: {e.__class__.__name__}: {e}")
+
+# ---- Frage-Tabs 2/4/5 (Phase-3-Platzhalter, folgen) ----
 for i, (short, full, desc) in enumerate(_QUESTIONS, start=1):
-    if i in (1, 3):
+    if i in (1, 3, 6):
         continue
     with tabs[i]:
         st.markdown(f"#### {full}")
