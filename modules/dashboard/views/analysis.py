@@ -39,13 +39,13 @@ def _resolve(ticker: str):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _income(ticker: str):
-    return cd.income_history(ticker)
+def _income(ticker: str, n: int = 5):
+    return cd.income_history(ticker, n_years=n)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _year_metrics(ticker: str):
-    return cd.year_metrics(ticker)
+def _year_metrics(ticker: str, n: int = 5):
+    return cd.year_metrics(ticker, n_years=n)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -54,8 +54,8 @@ def _balance(ticker: str):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _balance_hist(ticker: str):
-    return cd.balance_history(ticker)
+def _balance_hist(ticker: str, n: int = 5):
+    return cd.balance_history(ticker, n_years=n)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -109,13 +109,13 @@ def _first_filing(ticker: str, owner: str, cik):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _sbc_hist(ticker: str):
-    return cd.sbc_history(ticker)
+def _sbc_hist(ticker: str, n: int = 5):
+    return cd.sbc_history(ticker, n_years=n)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def _earnings_hist(ticker: str):
-    return cd.earnings_history(ticker)
+def _earnings_hist(ticker: str, n: int = 5):
+    return cd.earnings_history(ticker, n_years=n)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -135,7 +135,7 @@ def _emp_text(accession_no: str):
 
 def _render_physical(ticker: str, cur: str) -> None:
     """Physical Growth Index (PP&E/CapEx/Mitarbeiter) — Button-gated."""
-    rows = _year_metrics(ticker).get("rows") or []
+    rows = _year_metrics(ticker, N_YEARS).get("rows") or []
     if len(rows) < 2:
         st.info("Mind. 2 Jahre noetig."); return
     ppe_m = _ppe_series(ticker)
@@ -224,7 +224,7 @@ def _money(v, cur: str = "USD") -> str:
 def render_business(ticker: str, src) -> None:
     """Tab 1 — Ist das Geschaeft gut? (Wachstum, Margen, Renditen, FCF)."""
     cur = src.currency or "USD"
-    inc = _income(ticker)
+    inc = _income(ticker, N_YEARS)
     rows = [r for r in (inc.get("rows") or [])
             if (r.get("form_type") or "").upper().startswith("10-K")] \
         or (inc.get("rows") or [])
@@ -241,7 +241,7 @@ def render_business(ticker: str, src) -> None:
         rev_cagr = fm.cagr(rev_pts[0][1], rev_pts[-1][1], yrs)
 
     # --- Renditen je Jahr (Trendampel) ---
-    ym = _year_metrics(ticker).get("rows") or []
+    ym = _year_metrics(ticker, N_YEARS).get("rows") or []
     rets = [fm.returns_from_metrics(d) for d in ym]
     fcf_pts = [(pd.to_datetime(d["period_end"]),
                 fm.safe_div(d.get("fcf"), d.get("revenue"))) for d in ym]
@@ -331,7 +331,7 @@ def _segments(ticker: str):
 def _render_revenue_guv(ticker: str, src) -> None:
     """Umsatz & GuV (aus Thesis): Segmente, Kostenaufteilung, GuV-Sankey."""
     cur = src.currency or "USD"
-    inc = _income(ticker)
+    inc = _income(ticker, N_YEARS)
     rows = [r for r in (inc.get("rows") or [])
             if (r.get("form_type") or "").upper().startswith("10-K")] \
         or (inc.get("rows") or [])
@@ -490,7 +490,7 @@ def render_balance_tab(ticker: str, src) -> None:
     m2[1].metric("Eigenkapitalquote", _pct(eqr))
     m2[2].metric("Goodwill + Intangibles", _pct(intang_pct))
 
-    hist = _balance_hist(ticker)
+    hist = _balance_hist(ticker, N_YEARS)
     if len(hist) >= 2:
         bdf = pd.DataFrame([{
             "period_end": pd.to_datetime(b.period_end),
@@ -528,7 +528,7 @@ def render_balance_tab(ticker: str, src) -> None:
 def render_valuation_tab(ticker: str, src) -> None:
     """Tab 6 — Ist die Bewertung attraktiv? (EV, EV/FCF, Yields, KGV, Kurs)."""
     cur = src.currency or "USD"
-    ym = _year_metrics(ticker).get("rows") or []
+    ym = _year_metrics(ticker, N_YEARS).get("rows") or []
     if not ym:
         st.info("Keine Jahresdaten verfuegbar.")
         return
@@ -585,7 +585,7 @@ def render_valuation_tab(ticker: str, src) -> None:
                "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
 
     # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf ---
-    eh = _earnings_hist(ticker)
+    eh = _earnings_hist(ticker, N_YEARS)
     if len(eh) >= 2:
         with st.expander("Gewinnruecklagen, EPS, Equity, FCF & EV — "
                          "Verlauf"):
@@ -665,7 +665,7 @@ def render_valuation_tab(ticker: str, src) -> None:
 
 def render_moat_tab(ticker: str, src) -> None:
     """Tab 2 — Hat das Unternehmen einen Burggraben? (Moat-Score)."""
-    rows = _year_metrics(ticker).get("rows") or []
+    rows = _year_metrics(ticker, N_YEARS).get("rows") or []
     if len(rows) < 2:
         st.info("Mind. 2 Jahresberichte fuer den Moat-Score noetig.")
         return
@@ -752,7 +752,7 @@ def render_earnings_real_tab(ticker: str, src) -> None:
         use_container_width=True, hide_index=True)
 
     # --- Owner Earnings vs Nettogewinn vs FCF ---
-    ym = _year_metrics(ticker).get("rows") or []
+    ym = _year_metrics(ticker, N_YEARS).get("rows") or []
     if ym:
         oe_series, method = fm.owner_earnings(ym)
         last = oe_series[-1]
@@ -796,7 +796,7 @@ def render_management_tab(ticker: str, src) -> None:
     Turnover, Kapitalallokation, SBC/Verwaesserung)."""
     cur = src.currency or "USD"
     tx = _insider_tx(ticker)
-    ym = _year_metrics(ticker).get("rows") or []
+    ym = _year_metrics(ticker, N_YEARS).get("rows") or []
     shares_out = None
     if ym:
         shares_out = ym[-1].get("shares_outstanding") \
@@ -966,7 +966,7 @@ def render_management_tab(ticker: str, src) -> None:
                        "Zeigt, wie der freie Cashflow allokiert wird.")
 
     # --- Stock-based Compensation (Verlauf) ---
-    sbc_rows = _sbc_hist(ticker)
+    sbc_rows = _sbc_hist(ticker, N_YEARS)
     if len(sbc_rows) >= 2:
         with st.expander("Stock-based Compensation (SBC) — Verlauf"):
             sdf = pd.DataFrame([{
@@ -1046,7 +1046,7 @@ st.caption("Vereinheitlichte Sicht nach 6 Investorenfragen. Quelle "
 
 # ---- Ticker-Eingabe: Universum oder Freitext ----
 _syms = _universe_symbols()
-_c1, _c2 = st.columns([1, 3])
+_c1, _c2, _c3 = st.columns([1, 3, 1])
 _mode = _c1.radio("Auswahl", (["Universum", "Freitext"] if _syms
                               else ["Freitext"]), horizontal=False,
                   key="ana_mode")
@@ -1057,6 +1057,8 @@ else:
     ticker = _c2.text_input("Ticker (US-gelistet, EDGAR)", value="",
                             placeholder="z. B. AAPL, MSFT, NVDA",
                             key="ana_free").strip().upper()
+N_YEARS = int(_c3.number_input("Jahre (10-K)", min_value=2, max_value=15,
+                               value=5, step=1, key="ana_years"))
 
 if not ticker:
     st.info("Ticker waehlen oder eingeben.")
@@ -1086,7 +1088,7 @@ with tabs[0]:
     # Datenbasis-Nachweis (Phase-1-Datenschicht end-to-end)
     st.markdown("#### Datenbasis")
     try:
-        ih = _income(ticker)
+        ih = _income(ticker, N_YEARS)
         rows = ih.get("rows") or []
         last = rows[-1] if rows else None
         m = st.columns(3)
