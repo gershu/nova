@@ -40,6 +40,18 @@ _INCOME_COLS = [
 ]
 
 
+def _forms_for(period: str) -> tuple[str, ...]:
+    """Periodenwahl -> EDGAR-Formtypen. 'quarterly'->10-Q, sonst 10-K."""
+    return ("10-Q",) if period == "quarterly" else ("10-K",)
+
+
+def _is_period_form(form_type, period: str) -> bool:
+    """Passt ein form_type zur gewuenschten Darstellung (annual/quarterly)?"""
+    ft = (form_type or "").upper()
+    return ft.startswith("10-Q") if period == "quarterly" \
+        else ft.startswith("10-K")
+
+
 @dataclass
 class Source:
     """Aufloesung Ticker -> Quelle/Metadaten fuer die View (inkl. Badge)."""
@@ -122,11 +134,15 @@ def _row_from_income(inc) -> dict:
 
 
 def income_history(ticker: str, *, n_years: int = 12,
+                   period: str = "annual",
                    src: Source | None = None) -> dict:
     """GuV-Historie (unified). Returns {source, rows: [unified-dict, …]}.
 
-    DB-Pfad liefert die persistierte Historie (10-Q + 10-K), on-Demand-Pfad
-    die letzten N 10-K (annual).
+    period='annual'   -> Jahres-GuV (10-K).
+    period='quarterly'-> Quartals-GuV (10-Q; _pick waehlt die diskrete
+                         3-Monats-Dauer, kein Year-to-Date).
+    DB-Pfad liefert die persistierte Historie (10-Q + 10-K) und wird auf die
+    gewuenschte Periode gefiltert; on-Demand zieht die passenden Filings.
     """
     src = src or resolve(ticker)
     if src.income_source == "db" and src.ref_instrument_id:
@@ -136,11 +152,14 @@ def income_history(ticker: str, *, n_years: int = 12,
             " FROM ref_income_statement WHERE ref_instrument_id = ? "
             "ORDER BY period_end", (src.ref_instrument_id,))
         if df is not None and not df.empty:
-            return {"source": "db",
-                    "rows": [_row_from_db(r) for _, r in df.iterrows()]}
-    # Fallback: on-Demand (annual)
+            rows = [_row_from_db(r) for _, r in df.iterrows()]
+            sel = [r for r in rows if _is_period_form(r.get("form_type"),
+                                                      period)]
+            if sel:
+                return {"source": "db", "rows": sel[-(n_years):]}
+    # Fallback / Nicht-Universum: on-Demand
     rows = []
-    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=_forms_for(period)):
         inc = _sec.fetch_income_from_filing(f)
         if inc is not None:
             rows.append(_row_from_income(inc))
@@ -148,16 +167,17 @@ def income_history(ticker: str, *, n_years: int = 12,
     return {"source": "on-demand", "rows": rows}
 
 
-def year_metrics(ticker: str, *, n_years: int = 10,
+def year_metrics(ticker: str, *, n_years: int = 10, period: str = "annual",
                  src: Source | None = None) -> dict:
-    """Komplette Jahres-Metriken je 10-K (GuV+Bilanz+Cashflow).
+    """Komplette Perioden-Metriken je Filing (GuV+Bilanz+Cashflow).
 
-    Bilanz/Cashflow sind NICHT persistiert -> immer on-Demand (auch fuer
-    Universums-Werte). Returns {source:'on-demand', rows:[year-metric dict]}.
+    period='annual' -> 10-K, period='quarterly' -> 10-Q. Bilanz/Cashflow sind
+    NICHT persistiert -> immer on-Demand. Returns {source, rows:[dict]}.
+    Hinweis: Cashflow-Posten im 10-Q sind i.d.R. Year-to-Date.
     """
     src = src or resolve(ticker)
     rows = []
-    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=_forms_for(period)):
         d = _sec.fetch_year_metrics_from_filing(f)
         if d is not None:
             rows.append(d)
@@ -198,12 +218,16 @@ def balance(ticker: str, *, src: Source | None = None):
     return _sec.fetch_balance_sheet_from_filing(f) if f else None
 
 
-def balance_history(ticker: str, *, n_years: int = 6,
+def balance_history(ticker: str, *, n_years: int = 6, period: str = "annual",
                     src: Source | None = None) -> list:
-    """Bilanz-Historie (letzte N 10-K) als BalanceSheet-Liste — on-Demand."""
+    """Bilanz-Historie (letzte N Filings) als BalanceSheet-Liste — on-Demand.
+
+    period='annual' -> 10-K, 'quarterly' -> 10-Q (Bilanz = Stichtagswerte,
+    daher in beiden Faellen korrekt).
+    """
     src = src or resolve(ticker)
     out = []
-    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=_forms_for(period)):
         bs = _sec.fetch_balance_sheet_from_filing(f)
         if bs is not None:
             out.append(bs)
@@ -218,12 +242,16 @@ def sbc_latest(ticker: str, *, src: Source | None = None) -> dict | None:
     return _sec.fetch_sbc_from_filing(fil[0]) if fil else None
 
 
-def sbc_history(ticker: str, *, n_years: int = 6,
+def sbc_history(ticker: str, *, n_years: int = 6, period: str = "annual",
                 src: Source | None = None) -> list:
-    """SBC + Kontext je 10-K (letzte N Jahre) — on-Demand."""
+    """SBC + Kontext je Filing (letzte N) — on-Demand.
+
+    period='annual' -> 10-K, 'quarterly' -> 10-Q (SBC/CFO im 10-Q sind
+    i.d.R. Year-to-Date).
+    """
     src = src or resolve(ticker)
     out = []
-    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=_forms_for(period)):
         d = _sec.fetch_sbc_from_filing(f)
         if d is not None:
             out.append(d)
@@ -231,12 +259,16 @@ def sbc_history(ticker: str, *, n_years: int = 6,
     return out
 
 
-def earnings_history(ticker: str, *, n_years: int = 8,
+def earnings_history(ticker: str, *, n_years: int = 8, period: str = "annual",
                      src: Source | None = None) -> list:
-    """Gewinnruecklagen/EPS/Equity/FCF/EV-Bausteine je 10-K — on-Demand."""
+    """Gewinnruecklagen/EPS/Equity/FCF/EV-Bausteine je Filing — on-Demand.
+
+    period='annual' -> 10-K, 'quarterly' -> 10-Q (FCF/CFO im 10-Q sind
+    i.d.R. Year-to-Date; Bilanzposten sind Stichtagswerte).
+    """
     src = src or resolve(ticker)
     out = []
-    for f in _sec.find_filings(src.ticker, n=n_years, forms=("10-K",)):
+    for f in _sec.find_filings(src.ticker, n=n_years, forms=_forms_for(period)):
         d = _sec.fetch_earnings_history_from_filing(f)
         if d is not None:
             out.append(d)
