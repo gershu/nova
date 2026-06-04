@@ -16,7 +16,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Callable, Optional
 
@@ -429,19 +429,23 @@ def _render_sbc_trend(ticker: str, src) -> None:
                "Verguetung.")
 
 
-def render_business(ticker: str, src) -> None:
-    """Tab 1 — Ist das Geschaeft gut? (Wachstum, Margen, Renditen, FCF)."""
-    cur = src.currency or "USD"
+def _period_rows(ticker: str):
+    """(inc, rows) der aktuellen Periodenwahl; rows nach 10-K/10-Q gefiltert,
+    Fallback alle Zeilen. Gemeinsame Basis der Geschaeft-Reports."""
     inc = _income(ticker, N_YEARS, PERIOD)
-    rows = [r for r in (inc.get("rows") or [])
+    allrows = inc.get("rows") or []
+    rows = [r for r in allrows
             if (r.get("form_type") or "").upper().startswith(
-                "10-Q" if PERIOD == "quarterly" else "10-K")] \
-        or (inc.get("rows") or [])
+                "10-Q" if PERIOD == "quarterly" else "10-K")] or allrows
+    return inc, rows
+
+
+def _render_biz_growth_returns(ticker: str, src) -> None:
+    """Geschaeft-Report: Umsatz-CAGR + ROIC/ROCE/ROE/ROA-Trendampel + FCF."""
+    inc, rows = _period_rows(ticker)
     if not rows:
         st.info("Keine GuV-Daten verfuegbar.")
         return
-
-    # --- Umsatzwachstum ---
     rev_pts = [(pd.to_datetime(r["period_end"]), r["revenue"]) for r in rows
                if r.get("revenue") is not None]
     rev_cagr = None
@@ -449,14 +453,12 @@ def render_business(ticker: str, src) -> None:
         yrs = (rev_pts[-1][0] - rev_pts[0][0]).days / 365.25
         rev_cagr = fm.cagr(rev_pts[0][1], rev_pts[-1][1], yrs)
 
-    # --- Renditen je Jahr (Trendampel) ---
     ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
     rets = [fm.returns_from_metrics(d) for d in ym]
     fcf_pts = [(pd.to_datetime(d["period_end"]),
                 fm.safe_div(d.get("fcf"), d.get("revenue"))) for d in ym]
     fcf_margin_last = fcf_pts[-1][1] if fcf_pts else None
 
-    st.markdown("#### Wachstum & Rendite")
     m = st.columns(5)
     m[0].metric("Umsatz-CAGR", _pct(rev_cagr) if rev_cagr is not None
                 else "—", help="Jaehrliches Umsatzwachstum ueber den Zeitraum")
@@ -477,7 +479,10 @@ def render_business(ticker: str, src) -> None:
                "NOPAT/(Schulden+EK−Cash). Renditen/FCF aus on-Demand-"
                "Jahresdaten; GuV-Quelle: " + inc.get("source", "—") + ".")
 
-    # --- Margen-Trend ---
+
+def _render_biz_margins(ticker: str, src) -> None:
+    """Geschaeft-Report: Brutto-/Operative/Nettomarge im Zeitverlauf."""
+    _, rows = _period_rows(ticker)
     msr = fm.margin_series(rows)
     df = pd.DataFrame([{
         "period_end": pd.to_datetime(x["period_end"]),
@@ -486,43 +491,46 @@ def render_business(ticker: str, src) -> None:
                             if x["operating"] is not None else None),
         "Nettomarge": (x["net"] * 100 if x["net"] is not None else None),
     } for x in msr])
-    if len(df) >= 2:
-        st.markdown("#### Margen-Trend")
-        fig = go.Figure()
-        for name, color in [("Bruttomarge", "#0F6E56"),
-                            ("Operative Marge", "#1D9E75"),
-                            ("Nettomarge", "#5DCAA5")]:
-            fig.add_trace(go.Scatter(
-                x=df["period_end"], y=df[name], name=name,
-                mode="lines+markers", line=dict(color=color, width=2),
-                connectgaps=False,
-                hovertemplate=f"%{{x|{_XHOVER}}}<br>{name}: %{{y:.1f}}%"
-                              "<extra></extra>"))
-        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                          yaxis_title="%", legend=dict(orientation="h",
-                                                       y=-0.2),
-                          hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+    if len(df) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    fig = go.Figure()
+    for name, color in [("Bruttomarge", "#0F6E56"),
+                        ("Operative Marge", "#1D9E75"),
+                        ("Nettomarge", "#5DCAA5")]:
+        fig.add_trace(go.Scatter(
+            x=df["period_end"], y=df[name], name=name,
+            mode="lines+markers", line=dict(color=color, width=2),
+            connectgaps=False,
+            hovertemplate=f"%{{x|{_XHOVER}}}<br>{name}: %{{y:.1f}}%"
+                          "<extra></extra>"))
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title="%", legend=dict(orientation="h", y=-0.2),
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
 
-    # --- Umsatzverlauf ---
+
+def _render_biz_revenue(ticker: str, src) -> None:
+    """Geschaeft-Report: Umsatzverlauf (Balken)."""
+    cur = src.currency or "USD"
+    _, rows = _period_rows(ticker)
     rdf = pd.DataFrame([{"period_end": pd.to_datetime(r["period_end"]),
                          "revenue": r.get("revenue")} for r in rows])
-    if len(rdf) >= 2:
-        fig2 = go.Figure(go.Bar(x=rdf["period_end"], y=rdf["revenue"],
-                                marker_color="#0F6E56",
-                                hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
-                                              "<extra></extra>"))
-        fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                           title=f"Umsatz ({cur})", yaxis_title=cur)
-        st.plotly_chart(fig2, use_container_width=True)
+    if len(rdf) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    fig2 = go.Figure(go.Bar(x=rdf["period_end"], y=rdf["revenue"],
+                            marker_color="#0F6E56",
+                            hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
+                                          "<extra></extra>"))
+    fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                       title=f"Umsatz ({cur})", yaxis_title=cur)
+    st.plotly_chart(fig2, use_container_width=True)
 
-    # --- Berichte (lazy, on-Demand) ---
-    _lazy_report("Umsatz & GuV — Segmente, Kostenaufteilung, Sankey",
-                 f"guv_{ticker}", _render_revenue_guv, ticker, src,
-                 status="beta")
-    _lazy_report("Physical Growth (PP&E, CapEx, Mitarbeiter)",
-                 f"phys_{ticker}", _render_physical, ticker, cur,
-                 status="beta")
+
+def _report_physical(ticker: str, src) -> None:
+    """Adapter: Physical Growth nimmt (ticker, cur) -> einheitliche Signatur."""
+    _render_physical(ticker, src.currency or "USD")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1108,17 +1116,53 @@ def _universe_symbols() -> list[str]:
 # =====================================================================
 
 @dataclass
+class Report:
+    """Ein einzelner Bericht (Unterpunkt) innerhalb einer Kategorie.
+
+    render(ticker, src) zeichnet den Inhalt. lazy=True -> erst auf Knopfdruck
+    laden (mehrere API-Calls); sonst direkt im (per default offenen) Expander.
+    """
+    id: str
+    title: str
+    render: Callable[[str, object], None]
+    status: str = "stable"                      # stable | beta | todo
+    lazy: bool = False
+    expanded: bool = True
+
+
+@dataclass
 class Category:
-    """Eine Kategorie (heute = ein Tab) der Unternehmens-Analyse."""
+    """Eine Kategorie (heute = ein Tab) der Unternehmens-Analyse.
+
+    Entweder klassisch ueber render(ticker, src) ODER — bevorzugt — als Liste
+    benannter Reports (reports). Hat eine Kategorie Reports, werden diese als
+    aufklappbare Bereiche gerendert; render bleibt fuer noch nicht zerlegte
+    Kategorien.
+    """
     id: str
     title: str                                  # Reiter-/Navigations-Label
-    render: Callable[[str, object], None]       # render(ticker, src)
+    render: Optional[Callable[[str, object], None]] = None
     question: Optional[str] = None              # "#### …"-Header; None = keiner
     desc: str = ""                              # Kurzbeschreibung (Phase 3+)
     err_label: str = ""                         # Klartext im Fehler-Fallback
     is_question: bool = False                   # zaehlt zur 6-Fragen-Scorecard
     status: str = "stable"                       # stable | beta | todo
     universe_only: bool = False                 # nur fuer Universums-Werte
+    reports: list = field(default_factory=list)  # Unterpunkte (Report)
+
+
+def _render_report(rep: Report, ticker: str, src) -> None:
+    """Einen Report als aufklappbaren Bereich zeichnen (lazy oder direkt)."""
+    if rep.lazy:
+        _lazy_report(rep.title, f"{rep.id}_{ticker}", rep.render, ticker, src,
+                     status=rep.status, expanded=rep.expanded)
+        return
+    with st.expander(_rep_label(rep.title, rep.status), expanded=rep.expanded):
+        try:
+            rep.render(ticker, src)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"{rep.title} nicht ladbar: "
+                       f"{e.__class__.__name__}: {e}")
 
 
 def render_overview(ticker: str, src) -> None:
@@ -1163,11 +1207,25 @@ def render_portfolio(ticker: str, src) -> None:
 CATEGORIES: list[Category] = [
     Category("overview", "Ueberblick", render_overview,
              err_label="Ueberblick"),
-    Category("business", "1 Geschaeft", render_business,
+    Category("business", "1 Geschaeft",
              question="Ist das Geschaeft gut?",
              desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
                   "FCF-Marge, Umsatz/Mitarbeiter.",
-             err_label="Geschaeft", is_question=True),
+             err_label="Geschaeft", is_question=True,
+             reports=[
+                 Report("biz_growth", "Wachstum & Rendite",
+                        _render_biz_growth_returns),
+                 Report("biz_margins", "Margen-Trend", _render_biz_margins),
+                 Report("biz_revenue", "Umsatzverlauf", _render_biz_revenue),
+                 Report("biz_guv",
+                        "Umsatz & GuV — Segmente, Kostenaufteilung, Sankey",
+                        _render_revenue_guv, status="beta", lazy=True,
+                        expanded=False),
+                 Report("biz_phys",
+                        "Physical Growth (PP&E, CapEx, Mitarbeiter)",
+                        _report_physical, status="beta", lazy=True,
+                        expanded=False),
+             ]),
     Category("moat", "2 Burggraben", render_moat_tab,
              question="Hat das Unternehmen einen Burggraben?",
              desc="Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, "
@@ -1263,8 +1321,12 @@ _cat = next((c for c in CATEGORIES if c.title == _sel), CATEGORIES[0])
 
 if _cat.question:
     st.markdown(f"#### {_cat.question}")
-try:
-    _cat.render(ticker, src)
-except Exception as e:  # noqa: BLE001
-    st.warning(f"{_cat.err_label} nicht ladbar: "
-               f"{e.__class__.__name__}: {e}")
+if _cat.reports:
+    for _rep in _cat.reports:
+        _render_report(_rep, ticker, src)
+elif _cat.render is not None:
+    try:
+        _cat.render(ticker, src)
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"{_cat.err_label} nicht ladbar: "
+                   f"{e.__class__.__name__}: {e}")
