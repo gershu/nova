@@ -541,6 +541,85 @@ def _render_biz_growth_returns(ticker: str, src) -> None:
                "Jahresdaten; GuV-Quelle: " + inc.get("source", "—") + ".")
 
 
+def _render_biz_roc(ticker: str, src) -> None:
+    """Geschaeft-Report (aus Ad-Hoc): Return on Capital — Verdict, ROIC/ROCE/
+    ROE/ROA-Trend-Chart, Komponenten (NOPAT / Inv. Kapital / eff. Steuer)."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if not ym:
+        st.info("Keine Jahresdaten verfuegbar.")
+        return
+    rets = [fm.returns_from_metrics(d) for d in ym]
+    rl = rets[-1]
+
+    t = _SCORE["thresholds"]["return_on_capital"]
+    checks = []
+    if rl.get("roic") is not None:
+        checks.append((f"ROIC > {_pct(t['roic_min'], 0)}",
+                       rl["roic"] > t["roic_min"]))
+    if rl.get("roe") is not None:
+        checks.append((f"ROE > {_pct(t['roe_min'], 0)}",
+                       rl["roe"] > t["roe_min"]))
+    if rl.get("roa") is not None:
+        checks.append((f"ROA > {_pct(t['roa_min'], 0)}",
+                       rl["roa"] > t["roa_min"]))
+    all_roic = [r.get("roic") for r in rets if r.get("roic") is not None]
+    if len(all_roic) >= 2:
+        checks.append(("ROIC durchgehend positiv",
+                       all(x > 0 for x in all_roic)))
+    if checks:
+        passed = sum(1 for _, ok in checks if ok)
+        r = passed / len(checks)
+        box = st.success if r >= 0.75 else st.info if r >= 0.5 else st.warning
+        verdict = ("hochwertig" if r >= 0.75 else "durchschnittlich"
+                   if r >= 0.5 else "kapitalineffizient")
+        lines = "  \n".join(f"{'✅' if ok else '❌'} {n}" for n, ok in checks)
+        box(f"Kapitalrendite wirkt **{verdict}** — {passed}/{len(checks)}  \n"
+            f"{lines}")
+
+    if len(ym) >= 2:
+        df = pd.DataFrame([
+            dict(pe=pd.to_datetime(d["period_end"]),
+                 **{k: rr[k] for k in ("roic", "roce", "roe", "roa")})
+            for d, rr in zip(ym, rets)])
+        fig = go.Figure()
+        for name, col, color in [("ROIC", "roic", "#0F6E56"),
+                                 ("ROCE", "roce", "#1D9E75"),
+                                 ("ROE", "roe", "#5DCAA5"),
+                                 ("ROA", "roa", "#B4862B")]:
+            fig.add_trace(go.Scatter(
+                x=df["pe"], y=pd.to_numeric(df[col], errors="coerce") * 100.0,
+                mode="lines+markers", name=name,
+                line=dict(color=color, width=2), connectgaps=False,
+                hovertemplate=f"%{{x|{_XHOVER}}}<br>{name}: "
+                              "%{y:.1f}%<extra></extra>"))
+        fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title="%", legend=dict(orientation="h",
+                                                       y=-0.2),
+                          hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+
+    last = ym[-1]
+    with st.expander("Komponenten (letzte Periode)"):
+        st.dataframe(pd.DataFrame([
+            {"Posten": "NOPAT", "Wert": _money(rl.get("nopat"), cur)},
+            {"Posten": "Investiertes Kapital",
+             "Wert": _money(rl.get("inv_cap"), cur)},
+            {"Posten": "Eff. Steuersatz", "Wert": _pct(rl.get("eff_tax"))},
+            {"Posten": "Operatives Ergebnis",
+             "Wert": _money(last.get("operating_income"), cur)},
+            {"Posten": "Nettogewinn", "Wert": _money(last.get("net_income"),
+                                                     cur)},
+            {"Posten": "Eigenkapital", "Wert": _money(last.get("equity"),
+                                                      cur)},
+            {"Posten": "Bilanzsumme", "Wert": _money(last.get("total_assets"),
+                                                     cur)},
+        ]), use_container_width=True, hide_index=True)
+    st.caption("ROIC = NOPAT/(Schulden+EK−Cash); ROCE = op. Ergebnis/"
+               "(Bilanzsumme−kurzfr. Verbindl.); Stichtags-Bilanzwerte, "
+               "eff. Steuersatz mit Fallback 21 %.")
+
+
 def _render_biz_margins(ticker: str, src) -> None:
     """Geschaeft-Report: Brutto-/Operative/Nettomarge im Zeitverlauf."""
     _, rows = _period_rows(ticker)
@@ -2538,6 +2617,7 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("biz_growth", "Wachstum & Rendite",
                         _render_biz_growth_returns),
+                 Report("biz_roc", "Return on Capital", _render_biz_roc),
                  Report("biz_margins", "Margen-Trend", _render_biz_margins),
                  Report("biz_revenue", "Umsatzverlauf", _render_biz_revenue),
                  Report("biz_phys",
