@@ -404,36 +404,6 @@ def _render_fcf_alloc(ticker: str, src) -> None:
                "Zeigt, wie der freie Cashflow allokiert wird.")
 
 
-def _render_sbc_trend(ticker: str, src) -> None:
-    """Stock-based Compensation (Verlauf) — lazy."""
-    sbc_rows = _sbc_hist(ticker, N_YEARS, PERIOD)
-    if len(sbc_rows) < 2:
-        st.caption("Mind. 2 Perioden noetig.")
-        return
-    sdf = pd.DataFrame([{
-        "period_end": pd.to_datetime(d["period_end"]),
-        "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
-        "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
-    } for d in sbc_rows])
-    f1 = go.Figure()
-    f1.add_trace(go.Scatter(
-        x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
-        name="SBC / Umsatz", mode="lines+markers",
-        line=dict(color="#A32D2D", width=2), connectgaps=False))
-    f1.add_trace(go.Scatter(
-        x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
-        name="SBC / operativer CF", mode="lines+markers",
-        line=dict(color="#B4862B", width=2), connectgaps=False))
-    f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
-                     title="SBC-Belastung", yaxis_title="%",
-                     legend=dict(orientation="h", y=-0.25),
-                     hovermode="x unified")
-    st.plotly_chart(f1, use_container_width=True)
-    st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
-               "SBC-Quote = wachsende nicht-zahlungswirksame "
-               "Verguetung.")
-
-
 def _period_rows(ticker: str):
     """(inc, rows) der aktuellen Periodenwahl; rows nach 10-K/10-Q gefiltert,
     Fallback alle Zeilen. Gemeinsame Basis der Geschaeft-Reports."""
@@ -2088,14 +2058,6 @@ CATEGORIES: list[Category] = [
                         _render_mgmt_conviction),
                  Report("mgmt_ownership", "Ownership-Struktur",
                         _render_mgmt_ownership),
-                 Report("mgmt_capital", "Kapitalallokation & Verwaesserung",
-                        _render_mgmt_capital),
-                 Report("mgmt_fcf", "FCF-Verwendung (Kapitalallokation, "
-                        "Verlauf)", _render_fcf_alloc, status="beta",
-                        lazy=True, expanded=False),
-                 Report("mgmt_sbc", "Stock-based Compensation (SBC) — Verlauf",
-                        _render_sbc_trend, status="beta", lazy=True,
-                        expanded=False),
              ]),
     Category("earnings_real", "5 Gewinne echt",
              question="Sind die Gewinne echt?",
@@ -2120,6 +2082,11 @@ CATEGORIES: list[Category] = [
              err_label="Stock-based Compensation",
              reports=[
                  Report("sbc_full", "SBC & Verwaesserung", _render_sbc_full),
+                 Report("mgmt_capital", "Kapitalallokation & Verwaesserung",
+                        _render_mgmt_capital),
+                 Report("mgmt_fcf", "FCF-Verwendung (Kapitalallokation, "
+                        "Verlauf)", _render_fcf_alloc, status="beta",
+                        lazy=True, expanded=False),
              ]),
     Category("portfolio", "Portfolio & Signale", err_label="Portfolio",
              reports=[
