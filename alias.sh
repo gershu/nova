@@ -1,0 +1,10 @@
+alias db='duckdb ~/nova_data/lab.duckdb'
+alias nova_db=~/nova/nova_db.sh
+alias ns=~/nova/scripts/nova_status.sh
+alias logs='ll ~/nova_jobs/logs'
+alias jobs='ll ~/nova_jobs'
+alias viewlog='less $(ls -t ~/nova_jobs/logs/*.log | head -n 1)'
+alias taillog='tail -f  $(ls -t ~/nova_jobs/logs/*.log | head -n 1)'
+alias nova='cd ~/nova'
+alias nova-lab='cd ~/nova-lab'
+ alias nd='~/nova/scripts/node_deploy.sh'
