@@ -16,7 +16,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from dataclasses import dataclass
 from datetime import date
+from typing import Callable, Optional
 
 from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
@@ -1022,24 +1024,104 @@ def _universe_symbols() -> list[str]:
 
 # ---------- Die 6 Investorenfragen ----------
 
-_QUESTIONS = [
-    ("1 Geschaeft", "Ist das Geschaeft gut?",
-     "Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, FCF-Marge, "
-     "Umsatz/Mitarbeiter."),
-    ("2 Burggraben", "Hat das Unternehmen einen Burggraben?",
-     "Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, F&E-Effizienz, "
-     "Rueckkaeufe, Marktanteil) + Peers."),
-    ("3 Bilanz", "Ist die Bilanz solide?",
-     "Current/Quick Ratio, Net Debt, Debt/Equity, Eigenkapitalquote, "
-     "Goodwill-Anteil + Trend."),
-    ("4 Management", "Ist das Management gut?",
-     "Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
-     "Kapitalallokation, SBC/Verwaesserung."),
-    ("5 Gewinne echt", "Sind die Gewinne echt?",
-     "Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings vs "
-     "Nettogewinn vs FCF."),
-    ("6 Bewertung", "Ist die Bewertung attraktiv?",
-     "EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, Kurs."),
+# =====================================================================
+# Metadaten-Registry (Phase 3/4-Umbau, Schritt 1)
+# ---------------------------------------------------------------------
+# Die Seite wird aus dieser deklarativen Liste generiert: Reihenfolge,
+# Sichtbarkeit und neue Kategorien sind reine Datenaenderungen. Die
+# render-Funktionen bleiben Code; alles andere ist Metadaten. Spaetere
+# Schritte (Navigator statt Tabs, Lazy-Expander, status/Badges) bauen auf
+# dieser Struktur auf — der heutige Aufbau bleibt verhaltensgleich.
+# =====================================================================
+
+@dataclass
+class Category:
+    """Eine Kategorie (heute = ein Tab) der Unternehmens-Analyse."""
+    id: str
+    title: str                                  # Reiter-/Navigations-Label
+    render: Callable[[str, object], None]       # render(ticker, src)
+    question: Optional[str] = None              # "#### …"-Header; None = keiner
+    desc: str = ""                              # Kurzbeschreibung (Phase 3+)
+    err_label: str = ""                         # Klartext im Fehler-Fallback
+    is_question: bool = False                   # zaehlt zur 6-Fragen-Scorecard
+    status: str = "stable"                       # stable | beta | todo
+    universe_only: bool = False                 # nur fuer Universums-Werte
+
+
+def render_overview(ticker: str, src) -> None:
+    """Ueberblick: Scorecard-Geruest + Datenbasis-Nachweis."""
+    st.markdown("#### Gesamturteil")
+    st.caption("Scorecard je Frage (Ampeln) folgt in Phase 3 — die "
+               "Score-Logik wird aus den bestehenden Ad-Hoc-Modulen "
+               "wiederverwendet.")
+    sc = [{"Frage": c.question, "Bewertung": "— (Phase 3)"}
+          for c in CATEGORIES if c.is_question]
+    st.dataframe(sc, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Datenbasis")
+    try:
+        ih = _income(ticker, N_YEARS, PERIOD)
+        rows = ih.get("rows") or []
+        last = rows[-1] if rows else None
+        m = st.columns(3)
+        m[0].metric("GuV-Quelle", ih.get("source", "—"))
+        m[1].metric("Perioden geladen", str(len(rows)))
+        m[2].metric("Letzter Umsatz",
+                    (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
+                     if last and last.get("revenue") else "—"))
+        if last:
+            st.caption(f"Letzte Periode {last['period_end']} "
+                       f"({last.get('form_type') or '—'}).")
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
+
+
+def render_portfolio(ticker: str, src) -> None:
+    """Portfolio & Signale (nur Universums-Werte) — Geruest."""
+    st.markdown("#### Portfolio & Signale")
+    if src.in_universe:
+        st.info("Folgt in Phase 3: Holdings, MtM, Thesis-Ampel, Signale, "
+                "Termine, Screener-Links (nur fuer Universums-Werte).")
+    else:
+        st.caption(f"{src.ticker} ist nicht im Portfolio-Universum — kein "
+                   "Portfolio-Kontext.")
+
+
+CATEGORIES: list[Category] = [
+    Category("overview", "Ueberblick", render_overview,
+             err_label="Ueberblick"),
+    Category("business", "1 Geschaeft", render_business,
+             question="Ist das Geschaeft gut?",
+             desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
+                  "FCF-Marge, Umsatz/Mitarbeiter.",
+             err_label="Geschaeft", is_question=True),
+    Category("moat", "2 Burggraben", render_moat_tab,
+             question="Hat das Unternehmen einen Burggraben?",
+             desc="Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, "
+                  "F&E-Effizienz, Rueckkaeufe, Marktanteil) + Peers.",
+             err_label="Burggraben", is_question=True),
+    Category("balance", "3 Bilanz", render_balance_tab,
+             question="Ist die Bilanz solide?",
+             desc="Current/Quick Ratio, Net Debt, Debt/Equity, "
+                  "Eigenkapitalquote, Goodwill-Anteil + Trend.",
+             err_label="Bilanz", is_question=True),
+    Category("management", "4 Management", render_management_tab,
+             question="Ist das Management gut?",
+             desc="Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
+                  "Kapitalallokation, SBC/Verwaesserung.",
+             err_label="Management", is_question=True),
+    Category("earnings_real", "5 Gewinne echt", render_earnings_real_tab,
+             question="Sind die Gewinne echt?",
+             desc="Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings "
+                  "vs Nettogewinn vs FCF.",
+             err_label="Gewinnqualitaet", is_question=True),
+    Category("valuation", "6 Bewertung", render_valuation_tab,
+             question="Ist die Bewertung attraktiv?",
+             desc="EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, "
+                  "Kurs.",
+             err_label="Bewertung", is_question=True),
+    Category("portfolio", "Portfolio & Signale", render_portfolio,
+             err_label="Portfolio"),
 ]
 
 
@@ -1092,92 +1174,16 @@ if PERIOD == "quarterly":
                "im 10-Q sind i.d.R. Year-to-Date — Renditen/FCF-Trends daher "
                "im Jahresmodus belastbarer.")
 
-tabs = st.tabs(["Ueberblick"] + [q[0] for q in _QUESTIONS]
-               + ["Portfolio & Signale"])
-
-# ---- Ueberblick / Scorecard (Geruest) ----
-with tabs[0]:
-    st.markdown("#### Gesamturteil")
-    st.caption("Scorecard je Frage (Ampeln) folgt in Phase 3 — die "
-               "Score-Logik wird aus den bestehenden Ad-Hoc-Modulen "
-               "wiederverwendet.")
-    sc = []
-    for short, full, _desc in _QUESTIONS:
-        sc.append({"Frage": full, "Bewertung": "— (Phase 3)"})
-    st.dataframe(sc, use_container_width=True, hide_index=True)
-
-    # Datenbasis-Nachweis (Phase-1-Datenschicht end-to-end)
-    st.markdown("#### Datenbasis")
-    try:
-        ih = _income(ticker, N_YEARS, PERIOD)
-        rows = ih.get("rows") or []
-        last = rows[-1] if rows else None
-        m = st.columns(3)
-        m[0].metric("GuV-Quelle", ih.get("source", "—"))
-        m[1].metric("Perioden geladen", str(len(rows)))
-        m[2].metric("Letzter Umsatz",
-                    (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
-                     if last and last.get("revenue") else "—"))
-        if last:
-            st.caption(f"Letzte Periode {last['period_end']} "
-                       f"({last.get('form_type') or '—'}).")
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 1: Geschaeft (Phase 3) ----
-with tabs[1]:
-    st.markdown(f"#### {_QUESTIONS[0][1]}")
-    try:
-        render_business(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Geschaeft nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 3: Bilanz (Phase 3) ----
-with tabs[3]:
-    st.markdown(f"#### {_QUESTIONS[2][1]}")
-    try:
-        render_balance_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Bilanz nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 6: Bewertung (Phase 3) ----
-with tabs[6]:
-    st.markdown(f"#### {_QUESTIONS[5][1]}")
-    try:
-        render_valuation_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Bewertung nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 2: Burggraben (Phase 3) ----
-with tabs[2]:
-    st.markdown(f"#### {_QUESTIONS[1][1]}")
-    try:
-        render_moat_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Burggraben nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 5: Gewinne echt (Phase 3) ----
-with tabs[5]:
-    st.markdown(f"#### {_QUESTIONS[4][1]}")
-    try:
-        render_earnings_real_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Gewinnqualitaet nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 4: Management (Phase 3) ----
-with tabs[4]:
-    st.markdown(f"#### {_QUESTIONS[3][1]}")
-    try:
-        render_management_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Management nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Portfolio & Signale ----
-with tabs[-1]:
-    st.markdown("#### Portfolio & Signale")
-    if src.in_universe:
-        st.info("Folgt in Phase 3: Holdings, MtM, Thesis-Ampel, Signale, "
-                "Termine, Screener-Links (nur fuer Universums-Werte).")
-    else:
-        st.caption(f"{src.ticker} ist nicht im Portfolio-Universum — kein "
-                   "Portfolio-Kontext.")
+# ---- Tabs aus der Metadaten-Registry generieren ----
+# (Verhaltensgleich zum bisherigen Aufbau; spaetere Schritte ersetzen
+#  st.tabs durch einen Navigator und machen die Inhalte lazy.)
+_tabs = st.tabs([c.title for c in CATEGORIES])
+for _tab, _cat in zip(_tabs, CATEGORIES):
+    with _tab:
+        if _cat.question:
+            st.markdown(f"#### {_cat.question}")
+        try:
+            _cat.render(ticker, src)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"{_cat.err_label} nicht ladbar: "
+                       f"{e.__class__.__name__}: {e}")
