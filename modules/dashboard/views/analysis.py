@@ -1717,12 +1717,116 @@ def _render_moat_dominanz(ticker: str, src) -> None:
                "gegen die Peers lesen.")
 
 
-def render_portfolio(ticker: str, src) -> None:
-    """Portfolio & Signale (nur Universums-Werte) — Geruest."""
-    st.markdown("#### Portfolio & Signale")
+@st.cache_data(ttl=1800, show_spinner=False)
+def _db_by_instrument(sql: str, ref_id):
+    """run_query(sql, (ref_id,)) defensiv — None bei fehlender Tabelle/Fehler."""
+    if _run_query is None or not ref_id:
+        return None
+    try:
+        return _run_query(sql, (ref_id,))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _render_ov_termine_news(ticker: str, src) -> None:
+    """Ueberblick-Report: naechster Earnings-Termin + News (Universum, DB)."""
+    if not (src.in_universe and src.ref_instrument_id):
+        st.caption("Termine & News nur fuer Universums-Werte (DB).")
+        return
+    rid = src.ref_instrument_id
+    st.markdown("**Naechster Earnings-Termin**")
+    ec = _db_by_instrument(
+        "SELECT earnings_date, source, fetched_at FROM ref_earnings_calendar "
+        "WHERE ref_instrument_id = ?", rid)
+    if ec is None:
+        st.caption("Keine Earnings-Kalender-Tabelle vorhanden.")
+    else:
+        valid = (ec[ec["earnings_date"] > pd.Timestamp("2000-01-01")]
+                 if not ec.empty else ec)
+        if valid.empty:
+            st.caption("Kein Earnings-Termin hinterlegt.")
+        else:
+            ed = pd.to_datetime(valid["earnings_date"].iloc[0]).date()
+            delta = (ed - date.today()).days
+            when = (f"in {delta} Tagen" if delta > 0
+                    else "heute" if delta == 0 else f"vor {abs(delta)} Tagen")
+            st.metric(f"{src.ticker} — Earnings", ed.isoformat(), delta=when,
+                      delta_color="off")
+            st.caption(f"Quelle: {valid['source'].iloc[0]}.")
+
+    st.divider()
+    st.markdown("**News**")
+    news = _db_by_instrument(
+        "SELECT a.ts, a.title, a.summary, a.url, a.source "
+        "FROM ref_sa_article_symbols s JOIN ref_sa_articles a "
+        "USING (article_id) WHERE s.ref_instrument_id = ? "
+        "ORDER BY a.ts DESC LIMIT 20", rid)
+    if news is None:
+        st.caption("Keine News-Tabellen vorhanden.")
+    elif news.empty:
+        st.caption("Keine News zu diesem Instrument.")
+    else:
+        st.caption(f"{len(news)} aktuellste Artikel.")
+        for _, a in news.iterrows():
+            title = a["title"] or "(ohne Titel)"
+            st.markdown(f"**[{title}]({a['url']})**" if a["url"]
+                        else f"**{title}**")
+            st.caption(f"{a['ts']}  ·  {a['source'] or ''}")
+            if a["summary"]:
+                st.write(a["summary"])
+            st.divider()
+
+
+def _render_pf_signale(ticker: str, src) -> None:
+    """Portfolio-Report: Empfehlungen + Alerts (Universum, DB)."""
+    if not (src.in_universe and src.ref_instrument_id):
+        st.caption("Signale nur fuer Universums-Werte (DB).")
+        return
+    rid = src.ref_instrument_id
+    st.markdown("**Empfehlungen**")
+    sig = _db_by_instrument(
+        "SELECT ts, action, priority, category, title, rationale "
+        "FROM sig_recommendations WHERE ref_instrument_id = ? "
+        "ORDER BY ts DESC", rid)
+    if sig is None:
+        st.caption("Keine Recommendation-Tabelle vorhanden.")
+    elif sig.empty:
+        st.caption("Keine Empfehlungen zu diesem Instrument.")
+    else:
+        pic = {"high": "🔴", "medium": "🟠", "low": "🟢"}
+        for _, r in sig.iterrows():
+            st.markdown(
+                f"{pic.get(r['priority'], '·')} `{r['action']}`  ·  "
+                f"_{r['category'] or ''}_  ·  {r['ts']}  \n"
+                f"**{r['title'] or ''}**  \n{r['rationale'] or ''}")
+            st.divider()
+
+    st.markdown("**Alerts**")
+    al = _db_by_instrument(
+        "SELECT ts, rule_name, direction, trigger_value, threshold "
+        "FROM sig_alerts WHERE ref_instrument_id = ? "
+        "ORDER BY ts DESC LIMIT 50", rid)
+    if al is None:
+        st.caption("Keine Alert-Tabelle vorhanden.")
+    elif al.empty:
+        st.caption("Keine Alerts zu diesem Instrument.")
+    else:
+        st.dataframe(
+            al.style.format({"trigger_value": de_dec, "threshold": de_dec}),
+            use_container_width=True, hide_index=True,
+            column_config={
+                "ts": st.column_config.DateColumn("Datum"),
+                "rule_name": st.column_config.TextColumn("Regel"),
+                "direction": st.column_config.TextColumn("Richtung",
+                                                         width="small"),
+                "trigger_value": "Trigger", "threshold": "Schwelle"})
+
+
+def _render_pf_overview(ticker: str, src) -> None:
+    """Portfolio-Report: Holdings/MtM/Thesis-Ampel (Geruest)."""
     if src.in_universe:
-        st.info("Folgt in Phase 3: Holdings, MtM, Thesis-Ampel, Signale, "
-                "Termine, Screener-Links (nur fuer Universums-Werte).")
+        st.info("Folgt: Holdings, MtM, Thesis-Ampel, Termine, Screener-Links "
+                "(nur fuer Universums-Werte).")
     else:
         st.caption(f"{src.ticker} ist nicht im Portfolio-Universum — kein "
                    "Portfolio-Kontext.")
@@ -1736,6 +1840,8 @@ CATEGORIES: list[Category] = [
                         _render_ov_kennzahlen),
                  Report("ov_performance", "Aktienperformance",
                         _render_ov_performance),
+                 Report("ov_termine_news", "Termine & News",
+                        _render_ov_termine_news),
                  Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
                  Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
                         status="beta", expanded=False),
@@ -1835,8 +1941,12 @@ CATEGORIES: list[Category] = [
                         _render_re_eps_ev, status="beta", lazy=True,
                         expanded=False),
              ]),
-    Category("portfolio", "Portfolio & Signale", render_portfolio,
-             err_label="Portfolio"),
+    Category("portfolio", "Portfolio & Signale", err_label="Portfolio",
+             reports=[
+                 Report("pf_signale", "Signale & Alerts", _render_pf_signale),
+                 Report("pf_overview", "Portfolio", _render_pf_overview,
+                        status="beta", expanded=False),
+             ]),
 ]
 
 
