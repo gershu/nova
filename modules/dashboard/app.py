@@ -53,7 +53,6 @@ nav = st.navigation({
         st.Page("views/overview.py",        title="Overview",     icon="📈",
                 default=True),
         st.Page("views/allocation.py",      title="Allokation",   icon="⚖️"),
-        st.Page("views/thesis.py",          title="Thesis-Cockpit", icon="🔬"),
         st.Page("views/screener.py",        title="Screener",       icon="🧪"),
     ],
     "Entscheidungs-Assistent": [

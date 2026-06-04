@@ -176,17 +176,17 @@ if selected_run:
             },
         )
 
-        # --- Zeilen-Klick: Sprung ins Thesis-Cockpit ---
-        # Hard-Cut-Refactor: kein eigenes Detail-Panel mehr hier, der
-        # vollstaendige per-Name-Blick (Kennzahlen + GuV + Chart + Branche
-        # + Termine + Signale + Screener-Tab mit Kriterien/Thesis) lebt
-        # zentral im Thesis-Cockpit. So vermeiden wir doppelte Pflege.
+        # --- Zeilen-Klick: Sprung in die Unternehmens-Analyse ---
+        # Der vollstaendige per-Name-Blick (Ueberblick/Kennzahlen, GuV,
+        # Geschaeft, Burggraben/Branche, Bilanz, Management, Gewinne,
+        # Bewertung, Portfolio/Signale) lebt zentral in der
+        # Unternehmens-Analyse. So vermeiden wir doppelte Pflege.
         _sel = _evt.selection["rows"]
         if _sel:
             _row = picks.iloc[_sel[0]]
-            st.session_state["thesis_instrument"] = _row["ref_instrument_id"]
-            st.session_state["thesis_universe"]   = "Alle (Fundamentaldaten)"
-            st.switch_page("views/thesis.py")
+            st.session_state["ana_mode"] = "Freitext"
+            st.session_state["ana_free"] = str(_row["symbol"] or "").upper()
+            st.switch_page("views/analysis.py")
 
 
 # ---------- 3. Parameter-Tuning + Run starten ----------
