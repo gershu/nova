@@ -16,7 +16,9 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from dataclasses import dataclass, field
 from datetime import date
+from typing import Callable, Optional
 
 from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
@@ -227,19 +229,223 @@ def _money(v, cur: str = "USD") -> str:
     return f"{de_dec(v, 0)} {cur}"
 
 
-def render_business(ticker: str, src) -> None:
-    """Tab 1 — Ist das Geschaeft gut? (Wachstum, Margen, Renditen, FCF)."""
+
+def _series_at(m: dict, period_iso: str, tol_days: int = 45):
+    """Wert aus {iso_date: value} am naechsten zu period_iso (<= tol_days).
+
+    Fuer Zeitreihen (PP&E/Mitarbeiter via company-concept, Jahresend-Kurse),
+    deren Stichtage nicht exakt auf das Bilanzdatum fallen. None, wenn nichts
+    innerhalb der Toleranz liegt.
+    """
+    if not m:
+        return None
+    try:
+        target = date.fromisoformat(str(period_iso)[:10])
+    except (TypeError, ValueError):
+        return None
+    best_v = best_d = None
+    for k, v in m.items():
+        try:
+            dk = date.fromisoformat(str(k)[:10])
+        except (TypeError, ValueError):
+            continue
+        dd = abs((dk - target).days)
+        if dd <= tol_days and (best_d is None or dd < best_d):
+            best_d, best_v = dd, v
+    return best_v
+
+_STATUS_BADGE = {"stable": "", "beta": "  ·  🟡 beta", "todo": "  ·  🔴 todo"}
+
+
+def _rep_label(title: str, status: str = "stable") -> str:
+    return f"{title}{_STATUS_BADGE.get(status, '')}"
+
+
+def _lazy_report(title: str, key: str, render_fn, *args,
+                 status: str = "beta", expanded: bool = False) -> None:
+    """Bericht als aufklappbarer Bereich; teure Daten erst auf Knopfdruck.
+
+    Streamlit fuehrt Expander-Inhalte bei jedem Rerun aus (auch zugeklappt),
+    daher wird das Laden ueber Button + session_state gated — die API-Calls
+    feuern erst, wenn der Bericht wirklich angefordert wurde.
+    """
+    with st.expander(_rep_label(title, status), expanded=expanded):
+        sk = f"lazy_{key}"
+        if st.session_state.get(sk) or st.button("Bericht laden",
+                                                 key=f"btn_{sk}"):
+            st.session_state[sk] = True
+            try:
+                render_fn(*args)
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"{title} nicht ladbar: "
+                           f"{e.__class__.__name__}: {e}")
+        else:
+            st.caption("On-Demand — Button klicken (laedt mehrere API-Calls).")
+
+
+def _render_re_eps_ev(ticker: str, src) -> None:
+    """RE / EPS / Equity / FCF / EV — Verlauf (lazy, mehrere API-Calls)."""
     cur = src.currency or "USD"
+    eh = _earnings_hist(ticker, N_YEARS, PERIOD)
+    if len(eh) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    splits = _splits(ticker)
+    yends = [str(d["period_end"])[:10] for d in eh]
+    start = (pd.to_datetime(min(yends)) - pd.Timedelta(days=10)) \
+        .date().isoformat()
+    px = _prices(ticker, start, date.today().isoformat())
+
+    def _evy(d):
+        sh = d.get("diluted_shares")
+        if sh:
+            sh *= fm.split_factor(splits, str(d["period_end"])[:10])
+        c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
+        return (c * sh + (d.get("net_debt") or 0.0)
+                if (c and sh) else None)
+
+    def _adj(d, key):
+        v = d.get(key)
+        return (v / fm.split_factor(splits, str(d["period_end"])[:10])
+                if v is not None else None)
+
+    edf = pd.DataFrame([{
+        "pe": pd.to_datetime(d["period_end"]),
+        "retained": d.get("retained_earnings"),
+        "equity": d.get("equity"), "fcf": d.get("fcf"),
+        "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
+        "ev": _evy(d)} for d in eh])
+
+    t1, t2 = st.columns(2)
+    rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+          for v in edf["retained"]]
+    f1 = go.Figure(go.Bar(x=edf["pe"], y=edf["retained"],
+                          marker_color=rc))
+    f1.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Gewinnruecklagen ({cur})")
+    t1.plotly_chart(f1, use_container_width=True)
+    f2 = go.Figure(go.Bar(x=edf["pe"], y=edf["equity"],
+                          marker_color="#1D9E75"))
+    f2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Eigenkapital ({cur})")
+    t2.plotly_chart(f2, use_container_width=True)
+
+    t3, t4 = st.columns(2)
+    f3 = go.Figure()
+    f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_b"],
+                            name="EPS unverw.", mode="lines+markers",
+                            line=dict(color="#0F6E56", width=2),
+                            connectgaps=False))
+    f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_d"],
+                            name="EPS verw.", mode="lines+markers",
+                            line=dict(color="#B4862B", width=2),
+                            connectgaps=False))
+    f3.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"EPS ({cur}, split-bereinigt)",
+                     legend=dict(orientation="h", y=-0.3))
+    t3.plotly_chart(f3, use_container_width=True)
+    fc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+          for v in edf["fcf"]]
+    f4 = go.Figure(go.Bar(x=edf["pe"], y=edf["fcf"], marker_color=fc))
+    f4.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Free Cash Flow ({cur})")
+    t4.plotly_chart(f4, use_container_width=True)
+
+    if edf["ev"].notna().any():
+        f5 = go.Figure(go.Scatter(
+            x=edf["pe"], y=edf["ev"], mode="lines+markers",
+            line=dict(color="#444441", width=2), connectgaps=False))
+        f5.update_layout(height=260,
+                         margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Enterprise Value ({cur}, "
+                               "Jahresend-Kurs × Aktien + Net Debt)")
+        st.plotly_chart(f5, use_container_width=True)
+    st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
+               "Naeherung (Jahresend-Kurs).")
+
+
+def _render_fcf_alloc(ticker: str, src) -> None:
+    """FCF-Verwendung (Kapitalallokation, Verlauf) — lazy."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if len(ym) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    af = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "Rueckkaeufe": _abs_or(d.get("buybacks")),
+        "Dividenden": _abs_or(d.get("dividends")),
+        "Reinvestition": _abs_or(d.get("capex")),
+        "Akquisitionen": _abs_or(d.get("acquisitions")),
+    } for d in ym])
+    fig = go.Figure()
+    for name, color in [("Rueckkaeufe", "#0F6E56"),
+                        ("Dividenden", "#5DCAA5"),
+                        ("Reinvestition", "#1D9E75"),
+                        ("Akquisitionen", "#B4862B")]:
+        fig.add_trace(go.Bar(name=name, x=af["period_end"],
+                             y=af[name], marker_color=color))
+    fig.add_trace(go.Scatter(
+        name="Free Cash Flow", x=af["period_end"],
+        y=[d.get("fcf") for d in ym], mode="lines+markers",
+        line=dict(color="#444441", width=2, dash="dot")))
+    fig.update_layout(barmode="stack", height=320,
+                      margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title=cur, legend=dict(orientation="h",
+                                                   y=-0.2),
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Mittelverwendung (positive Betraege) + FCF-Linie. "
+               "Zeigt, wie der freie Cashflow allokiert wird.")
+
+
+def _render_sbc_trend(ticker: str, src) -> None:
+    """Stock-based Compensation (Verlauf) — lazy."""
+    sbc_rows = _sbc_hist(ticker, N_YEARS, PERIOD)
+    if len(sbc_rows) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    sdf = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
+        "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
+    } for d in sbc_rows])
+    f1 = go.Figure()
+    f1.add_trace(go.Scatter(
+        x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
+        name="SBC / Umsatz", mode="lines+markers",
+        line=dict(color="#A32D2D", width=2), connectgaps=False))
+    f1.add_trace(go.Scatter(
+        x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
+        name="SBC / operativer CF", mode="lines+markers",
+        line=dict(color="#B4862B", width=2), connectgaps=False))
+    f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                     title="SBC-Belastung", yaxis_title="%",
+                     legend=dict(orientation="h", y=-0.25),
+                     hovermode="x unified")
+    st.plotly_chart(f1, use_container_width=True)
+    st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
+               "SBC-Quote = wachsende nicht-zahlungswirksame "
+               "Verguetung.")
+
+
+def _period_rows(ticker: str):
+    """(inc, rows) der aktuellen Periodenwahl; rows nach 10-K/10-Q gefiltert,
+    Fallback alle Zeilen. Gemeinsame Basis der Geschaeft-Reports."""
     inc = _income(ticker, N_YEARS, PERIOD)
-    rows = [r for r in (inc.get("rows") or [])
+    allrows = inc.get("rows") or []
+    rows = [r for r in allrows
             if (r.get("form_type") or "").upper().startswith(
-                "10-Q" if PERIOD == "quarterly" else "10-K")] \
-        or (inc.get("rows") or [])
+                "10-Q" if PERIOD == "quarterly" else "10-K")] or allrows
+    return inc, rows
+
+
+def _render_biz_growth_returns(ticker: str, src) -> None:
+    """Geschaeft-Report: Umsatz-CAGR + ROIC/ROCE/ROE/ROA-Trendampel + FCF."""
+    inc, rows = _period_rows(ticker)
     if not rows:
         st.info("Keine GuV-Daten verfuegbar.")
         return
-
-    # --- Umsatzwachstum ---
     rev_pts = [(pd.to_datetime(r["period_end"]), r["revenue"]) for r in rows
                if r.get("revenue") is not None]
     rev_cagr = None
@@ -247,14 +453,12 @@ def render_business(ticker: str, src) -> None:
         yrs = (rev_pts[-1][0] - rev_pts[0][0]).days / 365.25
         rev_cagr = fm.cagr(rev_pts[0][1], rev_pts[-1][1], yrs)
 
-    # --- Renditen je Jahr (Trendampel) ---
     ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
     rets = [fm.returns_from_metrics(d) for d in ym]
     fcf_pts = [(pd.to_datetime(d["period_end"]),
                 fm.safe_div(d.get("fcf"), d.get("revenue"))) for d in ym]
     fcf_margin_last = fcf_pts[-1][1] if fcf_pts else None
 
-    st.markdown("#### Wachstum & Rendite")
     m = st.columns(5)
     m[0].metric("Umsatz-CAGR", _pct(rev_cagr) if rev_cagr is not None
                 else "—", help="Jaehrliches Umsatzwachstum ueber den Zeitraum")
@@ -275,7 +479,10 @@ def render_business(ticker: str, src) -> None:
                "NOPAT/(Schulden+EK−Cash). Renditen/FCF aus on-Demand-"
                "Jahresdaten; GuV-Quelle: " + inc.get("source", "—") + ".")
 
-    # --- Margen-Trend ---
+
+def _render_biz_margins(ticker: str, src) -> None:
+    """Geschaeft-Report: Brutto-/Operative/Nettomarge im Zeitverlauf."""
+    _, rows = _period_rows(ticker)
     msr = fm.margin_series(rows)
     df = pd.DataFrame([{
         "period_end": pd.to_datetime(x["period_end"]),
@@ -284,50 +491,46 @@ def render_business(ticker: str, src) -> None:
                             if x["operating"] is not None else None),
         "Nettomarge": (x["net"] * 100 if x["net"] is not None else None),
     } for x in msr])
-    if len(df) >= 2:
-        st.markdown("#### Margen-Trend")
-        fig = go.Figure()
-        for name, color in [("Bruttomarge", "#0F6E56"),
-                            ("Operative Marge", "#1D9E75"),
-                            ("Nettomarge", "#5DCAA5")]:
-            fig.add_trace(go.Scatter(
-                x=df["period_end"], y=df[name], name=name,
-                mode="lines+markers", line=dict(color=color, width=2),
-                connectgaps=False,
-                hovertemplate=f"%{{x|{_XHOVER}}}<br>{name}: %{{y:.1f}}%"
-                              "<extra></extra>"))
-        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                          yaxis_title="%", legend=dict(orientation="h",
-                                                       y=-0.2),
-                          hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+    if len(df) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    fig = go.Figure()
+    for name, color in [("Bruttomarge", "#0F6E56"),
+                        ("Operative Marge", "#1D9E75"),
+                        ("Nettomarge", "#5DCAA5")]:
+        fig.add_trace(go.Scatter(
+            x=df["period_end"], y=df[name], name=name,
+            mode="lines+markers", line=dict(color=color, width=2),
+            connectgaps=False,
+            hovertemplate=f"%{{x|{_XHOVER}}}<br>{name}: %{{y:.1f}}%"
+                          "<extra></extra>"))
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title="%", legend=dict(orientation="h", y=-0.2),
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
 
-    # --- Umsatzverlauf ---
+
+def _render_biz_revenue(ticker: str, src) -> None:
+    """Geschaeft-Report: Umsatzverlauf (Balken)."""
+    cur = src.currency or "USD"
+    _, rows = _period_rows(ticker)
     rdf = pd.DataFrame([{"period_end": pd.to_datetime(r["period_end"]),
                          "revenue": r.get("revenue")} for r in rows])
-    if len(rdf) >= 2:
-        fig2 = go.Figure(go.Bar(x=rdf["period_end"], y=rdf["revenue"],
-                                marker_color="#0F6E56",
-                                hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
-                                              "<extra></extra>"))
-        fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                           title=f"Umsatz ({cur})", yaxis_title=cur)
-        st.plotly_chart(fig2, use_container_width=True)
+    if len(rdf) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    fig2 = go.Figure(go.Bar(x=rdf["period_end"], y=rdf["revenue"],
+                            marker_color="#0F6E56",
+                            hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
+                                          "<extra></extra>"))
+    fig2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                       title=f"Umsatz ({cur})", yaxis_title=cur)
+    st.plotly_chart(fig2, use_container_width=True)
 
-    # --- Umsatz & GuV (Segmente, Kostenaufteilung, Sankey) ---
-    with st.expander("Umsatz & GuV — Segmente, Kostenaufteilung, Sankey"):
-        try:
-            _render_revenue_guv(ticker, src)
-        except Exception as e:  # noqa: BLE001
-            st.warning(f"Umsatz & GuV nicht ladbar: {e.__class__.__name__}")
 
-    # --- Physical Growth (button-gated, da Mitarbeiter-Text teuer) ---
-    with st.expander("Physical Growth (PP&E, CapEx, Mitarbeiter)"):
-        if st.button("Physical Growth laden", key=f"phys_{ticker}"):
-            _render_physical(ticker, cur)
-        else:
-            st.caption("Laedt PP&E/CapEx/Mitarbeiter + Index on-Demand "
-                       "(mehrere API-Calls).")
+def _report_physical(ticker: str, src) -> None:
+    """Adapter: Physical Growth nimmt (ticker, cur) -> einheitliche Signatur."""
+    _render_physical(ticker, src.currency or "USD")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -448,8 +651,8 @@ def _sankey_guv(r: dict, cur: str) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_balance_tab(ticker: str, src) -> None:
-    """Tab 3 — Ist die Bilanz solide?"""
+def _render_bal_snapshot(ticker: str, src) -> None:
+    """Bilanz-Report: Soliditaets-Check + Kennzahlen (juengster Stichtag)."""
     cur = src.currency or "USD"
     bs = _balance(ticker)
     if bs is None:
@@ -498,43 +701,48 @@ def render_balance_tab(ticker: str, src) -> None:
     m2[1].metric("Eigenkapitalquote", _pct(eqr))
     m2[2].metric("Goodwill + Intangibles", _pct(intang_pct))
 
+
+def _render_bal_trend(ticker: str, src) -> None:
+    """Bilanz-Report: Verlauf Current Ratio / Debt-Equity / Net Debt."""
+    cur = src.currency or "USD"
     hist = _balance_hist(ticker, N_YEARS, PERIOD)
-    if len(hist) >= 2:
-        bdf = pd.DataFrame([{
-            "period_end": pd.to_datetime(b.period_end),
-            "current_ratio": fm.safe_div(b.assets_current,
-                                         b.liabilities_current),
-            "debt_to_equity": fm.safe_div(b.total_debt, b.equity),
-            "net_debt": b.net_debt,
-        } for b in hist])
-        st.markdown("#### Trend (10-K, jaehrlich)")
-        t1, t2 = st.columns(2)
-        f1 = go.Figure()
-        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["current_ratio"],
-                                name="Current Ratio", mode="lines+markers",
-                                line=dict(color="#0F6E56", width=2)))
-        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["debt_to_equity"],
-                                name="Debt/Equity", mode="lines+markers",
-                                line=dict(color="#A32D2D", width=2)))
-        f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                         title="Current Ratio & Debt/Equity",
-                         legend=dict(orientation="h", y=-0.2),
-                         hovermode="x unified")
-        t1.plotly_chart(f1, use_container_width=True)
-        nd_col = ["#1D9E75" if (v is not None and v < 0) else "#A32D2D"
-                  for v in bdf["net_debt"]]
-        f2 = go.Figure(go.Bar(x=bdf["period_end"], y=bdf["net_debt"],
-                              marker_color=nd_col,
-                              hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
-                                            "<extra></extra>"))
-        f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                         title=f"Net Debt ({cur}) — gruen = Netto-Cash",
-                         yaxis_title=cur)
-        t2.plotly_chart(f2, use_container_width=True)
+    if len(hist) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    bdf = pd.DataFrame([{
+        "period_end": pd.to_datetime(b.period_end),
+        "current_ratio": fm.safe_div(b.assets_current,
+                                     b.liabilities_current),
+        "debt_to_equity": fm.safe_div(b.total_debt, b.equity),
+        "net_debt": b.net_debt,
+    } for b in hist])
+    t1, t2 = st.columns(2)
+    f1 = go.Figure()
+    f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["current_ratio"],
+                            name="Current Ratio", mode="lines+markers",
+                            line=dict(color="#0F6E56", width=2)))
+    f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["debt_to_equity"],
+                            name="Debt/Equity", mode="lines+markers",
+                            line=dict(color="#A32D2D", width=2)))
+    f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title="Current Ratio & Debt/Equity",
+                     legend=dict(orientation="h", y=-0.2),
+                     hovermode="x unified")
+    t1.plotly_chart(f1, use_container_width=True)
+    nd_col = ["#1D9E75" if (v is not None and v < 0) else "#A32D2D"
+              for v in bdf["net_debt"]]
+    f2 = go.Figure(go.Bar(x=bdf["period_end"], y=bdf["net_debt"],
+                          marker_color=nd_col,
+                          hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
+                                        "<extra></extra>"))
+    f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Net Debt ({cur}) — gruen = Netto-Cash",
+                     yaxis_title=cur)
+    t2.plotly_chart(f2, use_container_width=True)
 
 
-def render_valuation_tab(ticker: str, src) -> None:
-    """Tab 6 — Ist die Bewertung attraktiv? (EV, EV/FCF, Yields, KGV, Kurs)."""
+def _render_val_metrics(ticker: str, src) -> None:
+    """Bewertungs-Report: EV, EV/FCF, KGV, Earnings Yields, Marktkap."""
     cur = src.currency or "USD"
     ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
     if not ym:
@@ -575,104 +783,31 @@ def render_valuation_tab(ticker: str, src) -> None:
                      help=f"Kurs {de_dec(price, 2)} {cur} × "
                           f"{de_dec(shares / 1e9, 2)} Mrd Aktien")
 
-    # --- Kurs-Chart (2 Jahre) ---
+    st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
+               "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
+
+
+def _render_val_price(ticker: str, src) -> None:
+    """Bewertungs-Report: Kursverlauf (2 Jahre)."""
+    cur = src.currency or "USD"
     end_iso = date.today().isoformat()
     start_iso = (pd.to_datetime(end_iso) - pd.Timedelta(days=730)) \
         .date().isoformat()
     px = _prices(ticker, start_iso, end_iso)
-    if px:
-        pdf = pd.DataFrame(
-            [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
-        fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
-                                   line=dict(color="#0F6E56", width=1.5)))
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                          title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
-               "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
-
-    # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf ---
-    eh = _earnings_hist(ticker, N_YEARS, PERIOD)
-    if len(eh) >= 2:
-        with st.expander("Gewinnruecklagen, EPS, Equity, FCF & EV — "
-                         "Verlauf"):
-            splits = _splits(ticker)
-            yends = [str(d["period_end"])[:10] for d in eh]
-            start = (pd.to_datetime(min(yends)) - pd.Timedelta(days=10)) \
-                .date().isoformat()
-            px = _prices(ticker, start, date.today().isoformat())
-
-            def _evy(d):
-                sh = d.get("diluted_shares")
-                if sh:
-                    sh *= fm.split_factor(splits, str(d["period_end"])[:10])
-                c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
-                return (c * sh + (d.get("net_debt") or 0.0)
-                        if (c and sh) else None)
-
-            def _adj(d, key):
-                v = d.get(key)
-                return (v / fm.split_factor(splits, str(d["period_end"])[:10])
-                        if v is not None else None)
-
-            edf = pd.DataFrame([{
-                "pe": pd.to_datetime(d["period_end"]),
-                "retained": d.get("retained_earnings"),
-                "equity": d.get("equity"), "fcf": d.get("fcf"),
-                "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
-                "ev": _evy(d)} for d in eh])
-
-            t1, t2 = st.columns(2)
-            rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
-                  for v in edf["retained"]]
-            f1 = go.Figure(go.Bar(x=edf["pe"], y=edf["retained"],
-                                  marker_color=rc))
-            f1.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Gewinnruecklagen ({cur})")
-            t1.plotly_chart(f1, use_container_width=True)
-            f2 = go.Figure(go.Bar(x=edf["pe"], y=edf["equity"],
-                                  marker_color="#1D9E75"))
-            f2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Eigenkapital ({cur})")
-            t2.plotly_chart(f2, use_container_width=True)
-
-            t3, t4 = st.columns(2)
-            f3 = go.Figure()
-            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_b"],
-                                    name="EPS unverw.", mode="lines+markers",
-                                    line=dict(color="#0F6E56", width=2),
-                                    connectgaps=False))
-            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_d"],
-                                    name="EPS verw.", mode="lines+markers",
-                                    line=dict(color="#B4862B", width=2),
-                                    connectgaps=False))
-            f3.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"EPS ({cur}, split-bereinigt)",
-                             legend=dict(orientation="h", y=-0.3))
-            t3.plotly_chart(f3, use_container_width=True)
-            fc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
-                  for v in edf["fcf"]]
-            f4 = go.Figure(go.Bar(x=edf["pe"], y=edf["fcf"], marker_color=fc))
-            f4.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Free Cash Flow ({cur})")
-            t4.plotly_chart(f4, use_container_width=True)
-
-            if edf["ev"].notna().any():
-                f5 = go.Figure(go.Scatter(
-                    x=edf["pe"], y=edf["ev"], mode="lines+markers",
-                    line=dict(color="#444441", width=2), connectgaps=False))
-                f5.update_layout(height=260,
-                                 margin=dict(l=10, r=10, t=30, b=10),
-                                 title=f"Enterprise Value ({cur}, "
-                                       "Jahresend-Kurs × Aktien + Net Debt)")
-                st.plotly_chart(f5, use_container_width=True)
-            st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
-                       "Naeherung (Jahresend-Kurs).")
+    if not px:
+        st.caption("Keine Kursdaten verfuegbar.")
+        return
+    pdf = pd.DataFrame(
+        [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
+    fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
+                               line=dict(color="#0F6E56", width=1.5)))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                      title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
+    st.plotly_chart(fig, use_container_width=True)
 
 
-def render_moat_tab(ticker: str, src) -> None:
-    """Tab 2 — Hat das Unternehmen einen Burggraben? (Moat-Score)."""
+def _render_moat_score(ticker: str, src) -> None:
+    """Burggraben-Report: gewichteter Moat-Score aus 6 Signalen."""
     rows = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
     if len(rows) < 2:
         st.info("Mind. 2 Jahresberichte fuer den Moat-Score noetig.")
@@ -730,11 +865,8 @@ def render_moat_tab(ticker: str, src) -> None:
                    "Integration (Phase 4, nur Universums-Werte).")
 
 
-def render_earnings_real_tab(ticker: str, src) -> None:
-    """Tab 5 — Sind die Gewinne echt? (Earnings Quality, Owner Earnings)."""
-    cur = src.currency or "USD"
-
-    # --- Earnings-Quality-Score ---
+def _render_eq_score(ticker: str, src) -> None:
+    """Gewinne-echt-Report: Earnings-Quality-Score (SBC + Add-backs)."""
     sbc = _sbc(ticker)
     sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
     ng = _nongaap(ticker)
@@ -758,59 +890,54 @@ def render_earnings_real_tab(ticker: str, src) -> None:
         "Score": f"{round(100 * sub)}/100" if sub is not None else "n/a",
         "Detail": det} for _k, lbl, sub, det in eq["rows"]]),
         use_container_width=True, hide_index=True)
-
-    # --- Owner Earnings vs Nettogewinn vs FCF ---
-    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
-    if ym:
-        oe_series, method = fm.owner_earnings(ym)
-        last = oe_series[-1]
-        st.markdown("#### Owner Earnings vs Nettogewinn vs FCF")
-        m = st.columns(3)
-        m[0].metric("Owner Earnings", _money(last["oe"], cur),
-                    help="Nettogewinn + D&A − Maintenance CapEx (Greenwald, "
-                         f"{method})")
-        m[1].metric("Nettogewinn", _money(last["ni"], cur))
-        m[2].metric("Free Cash Flow", _money(last["fcf"], cur))
-        if len(oe_series) >= 2:
-            odf = pd.DataFrame([{
-                "period_end": pd.to_datetime(o["period_end"]),
-                "oe": o["oe"], "ni": o["ni"], "fcf": o["fcf"]}
-                for o in oe_series])
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name="Owner Earnings", x=odf["period_end"],
-                                 y=odf["oe"], marker_color="#0F6E56"))
-            fig.add_trace(go.Scatter(name="Nettogewinn", x=odf["period_end"],
-                                     y=odf["ni"], mode="lines+markers",
-                                     line=dict(color="#A32D2D", width=2)))
-            fig.add_trace(go.Scatter(name="Free Cash Flow",
-                                     x=odf["period_end"], y=odf["fcf"],
-                                     mode="lines+markers",
-                                     line=dict(color="#444441", width=2,
-                                               dash="dot")))
-            fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
-                              yaxis_title=cur, legend=dict(orientation="h",
-                                                           y=-0.2),
-                              hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
     st.caption("SBC quantitativ (SBC/operativer CF); Akquisitions-/"
                "Restrukturierungs-/Rechtsstreit-/Steuer-/Einmal-Add-backs "
-               "aus dem Earnings-Exhibit. Owner Earnings = Cash-Realitaet "
-               "vs. ausgewiesener Gewinn.")
+               "aus dem Earnings-Exhibit.")
 
 
-def render_management_tab(ticker: str, src) -> None:
-    """Tab 4 — Ist das Management gut? (Conviction, Tenure, Ownership,
-    Turnover, Kapitalallokation, SBC/Verwaesserung)."""
+def _render_owner_earnings(ticker: str, src) -> None:
+    """Gewinne-echt-Report: Owner Earnings vs Nettogewinn vs FCF."""
     cur = src.currency or "USD"
-    tx = _insider_tx(ticker)
     ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
-    shares_out = None
-    if ym:
-        shares_out = ym[-1].get("shares_outstanding") \
-            or ym[-1].get("diluted_shares")
+    if not ym:
+        st.caption("Keine Jahresdaten verfuegbar.")
+        return
+    oe_series, method = fm.owner_earnings(ym)
+    last = oe_series[-1]
+    m = st.columns(3)
+    m[0].metric("Owner Earnings", _money(last["oe"], cur),
+                help="Nettogewinn + D&A − Maintenance CapEx (Greenwald, "
+                     f"{method})")
+    m[1].metric("Nettogewinn", _money(last["ni"], cur))
+    m[2].metric("Free Cash Flow", _money(last["fcf"], cur))
+    if len(oe_series) >= 2:
+        odf = pd.DataFrame([{
+            "period_end": pd.to_datetime(o["period_end"]),
+            "oe": o["oe"], "ni": o["ni"], "fcf": o["fcf"]}
+            for o in oe_series])
+        fig = go.Figure()
+        fig.add_trace(go.Bar(name="Owner Earnings", x=odf["period_end"],
+                             y=odf["oe"], marker_color="#0F6E56"))
+        fig.add_trace(go.Scatter(name="Nettogewinn", x=odf["period_end"],
+                                 y=odf["ni"], mode="lines+markers",
+                                 line=dict(color="#A32D2D", width=2)))
+        fig.add_trace(go.Scatter(name="Free Cash Flow",
+                                 x=odf["period_end"], y=odf["fcf"],
+                                 mode="lines+markers",
+                                 line=dict(color="#444441", width=2,
+                                           dash="dot")))
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=cur, legend=dict(orientation="h",
+                                                       y=-0.2),
+                          hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+    st.caption("Owner Earnings = Cash-Realitaet vs. ausgewiesener Gewinn.")
 
-    # --- Insider Conviction ---
+
+def _render_mgmt_conviction(ticker: str, src) -> None:
+    """Management-Report: Insider-Conviction-Signal + CEO/CFO-Tenure +
+    Mgmt-Turnover + Kaeufer/Verkaeufer."""
+    tx = _insider_tx(ticker)
     conv = fm.insider_conviction(tx, n_years=3,
                                  cfg=_SCORE["insider_conviction"]) if tx \
         else None
@@ -825,7 +952,6 @@ def render_management_tab(ticker: str, src) -> None:
             st.caption(f"{conv['routine']} Routine-Verkauf/e (10b5-1) "
                        "ausgeklammert.")
 
-    # --- Tenure + Turnover ---
     df = pd.DataFrame(tx) if tx else pd.DataFrame()
 
     def _tenure(flag):
@@ -864,8 +990,21 @@ def render_management_tab(ticker: str, src) -> None:
                  help="8-K Item 5.02")
     tm[3].metric("Insider Käufer/Verkäufer",
                  f"{conv['n_buyers']}/{conv['n_sellers']}" if conv else "—")
+    st.caption("Tenure via fruehestes Insider-Filing (CIK). Conviction "
+               "klammert 10b5-1-Routine-Verkaeufe aus.")
 
-    # --- Ownership-Struktur ---
+
+def _render_mgmt_ownership(ticker: str, src) -> None:
+    """Management-Report: Eigentuemerstruktur (Free Float / Institutionell /
+    Insider / Strong Hands)."""
+    tx = _insider_tx(ticker)
+    df = pd.DataFrame(tx) if tx else pd.DataFrame()
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    shares_out = None
+    if ym:
+        shares_out = ym[-1].get("shares_outstanding") \
+            or ym[-1].get("diluted_shares")
+
     mgmt_pct = strat_pct = inst_pct = None
     if not df.empty and "shares_following" in df.columns and shares_out:
         held = df[df["shares_following"].notna()].copy()
@@ -910,100 +1049,49 @@ def render_management_tab(ticker: str, src) -> None:
     om[2].metric("Insider", _pct(insider_pct))
     om[3].metric("Strong Hands", _pct(strong) if strong is not None else "—",
                  help="Institutionell + Insider + Strategisch (Naeherung)")
+    st.caption("Ownership: DEF-14A (Insider) + 13F-Top-Sample "
+               "(institutionell) + 10%-Eigner (strategisch) — Anteile sind "
+               "Untergrenzen.")
 
-    # --- Kapitalallokation + SBC/Verwaesserung ---
-    if ym:
-        last = ym[-1]
-        def _a(v):
-            return abs(v) if v is not None else None
-        bb, dv = _a(last.get("buybacks")), _a(last.get("dividends"))
-        cx, aq = _a(last.get("capex")), _a(last.get("acquisitions"))
-        payout = fm.safe_div((bb or 0) + (dv or 0), last.get("fcf"))
-        km = st.columns(4)
-        km[0].metric("Rueckkaeufe", _money(bb, cur))
-        km[1].metric("Dividenden", _money(dv, cur))
-        km[2].metric("Reinvestition (CapEx)", _money(cx, cur))
-        km[3].metric("Ausschuettungsquote",
-                     _pct(payout) if payout is not None else "—",
-                     help="(Rueckkauf + Dividende) / FCF")
 
-        sbc = _sbc(ticker)
-        sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
-        adj = fm.split_adjust_shares(ym, _splits(ticker))
-        sh = [(d["period_end"], d["diluted_shares"]) for d in adj
-              if d.get("diluted_shares")]
-        dil = None
-        if len(sh) >= 2:
-            yrs = (pd.to_datetime(sh[-1][0])
-                   - pd.to_datetime(sh[0][0])).days / 365.25
-            dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
-        sm = st.columns(2)
-        sm[0].metric("SBC / operativer CF", _pct(sbc_cfo))
-        sm[1].metric("Aktien p.a. (Verwaesserung)",
-                     _pct(dil) if dil is not None else "—",
-                     help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
+def _render_mgmt_capital(ticker: str, src) -> None:
+    """Management-Report: Kapitalallokation + SBC/Verwaesserung (letztes
+    Jahr)."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if not ym:
+        st.caption("Keine Jahresdaten verfuegbar.")
+        return
+    last = ym[-1]
 
-    # --- FCF-Verwendung (Jahres-Trend) ---
-    if len(ym) >= 2:
-        with st.expander("FCF-Verwendung (Kapitalallokation, Verlauf)"):
-            af = pd.DataFrame([{
-                "period_end": pd.to_datetime(d["period_end"]),
-                "Rueckkaeufe": _abs_or(d.get("buybacks")),
-                "Dividenden": _abs_or(d.get("dividends")),
-                "Reinvestition": _abs_or(d.get("capex")),
-                "Akquisitionen": _abs_or(d.get("acquisitions")),
-            } for d in ym])
-            fig = go.Figure()
-            for name, color in [("Rueckkaeufe", "#0F6E56"),
-                                ("Dividenden", "#5DCAA5"),
-                                ("Reinvestition", "#1D9E75"),
-                                ("Akquisitionen", "#B4862B")]:
-                fig.add_trace(go.Bar(name=name, x=af["period_end"],
-                                     y=af[name], marker_color=color))
-            fig.add_trace(go.Scatter(
-                name="Free Cash Flow", x=af["period_end"],
-                y=[d.get("fcf") for d in ym], mode="lines+markers",
-                line=dict(color="#444441", width=2, dash="dot")))
-            fig.update_layout(barmode="stack", height=320,
-                              margin=dict(l=10, r=10, t=10, b=10),
-                              yaxis_title=cur, legend=dict(orientation="h",
-                                                           y=-0.2),
-                              hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("Mittelverwendung (positive Betraege) + FCF-Linie. "
-                       "Zeigt, wie der freie Cashflow allokiert wird.")
+    def _a(v):
+        return abs(v) if v is not None else None
+    bb, dv = _a(last.get("buybacks")), _a(last.get("dividends"))
+    cx, aq = _a(last.get("capex")), _a(last.get("acquisitions"))
+    payout = fm.safe_div((bb or 0) + (dv or 0), last.get("fcf"))
+    km = st.columns(4)
+    km[0].metric("Rueckkaeufe", _money(bb, cur))
+    km[1].metric("Dividenden", _money(dv, cur))
+    km[2].metric("Reinvestition (CapEx)", _money(cx, cur))
+    km[3].metric("Ausschuettungsquote",
+                 _pct(payout) if payout is not None else "—",
+                 help="(Rueckkauf + Dividende) / FCF")
 
-    # --- Stock-based Compensation (Verlauf) ---
-    sbc_rows = _sbc_hist(ticker, N_YEARS, PERIOD)
-    if len(sbc_rows) >= 2:
-        with st.expander("Stock-based Compensation (SBC) — Verlauf"):
-            sdf = pd.DataFrame([{
-                "period_end": pd.to_datetime(d["period_end"]),
-                "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
-                "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
-            } for d in sbc_rows])
-            f1 = go.Figure()
-            f1.add_trace(go.Scatter(
-                x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
-                name="SBC / Umsatz", mode="lines+markers",
-                line=dict(color="#A32D2D", width=2), connectgaps=False))
-            f1.add_trace(go.Scatter(
-                x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
-                name="SBC / operativer CF", mode="lines+markers",
-                line=dict(color="#B4862B", width=2), connectgaps=False))
-            f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
-                             title="SBC-Belastung", yaxis_title="%",
-                             legend=dict(orientation="h", y=-0.25),
-                             hovermode="x unified")
-            st.plotly_chart(f1, use_container_width=True)
-            st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
-                       "SBC-Quote = wachsende nicht-zahlungswirksame "
-                       "Verguetung.")
-
-    st.caption("Tenure via fruehestes Insider-Filing (CIK). Ownership: "
-               "DEF-14A (Insider) + 13F-Top-Sample (institutionell) + "
-               "10%-Eigner (strategisch) — Anteile sind Untergrenzen. "
-               "Conviction klammert 10b5-1-Routine-Verkaeufe aus.")
+    sbc = _sbc(ticker)
+    sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
+    adj = fm.split_adjust_shares(ym, _splits(ticker))
+    sh = [(d["period_end"], d["diluted_shares"]) for d in adj
+          if d.get("diluted_shares")]
+    dil = None
+    if len(sh) >= 2:
+        yrs = (pd.to_datetime(sh[-1][0])
+               - pd.to_datetime(sh[0][0])).days / 365.25
+        dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
+    sm = st.columns(2)
+    sm[0].metric("SBC / operativer CF", _pct(sbc_cfo))
+    sm[1].metric("Aktien p.a. (Verwaesserung)",
+                 _pct(dil) if dil is not None else "—",
+                 help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1022,24 +1110,194 @@ def _universe_symbols() -> list[str]:
 
 # ---------- Die 6 Investorenfragen ----------
 
-_QUESTIONS = [
-    ("1 Geschaeft", "Ist das Geschaeft gut?",
-     "Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, FCF-Marge, "
-     "Umsatz/Mitarbeiter."),
-    ("2 Burggraben", "Hat das Unternehmen einen Burggraben?",
-     "Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, F&E-Effizienz, "
-     "Rueckkaeufe, Marktanteil) + Peers."),
-    ("3 Bilanz", "Ist die Bilanz solide?",
-     "Current/Quick Ratio, Net Debt, Debt/Equity, Eigenkapitalquote, "
-     "Goodwill-Anteil + Trend."),
-    ("4 Management", "Ist das Management gut?",
-     "Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
-     "Kapitalallokation, SBC/Verwaesserung."),
-    ("5 Gewinne echt", "Sind die Gewinne echt?",
-     "Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings vs "
-     "Nettogewinn vs FCF."),
-    ("6 Bewertung", "Ist die Bewertung attraktiv?",
-     "EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, Kurs."),
+# =====================================================================
+# Metadaten-Registry (Phase 3/4-Umbau, Schritt 1)
+# ---------------------------------------------------------------------
+# Die Seite wird aus dieser deklarativen Liste generiert: Reihenfolge,
+# Sichtbarkeit und neue Kategorien sind reine Datenaenderungen. Die
+# render-Funktionen bleiben Code; alles andere ist Metadaten. Spaetere
+# Schritte (Navigator statt Tabs, Lazy-Expander, status/Badges) bauen auf
+# dieser Struktur auf — der heutige Aufbau bleibt verhaltensgleich.
+# =====================================================================
+
+@dataclass
+class Report:
+    """Ein einzelner Bericht (Unterpunkt) innerhalb einer Kategorie.
+
+    render(ticker, src) zeichnet den Inhalt. lazy=True -> erst auf Knopfdruck
+    laden (mehrere API-Calls); sonst direkt im (per default offenen) Expander.
+    """
+    id: str
+    title: str
+    render: Callable[[str, object], None]
+    status: str = "stable"                      # stable | beta | todo
+    lazy: bool = False
+    expanded: bool = True
+
+
+@dataclass
+class Category:
+    """Eine Kategorie (heute = ein Tab) der Unternehmens-Analyse.
+
+    Entweder klassisch ueber render(ticker, src) ODER — bevorzugt — als Liste
+    benannter Reports (reports). Hat eine Kategorie Reports, werden diese als
+    aufklappbare Bereiche gerendert; render bleibt fuer noch nicht zerlegte
+    Kategorien.
+    """
+    id: str
+    title: str                                  # Reiter-/Navigations-Label
+    render: Optional[Callable[[str, object], None]] = None
+    question: Optional[str] = None              # "#### …"-Header; None = keiner
+    desc: str = ""                              # Kurzbeschreibung (Phase 3+)
+    err_label: str = ""                         # Klartext im Fehler-Fallback
+    is_question: bool = False                   # zaehlt zur 6-Fragen-Scorecard
+    status: str = "stable"                       # stable | beta | todo
+    universe_only: bool = False                 # nur fuer Universums-Werte
+    reports: list = field(default_factory=list)  # Unterpunkte (Report)
+
+
+def _render_report(rep: Report, ticker: str, src) -> None:
+    """Einen Report als aufklappbaren Bereich zeichnen (lazy oder direkt)."""
+    if rep.lazy:
+        _lazy_report(rep.title, f"{rep.id}_{ticker}", rep.render, ticker, src,
+                     status=rep.status, expanded=rep.expanded)
+        return
+    with st.expander(_rep_label(rep.title, rep.status), expanded=rep.expanded):
+        try:
+            rep.render(ticker, src)
+        except Exception as e:  # noqa: BLE001
+            st.warning(f"{rep.title} nicht ladbar: "
+                       f"{e.__class__.__name__}: {e}")
+
+
+def render_overview(ticker: str, src) -> None:
+    """Ueberblick: Scorecard-Geruest + Datenbasis-Nachweis."""
+    st.markdown("#### Gesamturteil")
+    st.caption("Scorecard je Frage (Ampeln) folgt in Phase 3 — die "
+               "Score-Logik wird aus den bestehenden Ad-Hoc-Modulen "
+               "wiederverwendet.")
+    sc = [{"Frage": c.question, "Bewertung": "— (Phase 3)"}
+          for c in CATEGORIES if c.is_question]
+    st.dataframe(sc, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Datenbasis")
+    try:
+        ih = _income(ticker, N_YEARS, PERIOD)
+        rows = ih.get("rows") or []
+        last = rows[-1] if rows else None
+        m = st.columns(3)
+        m[0].metric("GuV-Quelle", ih.get("source", "—"))
+        m[1].metric("Perioden geladen", str(len(rows)))
+        m[2].metric("Letzter Umsatz",
+                    (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
+                     if last and last.get("revenue") else "—"))
+        if last:
+            st.caption(f"Letzte Periode {last['period_end']} "
+                       f"({last.get('form_type') or '—'}).")
+    except Exception as e:  # noqa: BLE001
+        st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
+
+
+def render_portfolio(ticker: str, src) -> None:
+    """Portfolio & Signale (nur Universums-Werte) — Geruest."""
+    st.markdown("#### Portfolio & Signale")
+    if src.in_universe:
+        st.info("Folgt in Phase 3: Holdings, MtM, Thesis-Ampel, Signale, "
+                "Termine, Screener-Links (nur fuer Universums-Werte).")
+    else:
+        st.caption(f"{src.ticker} ist nicht im Portfolio-Universum — kein "
+                   "Portfolio-Kontext.")
+
+
+CATEGORIES: list[Category] = [
+    Category("overview", "Ueberblick", render_overview,
+             err_label="Ueberblick"),
+    Category("business", "1 Geschaeft",
+             question="Ist das Geschaeft gut?",
+             desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
+                  "FCF-Marge, Umsatz/Mitarbeiter.",
+             err_label="Geschaeft", is_question=True,
+             reports=[
+                 Report("biz_growth", "Wachstum & Rendite",
+                        _render_biz_growth_returns),
+                 Report("biz_margins", "Margen-Trend", _render_biz_margins),
+                 Report("biz_revenue", "Umsatzverlauf", _render_biz_revenue),
+                 Report("biz_guv",
+                        "Umsatz & GuV — Segmente, Kostenaufteilung, Sankey",
+                        _render_revenue_guv, status="beta", lazy=True,
+                        expanded=False),
+                 Report("biz_phys",
+                        "Physical Growth (PP&E, CapEx, Mitarbeiter)",
+                        _report_physical, status="beta", lazy=True,
+                        expanded=False),
+             ]),
+    Category("moat", "2 Burggraben",
+             question="Hat das Unternehmen einen Burggraben?",
+             desc="Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, "
+                  "F&E-Effizienz, Rueckkaeufe, Marktanteil) + Peers.",
+             err_label="Burggraben", is_question=True,
+             reports=[
+                 Report("moat_score", "Moat-Score (Signale & Gewichtung)",
+                        _render_moat_score),
+             ]),
+    Category("balance", "3 Bilanz",
+             question="Ist die Bilanz solide?",
+             desc="Current/Quick Ratio, Net Debt, Debt/Equity, "
+                  "Eigenkapitalquote, Goodwill-Anteil + Trend.",
+             err_label="Bilanz", is_question=True,
+             reports=[
+                 Report("bal_snapshot", "Soliditaet & Kennzahlen",
+                        _render_bal_snapshot),
+                 Report("bal_trend", "Bilanz-Trend (Verlauf)",
+                        _render_bal_trend),
+             ]),
+    Category("management", "4 Management",
+             question="Ist das Management gut?",
+             desc="Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
+                  "Kapitalallokation, SBC/Verwaesserung.",
+             err_label="Management", is_question=True,
+             reports=[
+                 Report("mgmt_conviction", "Insider-Signal & Tenure",
+                        _render_mgmt_conviction),
+                 Report("mgmt_ownership", "Ownership-Struktur",
+                        _render_mgmt_ownership),
+                 Report("mgmt_capital", "Kapitalallokation & Verwaesserung",
+                        _render_mgmt_capital),
+                 Report("mgmt_fcf", "FCF-Verwendung (Kapitalallokation, "
+                        "Verlauf)", _render_fcf_alloc, status="beta",
+                        lazy=True, expanded=False),
+                 Report("mgmt_sbc", "Stock-based Compensation (SBC) — Verlauf",
+                        _render_sbc_trend, status="beta", lazy=True,
+                        expanded=False),
+             ]),
+    Category("earnings_real", "5 Gewinne echt",
+             question="Sind die Gewinne echt?",
+             desc="Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings "
+                  "vs Nettogewinn vs FCF.",
+             err_label="Gewinnqualitaet", is_question=True,
+             reports=[
+                 Report("eq_score", "Earnings-Quality-Score",
+                        _render_eq_score),
+                 Report("owner_earnings",
+                        "Owner Earnings vs Nettogewinn vs FCF",
+                        _render_owner_earnings),
+             ]),
+    Category("valuation", "6 Bewertung",
+             question="Ist die Bewertung attraktiv?",
+             desc="EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, "
+                  "Kurs.",
+             err_label="Bewertung", is_question=True,
+             reports=[
+                 Report("val_metrics", "Bewertungskennzahlen",
+                        _render_val_metrics),
+                 Report("val_price", "Kurs (2 Jahre)", _render_val_price),
+                 Report("val_history",
+                        "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
+                        _render_re_eps_ev, status="beta", lazy=True,
+                        expanded=False),
+             ]),
+    Category("portfolio", "Portfolio & Signale", render_portfolio,
+             err_label="Portfolio"),
 ]
 
 
@@ -1092,92 +1350,28 @@ if PERIOD == "quarterly":
                "im 10-Q sind i.d.R. Year-to-Date — Renditen/FCF-Trends daher "
                "im Jahresmodus belastbarer.")
 
-tabs = st.tabs(["Ueberblick"] + [q[0] for q in _QUESTIONS]
-               + ["Portfolio & Signale"])
+# ---- Navigator aus der Metadaten-Registry ----
+# Einzelauswahl statt st.tabs: pro Rerun laeuft NUR die aktive Kategorie
+# (st.tabs rendert alle Tab-Inhalte bei jedem Rerun -> spuerbar langsamer).
+# segmented_control wenn vorhanden, sonst horizontales Radio als Fallback.
+_titles = [c.title for c in CATEGORIES]
+if hasattr(st, "segmented_control"):
+    _sel = st.segmented_control("Bereich", _titles, default=_titles[0],
+                                key="ana_nav",
+                                label_visibility="collapsed")
+else:
+    _sel = st.radio("Bereich", _titles, horizontal=True, key="ana_nav",
+                    label_visibility="collapsed")
+_cat = next((c for c in CATEGORIES if c.title == _sel), CATEGORIES[0])
 
-# ---- Ueberblick / Scorecard (Geruest) ----
-with tabs[0]:
-    st.markdown("#### Gesamturteil")
-    st.caption("Scorecard je Frage (Ampeln) folgt in Phase 3 — die "
-               "Score-Logik wird aus den bestehenden Ad-Hoc-Modulen "
-               "wiederverwendet.")
-    sc = []
-    for short, full, _desc in _QUESTIONS:
-        sc.append({"Frage": full, "Bewertung": "— (Phase 3)"})
-    st.dataframe(sc, use_container_width=True, hide_index=True)
-
-    # Datenbasis-Nachweis (Phase-1-Datenschicht end-to-end)
-    st.markdown("#### Datenbasis")
+if _cat.question:
+    st.markdown(f"#### {_cat.question}")
+if _cat.reports:
+    for _rep in _cat.reports:
+        _render_report(_rep, ticker, src)
+elif _cat.render is not None:
     try:
-        ih = _income(ticker, N_YEARS, PERIOD)
-        rows = ih.get("rows") or []
-        last = rows[-1] if rows else None
-        m = st.columns(3)
-        m[0].metric("GuV-Quelle", ih.get("source", "—"))
-        m[1].metric("Perioden geladen", str(len(rows)))
-        m[2].metric("Letzter Umsatz",
-                    (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
-                     if last and last.get("revenue") else "—"))
-        if last:
-            st.caption(f"Letzte Periode {last['period_end']} "
-                       f"({last.get('form_type') or '—'}).")
+        _cat.render(ticker, src)
     except Exception as e:  # noqa: BLE001
-        st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 1: Geschaeft (Phase 3) ----
-with tabs[1]:
-    st.markdown(f"#### {_QUESTIONS[0][1]}")
-    try:
-        render_business(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Geschaeft nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 3: Bilanz (Phase 3) ----
-with tabs[3]:
-    st.markdown(f"#### {_QUESTIONS[2][1]}")
-    try:
-        render_balance_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Bilanz nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 6: Bewertung (Phase 3) ----
-with tabs[6]:
-    st.markdown(f"#### {_QUESTIONS[5][1]}")
-    try:
-        render_valuation_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Bewertung nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 2: Burggraben (Phase 3) ----
-with tabs[2]:
-    st.markdown(f"#### {_QUESTIONS[1][1]}")
-    try:
-        render_moat_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Burggraben nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 5: Gewinne echt (Phase 3) ----
-with tabs[5]:
-    st.markdown(f"#### {_QUESTIONS[4][1]}")
-    try:
-        render_earnings_real_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Gewinnqualitaet nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Frage-Tab 4: Management (Phase 3) ----
-with tabs[4]:
-    st.markdown(f"#### {_QUESTIONS[3][1]}")
-    try:
-        render_management_tab(ticker, src)
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Management nicht ladbar: {e.__class__.__name__}: {e}")
-
-# ---- Portfolio & Signale ----
-with tabs[-1]:
-    st.markdown("#### Portfolio & Signale")
-    if src.in_universe:
-        st.info("Folgt in Phase 3: Holdings, MtM, Thesis-Ampel, Signale, "
-                "Termine, Screener-Links (nur fuer Universums-Werte).")
-    else:
-        st.caption(f"{src.ticker} ist nicht im Portfolio-Universum — kein "
-                   "Portfolio-Kontext.")
+        st.warning(f"{_cat.err_label} nicht ladbar: "
+                   f"{e.__class__.__name__}: {e}")
