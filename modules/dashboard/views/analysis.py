@@ -1860,6 +1860,18 @@ CATEGORIES: list[Category] = [
                  Report("guv_sankey", "GuV-Struktur (Sankey)",
                         _render_guv_sankey, status="beta"),
              ]),
+    Category("retained_ev", "Gewinnruecklagen, EPS, Equity, FCF & EV",
+             question="Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
+             desc="Mehrjahres-Verlauf von Gewinnruecklagen, EPS (split-"
+                  "bereinigt), Eigenkapital, Free Cash Flow und Enterprise "
+                  "Value.",
+             err_label="Gewinnruecklagen/EV",
+             reports=[
+                 Report("re_eps_ev",
+                        "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
+                        _render_re_eps_ev, status="beta", lazy=True,
+                        expanded=False),
+             ]),
     Category("business", "1 Geschaeft",
              question="Ist das Geschaeft gut?",
              desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
@@ -1936,10 +1948,6 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("val_metrics", "Bewertungskennzahlen",
                         _render_val_metrics),
-                 Report("val_history",
-                        "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
-                        _render_re_eps_ev, status="beta", lazy=True,
-                        expanded=False),
              ]),
     Category("portfolio", "Portfolio & Signale", err_label="Portfolio",
              reports=[
