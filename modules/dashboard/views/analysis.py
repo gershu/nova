@@ -1379,6 +1379,123 @@ def _render_mgmt_conviction(ticker: str, src) -> None:
                "klammert 10b5-1-Routine-Verkaeufe aus.")
 
 
+def _render_mgmt_insider_tx(ticker: str, src) -> None:
+    """Management-Report: Insider Sales / Buys (Form 3/4/5) — Transaktions-
+    detail (aus Ad-Hoc): Buy/Sell-Wert, Conviction-Komponenten, Netto-Flow
+    je Monat, letzte Markt-Trades."""
+    tx = _insider_tx(ticker)
+    if not tx:
+        st.info("Keine Insider-Filings (Form 3/4/5) verfuegbar.")
+        return
+    years = N_YEARS if PERIOD == "annual" else max(1, N_YEARS // 4)
+    cutoff = (date.today() - timedelta(days=int(years) * 365)).isoformat()
+    cur = src.currency or "USD"
+    df = pd.DataFrame(tx)
+    if "transaction_date" in df.columns:
+        df = df[df["transaction_date"] >= cutoff]
+    if df.empty or "code" not in df.columns:
+        st.info("Keine Transaktionen im Zeitraum.")
+        return
+    buys, sells = df[df["code"] == "P"], df[df["code"] == "S"]
+    buy_val = float(buys["value"].fillna(0).sum()) if "value" in buys else 0.0
+    sell_val = float(sells["value"].fillna(0).sum()) if "value" in sells else 0.0
+    n_buyers = int(buys["owner"].nunique()) if "owner" in buys else 0
+    n_sellers = int(sells["owner"].nunique()) if "owner" in sells else 0
+
+    ic = _SCORE["insider_conviction"]
+    cm, pct = ic["cluster_buyers_min"], ic["meaningful_sell_pct"]
+
+    def _flag(d, c):
+        return (d[c] if c in d.columns
+                else pd.Series([False] * len(d), index=d.index))
+
+    ceo_buys = buys[_flag(buys, "is_ceo") == True] if not buys.empty else buys
+    cfo_buys = buys[_flag(buys, "is_cfo") == True] if not buys.empty else buys
+    cluster = n_buyers >= cm
+    first_buyers = 0
+    if not buys.empty and "shares_following" in buys.columns:
+        fb = buys[buys["shares_following"].notna()].copy()
+        if not fb.empty:
+            prior = fb["shares_following"] - fb["shares"].fillna(0)
+            fb = fb[prior <= 0.05 * fb["shares_following"].clip(lower=1)]
+            first_buyers = int(fb["owner"].nunique())
+    routine_sells = meaningful_sells = 0
+    if not sells.empty:
+        planned = _flag(sells, "planned").fillna(False)
+        routine_sells = int(planned.sum())
+        if "shares_following" in sells.columns:
+            pre = sells["shares"].fillna(0) + sells["shares_following"].fillna(0)
+            frac = sells["shares"] / pre.where(pre > 0)
+        else:
+            frac = pd.Series([None] * len(sells), index=sells.index)
+        big = frac.isna() | (frac >= pct)
+        meaningful_sells = int((~planned & big).sum())
+
+    st.caption(f"Lookback {years} J · {len(df)} Transaktionen.")
+    a = st.columns(3)
+    a[0].metric("Insider-Käufe (Wert)", _money(buy_val, cur))
+    a[1].metric("Insider-Verkäufe (Wert)", _money(sell_val, cur))
+    a[2].metric("Netto", _money(buy_val - sell_val, cur))
+    m = st.columns(4)
+    m[0].metric("CEO / CFO-Kauf",
+                f"{'✓' if len(ceo_buys) else '–'} / "
+                f"{'✓' if len(cfo_buys) else '–'}")
+    m[1].metric("Cluster-Kauf", f"{n_buyers} Kaeufer" + (" ✓" if cluster
+                                                         else ""),
+                help=f"≥ {cm} verschiedene Kaeufer = Cluster")
+    m[2].metric("Erstkaeufe", str(first_buyers))
+    m[3].metric("Bedeutende Verkaeufe", str(meaningful_sells))
+    if routine_sells:
+        st.caption(f"{routine_sells} Routine-Verkauf/e (10b5-1) "
+                   "ausgeklammert.")
+
+    ps = df[df["code"].isin(["P", "S"])].copy()
+    if not ps.empty:
+        ps["month"] = pd.to_datetime(ps["transaction_date"]).dt.to_period(
+            "M").dt.to_timestamp()
+        ps["signed"] = ps.apply(
+            lambda r: (r["value"] or 0) * (1 if r["code"] == "P" else -1),
+            axis=1)
+        monthly = ps.groupby("month")["signed"].sum().reset_index()
+        st.markdown("**Netto Insider-Flow je Monat (P − S)**")
+        colors = ["#1D9E75" if v >= 0 else "#A32D2D"
+                  for v in monthly["signed"]]
+        fig = go.Figure(go.Bar(
+            x=monthly["month"], y=monthly["signed"], marker_color=colors,
+            hovertemplate="%{x|%Y-%m}<br>Netto: %{y:,.0f}<extra></extra>"))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=cur, bargap=0.2)
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("**Letzte Markt-Transaktionen (P/S)**")
+    show = ps.sort_values("transaction_date", ascending=False).head(25) \
+        if not ps.empty else ps
+    if show.empty:
+        st.caption("Keine offenen Markt-Trades (P/S) im Zeitraum.")
+    else:
+        try:
+            from modules.sec_filings.client import INSIDER_CODE_LABELS as _CL
+        except Exception:  # noqa: BLE001
+            _CL = {}
+        tbl = pd.DataFrame({
+            "Datum": show["transaction_date"],
+            "Person": show["owner"],
+            "Funktion": (show["relationship"] if "relationship" in show.columns
+                         else "—"),
+            "Art": show["code"].map(_CL).fillna(show["code"]),
+            "Stueck": show["shares"].map(
+                lambda v: de_dec(v, 0) if not _missing(v) else "—"),
+            "Preis": show["price"].map(
+                lambda v: _money(v, cur) if not _missing(v) else "—"),
+            "Wert": show["value"].map(
+                lambda v: _money(v, cur) if not _missing(v) else "—"),
+        })
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+    st.caption("Markt-Trades Code P (Kauf) / S (Verkauf); Awards/Ausuebungen "
+               "ausgeblendet. Routine-Verkaeufe (10b5-1) markiert/"
+               "ausgeklammert.")
+
+
 def _render_mgmt_ownership(ticker: str, src) -> None:
     """Management-Report: Eigentuemerstruktur (Free Float / Institutionell /
     Insider / Strong Hands)."""
@@ -2292,6 +2409,8 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("mgmt_conviction", "Insider-Signal & Tenure",
                         _render_mgmt_conviction),
+                 Report("mgmt_insider_tx", "Insider Sales / Buys (Form 3/4/5)",
+                        _render_mgmt_insider_tx),
                  Report("mgmt_ownership", "Ownership-Struktur",
                         _render_mgmt_ownership),
              ]),
