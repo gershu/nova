@@ -341,25 +341,32 @@ def _render_re_eps_ev(ticker: str, src) -> None:
         .date().isoformat()
     px = _prices(ticker, start, date.today().isoformat())
 
-    def _evy(d):
+    def _mcap(d):
         sh = d.get("diluted_shares")
         if sh:
             sh *= fm.split_factor(splits, str(d["period_end"])[:10])
         c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
-        return (c * sh + (d.get("net_debt") or 0.0)
-                if (c and sh) else None)
+        return (c * sh) if (c and sh) else None
 
     def _adj(d, key):
         v = d.get(key)
         return (v / fm.split_factor(splits, str(d["period_end"])[:10])
                 if v is not None else None)
 
-    edf = pd.DataFrame([{
-        "pe": pd.to_datetime(d["period_end"]),
-        "retained": d.get("retained_earnings"),
-        "equity": d.get("equity"), "fcf": d.get("fcf"),
-        "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
-        "ev": _evy(d)} for d in eh])
+    def _row(d):
+        m = _mcap(d)
+        ev = (m + (d.get("net_debt") or 0.0)) if m is not None else None
+        return {
+            "pe": pd.to_datetime(d["period_end"]),
+            "retained": d.get("retained_earnings"),
+            "equity": d.get("equity"), "fcf": d.get("fcf"),
+            "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
+            "ev": ev,
+            "eyield": fm.safe_div(d.get("operating_income"), ev),
+            "classic_ey": fm.safe_div(d.get("net_income"), m),
+        }
+
+    edf = pd.DataFrame([_row(d) for d in eh])
 
     t1, t2 = st.columns(2)
     rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
@@ -405,8 +412,47 @@ def _render_re_eps_ev(ticker: str, src) -> None:
                          title=f"Enterprise Value ({cur}, "
                                "Jahresend-Kurs × Aktien + Net Debt)")
         st.plotly_chart(f5, use_container_width=True)
-    st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
-               "Naeherung (Jahresend-Kurs).")
+
+    # --- Earnings Yield (%) ---
+    ey = pd.to_numeric(edf["eyield"], errors="coerce")
+    cey = pd.to_numeric(edf["classic_ey"], errors="coerce")
+    if ey.notna().any() or cey.notna().any():
+        f6 = go.Figure()
+        f6.add_trace(go.Scatter(x=edf["pe"], y=ey * 100.0, name="EBIT/EV",
+                                mode="lines+markers",
+                                line=dict(color="#B4862B", width=2),
+                                connectgaps=False))
+        f6.add_trace(go.Scatter(x=edf["pe"], y=cey * 100.0,
+                                name="NI/MCap (klassisch)",
+                                mode="lines+markers",
+                                line=dict(color="#0F6E56", width=2),
+                                connectgaps=False))
+        f6.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                         title="Earnings Yield (%)", yaxis_title="%",
+                         legend=dict(orientation="h", y=-0.3),
+                         hovermode="x unified")
+        st.plotly_chart(f6, use_container_width=True)
+
+    # --- Rohwerte je Jahr (as-reported) ---
+    ev_by = {str(d["period_end"])[:10]: v
+             for d, v in zip(eh, edf["ev"].tolist())}
+    with st.expander("Rohwerte je Jahr"):
+        st.dataframe(pd.DataFrame([{
+            "Periode": str(d["period_end"])[:10],
+            "Gewinnruecklagen": _money(d.get("retained_earnings"), cur),
+            "Eigenkapital": _money(d.get("equity"), cur),
+            "Free Cash Flow": _money(d.get("fcf"), cur),
+            "EV (approx.)": _money(ev_by.get(str(d["period_end"])[:10]), cur),
+            "EPS unverw.": (de_dec(d["eps_basic"], 2)
+                            if d.get("eps_basic") is not None else "—"),
+            "EPS verw.": (de_dec(d["eps_diluted"], 2)
+                          if d.get("eps_diluted") is not None else "—"),
+        } for d in eh]), use_container_width=True, hide_index=True)
+
+    st.caption("EPS-Chart und EV split-bereinigt; Earnings Yield: EBIT/EV "
+               "(Greenblatt) + NI/Marktkap (klassisch). Rohwerte-Tabelle = "
+               "as-reported je Filing; EV-Historie ist eine Naeherung "
+               "(Jahresend-Kurs).")
 
 
 def _render_fcf_alloc(ticker: str, src) -> None:
