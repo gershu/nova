@@ -1614,6 +1614,109 @@ def _render_ov_kennzahlen(ticker: str, src) -> None:
         _kpi_table(_KPI_CASHDIV, f, sec)
 
 
+def _fmt_cap(v) -> str:
+    """Market Cap kompakt, ohne Waehrung: 1,23 Bio / 75,2 Mrd / 500 Mio."""
+    if _missing(v):
+        return "—"
+    v = float(v)
+    if abs(v) >= 1e12:
+        return f"{de_dec(v / 1e12, 2)} Bio"
+    if abs(v) >= 1e9:
+        return f"{de_dec(v / 1e9, 1)} Mrd"
+    return f"{de_dec(v / 1e6, 0)} Mio"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _instruments():
+    """ref_instruments (id, symbol, name) oder None — fuer Peer-Namen."""
+    if _run_query is None:
+        return None
+    try:
+        return _run_query("SELECT ref_instrument_id, symbol, name "
+                          "FROM ref_instruments", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _render_moat_dominanz(ticker: str, src) -> None:
+    """Burggraben-Report: Branche & Dominanz (Rang/Sektor-Anteil + Peers).
+
+    Aus Thesis-Cockpit; Quelle ref_fundamentals_latest (Universum, DB).
+    """
+    if not (src.in_universe and src.ref_instrument_id):
+        st.caption("Branchen-Einordnung nur fuer Universums-Werte "
+                   "(ref_fundamentals_latest).")
+        return
+    fa = _fundamentals_all()
+    if fa is None or fa.empty:
+        st.caption("Keine Fundamentaldaten verfuegbar.")
+        return
+    own = fa[fa["ref_instrument_id"] == src.ref_instrument_id]
+    if own.empty:
+        st.caption("Keine Fundamentaldaten fuer diesen Wert hinterlegt.")
+        return
+    f = own.iloc[0]
+    sector = f["sector"] if "sector" in own.columns else None
+    if _missing(sector):
+        st.info("Kein Sektor hinterlegt — keine Branchen-Einordnung moeglich.")
+        return
+
+    peers = fa[fa["sector"] == sector].copy()
+    instr = _instruments()
+    if instr is not None and not instr.empty:
+        peers = peers.merge(instr, on="ref_instrument_id", how="left")
+    peers = peers.sort_values("market_cap", ascending=False,
+                              na_position="last").reset_index(drop=True)
+    rank = peers.index[peers["ref_instrument_id"] == src.ref_instrument_id]
+    sec_cap = peers["market_cap"].sum(skipna=True)
+    self_cap = float(f["market_cap"]) if not _missing(f["market_cap"]) else None
+
+    d = st.columns(3)
+    d[0].metric("Rang im Sektor",
+                f"{int(rank[0]) + 1} / {len(peers)}" if len(rank)
+                else f"— / {len(peers)}",
+                help=f"Nach Market Cap, Sektor „{sector}“.")
+    d[1].metric("Sektor-Anteil",
+                f"{de_dec(self_cap / sec_cap * 100, 1)} %"
+                if (self_cap and sec_cap) else "—",
+                help="Market Cap / Summe aller erfassten Sektor-Unternehmen.")
+    d[2].metric("Market Cap", _fmt_cap(self_cap))
+
+    cols = [c for c in ("symbol", "name", "market_cap", "pe_forward",
+                        "net_margin", "roic") if c in peers.columns]
+    disp = peers[["ref_instrument_id", *cols]].copy()
+    if "net_margin" in disp.columns:
+        disp["net_margin"] = disp["net_margin"] * 100.0
+    if "roic" in disp.columns:
+        disp["roic"] = disp["roic"] * 100.0
+
+    def _hl(r):
+        on = r["ref_instrument_id"] == src.ref_instrument_id
+        return ["background-color: #fff3cd" if on else ""] * len(r)
+
+    def _d1(v):
+        return de_dec(v, 1) if not _missing(v) else "—"
+
+    st.dataframe(
+        disp.style.apply(_hl, axis=1).format({
+            "market_cap": _fmt_cap, "pe_forward": _d1,
+            "net_margin": _d1, "roic": _d1}),
+        use_container_width=True, hide_index=True,
+        column_config={
+            "ref_instrument_id": None,
+            "symbol": st.column_config.TextColumn("Symbol", width="small"),
+            "name": st.column_config.TextColumn("Name"),
+            "market_cap": st.column_config.TextColumn("Market Cap"),
+            "pe_forward": st.column_config.TextColumn("KGV fwd", width="small"),
+            "net_margin": st.column_config.TextColumn("Nettom. %",
+                                                      width="small"),
+            "roic": st.column_config.TextColumn("ROIC %", width="small"),
+        })
+    st.caption("Dominanz-Indikator: Rang + Sektor-Anteil messen die relative "
+               "Groesse — fuer Marktfuehrerschaft zusaetzlich Margen und ROIC "
+               "gegen die Peers lesen.")
+
+
 def render_portfolio(ticker: str, src) -> None:
     """Portfolio & Signale (nur Universums-Werte) — Geruest."""
     st.markdown("#### Portfolio & Signale")
@@ -1674,6 +1777,8 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("moat_score", "Moat-Score (Signale & Gewichtung)",
                         _render_moat_score),
+                 Report("moat_dominanz", "Branche & Dominanz",
+                        _render_moat_dominanz),
              ]),
     Category("balance", "3 Bilanz",
              question="Ist die Bilanz solide?",
