@@ -934,18 +934,10 @@ def render_earnings_real_tab(ticker: str, src) -> None:
                "vs. ausgewiesener Gewinn.")
 
 
-def render_management_tab(ticker: str, src) -> None:
-    """Tab 4 — Ist das Management gut? (Conviction, Tenure, Ownership,
-    Turnover, Kapitalallokation, SBC/Verwaesserung)."""
-    cur = src.currency or "USD"
+def _render_mgmt_conviction(ticker: str, src) -> None:
+    """Management-Report: Insider-Conviction-Signal + CEO/CFO-Tenure +
+    Mgmt-Turnover + Kaeufer/Verkaeufer."""
     tx = _insider_tx(ticker)
-    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
-    shares_out = None
-    if ym:
-        shares_out = ym[-1].get("shares_outstanding") \
-            or ym[-1].get("diluted_shares")
-
-    # --- Insider Conviction ---
     conv = fm.insider_conviction(tx, n_years=3,
                                  cfg=_SCORE["insider_conviction"]) if tx \
         else None
@@ -960,7 +952,6 @@ def render_management_tab(ticker: str, src) -> None:
             st.caption(f"{conv['routine']} Routine-Verkauf/e (10b5-1) "
                        "ausgeklammert.")
 
-    # --- Tenure + Turnover ---
     df = pd.DataFrame(tx) if tx else pd.DataFrame()
 
     def _tenure(flag):
@@ -999,8 +990,21 @@ def render_management_tab(ticker: str, src) -> None:
                  help="8-K Item 5.02")
     tm[3].metric("Insider Käufer/Verkäufer",
                  f"{conv['n_buyers']}/{conv['n_sellers']}" if conv else "—")
+    st.caption("Tenure via fruehestes Insider-Filing (CIK). Conviction "
+               "klammert 10b5-1-Routine-Verkaeufe aus.")
 
-    # --- Ownership-Struktur ---
+
+def _render_mgmt_ownership(ticker: str, src) -> None:
+    """Management-Report: Eigentuemerstruktur (Free Float / Institutionell /
+    Insider / Strong Hands)."""
+    tx = _insider_tx(ticker)
+    df = pd.DataFrame(tx) if tx else pd.DataFrame()
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    shares_out = None
+    if ym:
+        shares_out = ym[-1].get("shares_outstanding") \
+            or ym[-1].get("diluted_shares")
+
     mgmt_pct = strat_pct = inst_pct = None
     if not df.empty and "shares_following" in df.columns and shares_out:
         held = df[df["shares_following"].notna()].copy()
@@ -1045,53 +1049,49 @@ def render_management_tab(ticker: str, src) -> None:
     om[2].metric("Insider", _pct(insider_pct))
     om[3].metric("Strong Hands", _pct(strong) if strong is not None else "—",
                  help="Institutionell + Insider + Strategisch (Naeherung)")
+    st.caption("Ownership: DEF-14A (Insider) + 13F-Top-Sample "
+               "(institutionell) + 10%-Eigner (strategisch) — Anteile sind "
+               "Untergrenzen.")
 
-    # --- Kapitalallokation + SBC/Verwaesserung ---
-    if ym:
-        last = ym[-1]
-        def _a(v):
-            return abs(v) if v is not None else None
-        bb, dv = _a(last.get("buybacks")), _a(last.get("dividends"))
-        cx, aq = _a(last.get("capex")), _a(last.get("acquisitions"))
-        payout = fm.safe_div((bb or 0) + (dv or 0), last.get("fcf"))
-        km = st.columns(4)
-        km[0].metric("Rueckkaeufe", _money(bb, cur))
-        km[1].metric("Dividenden", _money(dv, cur))
-        km[2].metric("Reinvestition (CapEx)", _money(cx, cur))
-        km[3].metric("Ausschuettungsquote",
-                     _pct(payout) if payout is not None else "—",
-                     help="(Rueckkauf + Dividende) / FCF")
 
-        sbc = _sbc(ticker)
-        sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
-        adj = fm.split_adjust_shares(ym, _splits(ticker))
-        sh = [(d["period_end"], d["diluted_shares"]) for d in adj
-              if d.get("diluted_shares")]
-        dil = None
-        if len(sh) >= 2:
-            yrs = (pd.to_datetime(sh[-1][0])
-                   - pd.to_datetime(sh[0][0])).days / 365.25
-            dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
-        sm = st.columns(2)
-        sm[0].metric("SBC / operativer CF", _pct(sbc_cfo))
-        sm[1].metric("Aktien p.a. (Verwaesserung)",
-                     _pct(dil) if dil is not None else "—",
-                     help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
+def _render_mgmt_capital(ticker: str, src) -> None:
+    """Management-Report: Kapitalallokation + SBC/Verwaesserung (letztes
+    Jahr)."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if not ym:
+        st.caption("Keine Jahresdaten verfuegbar.")
+        return
+    last = ym[-1]
 
-    # --- FCF-Verwendung (Kapitalallokation, Verlauf) — lazy ---
-    _lazy_report("FCF-Verwendung (Kapitalallokation, Verlauf)",
-                 f"fcfalloc_{ticker}", _render_fcf_alloc, ticker, src,
-                 status="beta")
+    def _a(v):
+        return abs(v) if v is not None else None
+    bb, dv = _a(last.get("buybacks")), _a(last.get("dividends"))
+    cx, aq = _a(last.get("capex")), _a(last.get("acquisitions"))
+    payout = fm.safe_div((bb or 0) + (dv or 0), last.get("fcf"))
+    km = st.columns(4)
+    km[0].metric("Rueckkaeufe", _money(bb, cur))
+    km[1].metric("Dividenden", _money(dv, cur))
+    km[2].metric("Reinvestition (CapEx)", _money(cx, cur))
+    km[3].metric("Ausschuettungsquote",
+                 _pct(payout) if payout is not None else "—",
+                 help="(Rueckkauf + Dividende) / FCF")
 
-    # --- Stock-based Compensation (SBC) — Verlauf — lazy ---
-    _lazy_report("Stock-based Compensation (SBC) — Verlauf",
-                 f"sbctrend_{ticker}", _render_sbc_trend, ticker, src,
-                 status="beta")
-
-    st.caption("Tenure via fruehestes Insider-Filing (CIK). Ownership: "
-               "DEF-14A (Insider) + 13F-Top-Sample (institutionell) + "
-               "10%-Eigner (strategisch) — Anteile sind Untergrenzen. "
-               "Conviction klammert 10b5-1-Routine-Verkaeufe aus.")
+    sbc = _sbc(ticker)
+    sbc_cfo = fm.safe_div(sbc.get("sbc"), sbc.get("cfo")) if sbc else None
+    adj = fm.split_adjust_shares(ym, _splits(ticker))
+    sh = [(d["period_end"], d["diluted_shares"]) for d in adj
+          if d.get("diluted_shares")]
+    dil = None
+    if len(sh) >= 2:
+        yrs = (pd.to_datetime(sh[-1][0])
+               - pd.to_datetime(sh[0][0])).days / 365.25
+        dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
+    sm = st.columns(2)
+    sm[0].metric("SBC / operativer CF", _pct(sbc_cfo))
+    sm[1].metric("Aktien p.a. (Verwaesserung)",
+                 _pct(dil) if dil is not None else "—",
+                 help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1247,11 +1247,25 @@ CATEGORIES: list[Category] = [
                  Report("bal_trend", "Bilanz-Trend (Verlauf)",
                         _render_bal_trend),
              ]),
-    Category("management", "4 Management", render_management_tab,
+    Category("management", "4 Management",
              question="Ist das Management gut?",
              desc="Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
                   "Kapitalallokation, SBC/Verwaesserung.",
-             err_label="Management", is_question=True),
+             err_label="Management", is_question=True,
+             reports=[
+                 Report("mgmt_conviction", "Insider-Signal & Tenure",
+                        _render_mgmt_conviction),
+                 Report("mgmt_ownership", "Ownership-Struktur",
+                        _render_mgmt_ownership),
+                 Report("mgmt_capital", "Kapitalallokation & Verwaesserung",
+                        _render_mgmt_capital),
+                 Report("mgmt_fcf", "FCF-Verwendung (Kapitalallokation, "
+                        "Verlauf)", _render_fcf_alloc, status="beta",
+                        lazy=True, expanded=False),
+                 Report("mgmt_sbc", "Stock-based Compensation (SBC) — Verlauf",
+                        _render_sbc_trend, status="beta", lazy=True,
+                        expanded=False),
+             ]),
     Category("earnings_real", "5 Gewinne echt", render_earnings_real_tab,
              question="Sind die Gewinne echt?",
              desc="Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings "
