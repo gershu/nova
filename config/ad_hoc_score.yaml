@@ -1,8 +1,15 @@
-# Konfiguration fuer den Ad-Hoc Gesamt-Qualitaets-Score
-# (modules/dashboard/views/ad_hoc.py).
+# Konfiguration fuer den Gesamt-Qualitaets-Score + die pro-Thema-Verdicts
+# der Unternehmens-Analyse.
+#
+# Geladen von modules/dashboard/score_config.py (CFG); die pass/fail-Regeln
+# je Thema liegen zentral in modules/dashboard/scoring.py, der gewichtete
+# Gesamt-Score in modules/dashboard/views/analysis.py. (Frueher: das
+# inzwischen aufgeloeste ad_hoc.py.)
 #
 # Aenderungen hier wirken sofort (Dashboard-Reload), ohne Code-Aenderung.
-# Fehlt diese Datei oder einzelne Schluessel, greifen die Defaults im Code.
+# Fehlt diese Datei oder einzelne Schluessel, greifen die Defaults im Code
+# (score_config.DEFAULTS). Hinweis: der Screener (modules/screener) nutzt
+# eine EIGENE Schwellen-/Gewichts-Konfig (FilterConfig), nicht diese Datei.
 
 # Gewichte je Thema fuer den 0-100-Gesamtscore. Themen ohne Daten werden
 # ausgeklammert und die verbleibenden Gewichte renormiert.

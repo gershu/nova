@@ -45,7 +45,9 @@ if not table_exists("sig_screen_runs"):
 # ---------- Helfer ----------
 
 def _fmt_score(v):
-    return f"{v:.2f}" if v is not None and pd.notna(v) else "—"
+    # Achsen-/Composite-Scores 0..1 -> 0..100 (einheitlich mit den
+    # Dashboard-Scores in der Unternehmens-Analyse).
+    return f"{round(v * 100)}" if v is not None and pd.notna(v) else "—"
 
 
 def _trend_chips(trends: dict) -> str:
@@ -176,6 +178,16 @@ if selected_run:
             },
         )
 
+        st.caption(
+            "Scores 0–100 = Anteil erfuellter Kriterien je Achse × 100. "
+            "Quality: ROIC, Brutto-/Nettomarge, Net-Debt/EBITDA · "
+            "Growth: Umsatz-/Gewinn-CAGR (5 J), Umsatz-QoQ · "
+            "Value: PEG, FCF-Rendite, KGV (fwd). Composite = gewichteter "
+            "Mittel der drei Achsen (Gewichte je Run, siehe Tuning unten). "
+            "Quelle: ref_fundamentals (yfinance-Snapshot) — unterscheidet "
+            "sich vom on-Demand Gesamt-Qualitaets-Score (Shearn-Checkliste) "
+            "in der Unternehmens-Analyse.")
+
         # --- Zeilen-Klick: Sprung in die Unternehmens-Analyse ---
         # Der vollstaendige per-Name-Blick (Ueberblick/Kennzahlen, GuV,
         # Geschaeft, Burggraben/Branche, Bilanz, Management, Gewinne,
@@ -265,9 +277,9 @@ with st.expander("⚙️ Parameter tunen + neuen Lauf starten", expanded=False):
                           key="sk_p_mcap", format="%.0f")
 
     c_t1, c_t2 = st.columns(2)
-    p_minc = c_t1.slider("Min Composite-Score", 0.0, 1.0,
-                          float(base["min_composite_score"]), 0.05,
-                          key="sk_p_minc", format="%.2f")
+    p_minc = c_t1.slider("Min Composite-Score (0–100)", 0, 100,
+                          int(round(float(base["min_composite_score"]) * 100)),
+                          5, key="sk_p_minc")
     p_topn = c_t2.slider("Top-N speichern",   5, 100,
                           int(base["top_n"]), 1,
                           key="sk_p_topn")
@@ -294,7 +306,7 @@ with st.expander("⚙️ Parameter tunen + neuen Lauf starten", expanded=False):
             "weight_quality":          p_wq,
             "weight_growth":           p_wg,
             "weight_value":            p_wv,
-            "min_composite_score":     p_minc,
+            "min_composite_score":     p_minc / 100.0,
             "top_n":                   p_topn,
         }
         # Tmp-Params-File schreiben + screen aufrufen.
