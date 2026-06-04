@@ -543,117 +543,340 @@ def _segments(ticker: str):
     return cd.revenue_segments(ticker)
 
 
-def _render_revenue_guv(ticker: str, src) -> None:
-    """Umsatz & GuV (aus Thesis): Segmente, Kostenaufteilung, GuV-Sankey."""
+_GUV_PAL = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB",
+            "#3B6D11", "#639922", "#97C459", "#C0DD97"]
+
+
+def _render_guv_umsatz(ticker: str, src) -> None:
+    """Umsatz & GuV — Wachstum + Segment-Stacked-Bar (Achsenwahl)."""
     cur = src.currency or "USD"
-    inc = _income(ticker, N_YEARS, PERIOD)
-    rows = [r for r in (inc.get("rows") or [])
-            if (r.get("form_type") or "").upper().startswith(
-                "10-Q" if PERIOD == "quarterly" else "10-K")] \
-        or (inc.get("rows") or [])
+    _, rows = _period_rows(ticker)
+    if not rows:
+        st.info("Keine GuV-Daten verfuegbar.")
+        return
+    hist = pd.DataFrame(rows)
+    hist["period_end"] = pd.to_datetime(hist["period_end"])
+    hist = hist.sort_values("period_end")
+    is_q = PERIOD == "quarterly"
+    lag = 4 if is_q else 1
 
-    # --- Umsatz-Segmente (Stacked Bar) ---
-    seg = _segments(ticker)
-    srows = seg.get("rows") or []
-    if srows:
-        axes = list(dict.fromkeys(r["axis"] for r in srows))
-        ax = (st.selectbox("Segment-Achse", axes, key=f"seg_{ticker}")
-              if len(axes) > 1 else axes[0])
-        ssel = [r for r in srows if r["axis"] == ax]
-        sdf = pd.DataFrame(ssel)
-        piv = sdf.pivot_table(index="period_end", columns="member_label",
-                              values="value", aggfunc="first")
-        fig = go.Figure()
-        pal = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB", "#3B6D11",
-               "#639922", "#97C459", "#C0DD97"]
-        for i, col in enumerate(piv.columns):
-            fig.add_trace(go.Bar(name=str(col),
-                                 x=pd.to_datetime(piv.index), y=piv[col],
-                                 marker_color=pal[i % len(pal)]))
-        fig.update_layout(barmode="stack", height=320,
-                          margin=dict(l=10, r=10, t=30, b=10),
-                          title=f"Umsatz-Segmente ({cur})",
-                          legend=dict(orientation="h", y=-0.25))
-        st.plotly_chart(fig, use_container_width=True)
+    seg_hist = _guv_segments(ticker, set(hist["period_end"]))
+    seg_axis = _guv_axis_picker(seg_hist, ticker)
+
+    # --- Wachstums-Kennzahlen ---
+    rser = hist[hist["revenue"].notna()].sort_values("period_end")
+    rv = rser["revenue"].astype(float).tolist()
+    rp = rser["period_end"].tolist()
+
+    def _grow(c, b):
+        return (c / b - 1.0) if (c is not None and b not in (None, 0)) else None
+
+    last = rv[-1] if rv else None
+    seq = _grow(last, rv[-2]) if len(rv) >= 2 else None
+    yoy = _grow(last, rv[-1 - lag]) if len(rv) > lag else None
+    cagr = None
+    if len(rv) >= 2 and rv[0] > 0 and last and last > 0:
+        yrs = (rp[-1] - rp[0]).days / 365.25
+        if yrs >= 1.0:
+            cagr = (last / rv[0]) ** (1.0 / yrs) - 1.0
+
+    mc = st.columns(3)
+    mc[0].metric("Umsatz (letzte Periode)",
+                 _money(last, cur) if last is not None else "—",
+                 delta=(f"{'+' if seq >= 0 else ''}{_pct(seq)} ggü. Vorquartal"
+                        if (is_q and seq is not None) else None))
+    mc[1].metric("Wachstum YoY", _pct(yoy) if yoy is not None else "—")
+    mc[2].metric("CAGR p.a.", _pct(cagr) if cagr is not None else "—")
+
+    # --- Umsatz-Verlauf (Segment-Stacked-Bar oder einfacher Balken) ---
+    if seg_axis is not None:
+        seg_sel = seg_hist[seg_hist["axis"] == seg_axis].copy()
+        periods = sorted(seg_sel["period_end"].unique())
+        if periods:
+            mem_tot = (seg_sel.groupby("member_label")["value"].sum()
+                       .sort_values(ascending=False))
+            members = mem_tot.index.tolist()
+            pivot = (seg_sel.pivot_table(index="period_end",
+                                         columns="member_label",
+                                         values="value", aggfunc="first")
+                     .reindex(periods)[members])
+            rev_by_p = hist.set_index("period_end")["revenue"].reindex(periods)
+            other = rev_by_p - pivot.sum(axis=1)
+            fig = go.Figure()
+            for i, m in enumerate(members):
+                fig.add_trace(go.Bar(
+                    name=m, x=pivot.index, y=pivot[m],
+                    marker_color=_GUV_PAL[i % len(_GUV_PAL)],
+                    hovertemplate=f"%{{x|%Y-%m-%d}}<br>{m}: "
+                                  "%{y:,.0f}<extra></extra>"))
+            if other.notna().any() and (other.fillna(0) > 1).any():
+                fig.add_trace(go.Bar(
+                    name="Sonstige", x=other.index, y=other.values,
+                    marker_color="#B4B2A9",
+                    hovertemplate="%{x|%Y-%m-%d}<br>Sonstige: "
+                                  "%{y:,.0f}<extra></extra>"))
+            fig.update_layout(barmode="stack", height=380,
+                              margin=dict(l=10, r=10, t=10, b=10),
+                              legend=dict(orientation="h", y=-0.18),
+                              yaxis_title=f"Umsatz ({cur})",
+                              hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Keine Segment-Daten in dieser Achse.")
     else:
-        st.caption("Keine Segment-Daten verfuegbar.")
-
-    # --- Kostenaufteilung (absolut, Stacked Bar) ---
-    if len(rows) >= 2:
-        def _rest(r):
-            o = r.get("operating_expense")
-            if o is None:
-                return None
-            return max(0.0, o - (r.get("rd_expense") or 0)
-                       - (r.get("sga_expense") or 0))
-        cdf = pd.DataFrame([{
-            "pe": pd.to_datetime(r["period_end"]),
-            "Herstellkosten": r.get("cost_of_revenue"),
-            "F&E": r.get("rd_expense"),
-            "Vertrieb & Verw.": r.get("sga_expense"),
-            "Uebriger OpEx": _rest(r),
-            "Operatives Ergebnis": r.get("operating_income"),
-        } for r in rows])
-        fig = go.Figure()
-        for name, color in [("Herstellkosten", "#A32D2D"),
-                            ("F&E", "#C75B5B"), ("Vertrieb & Verw.", "#E08A8A"),
-                            ("Uebriger OpEx", "#B4B2A9"),
-                            ("Operatives Ergebnis", "#1D9E75")]:
-            fig.add_trace(go.Bar(name=name, x=cdf["pe"], y=cdf[name],
-                                 marker_color=color))
-        fig.update_layout(barmode="stack", height=320,
-                          margin=dict(l=10, r=10, t=30, b=10),
-                          title=f"Kostenaufteilung absolut ({cur})",
-                          legend=dict(orientation="h", y=-0.25))
+        fig = go.Figure(go.Bar(
+            x=hist["period_end"], y=hist["revenue"], marker_color=_GUV_PAL[0],
+            hovertemplate="%{x|%Y-%m-%d}<br>Umsatz: %{y:,.0f}<extra></extra>"))
+        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=f"Umsatz ({cur})")
         st.plotly_chart(fig, use_container_width=True)
-
-    # --- GuV-Sankey (juengste Periode) ---
-    if rows:
-        r = rows[-1]
-        _sankey_guv(r, cur)
+        st.caption("Noch keine Segment-Aufschluesselung verfuegbar.")
 
 
-def _sankey_guv(r: dict, cur: str) -> None:
-    def g(k):
-        v = r.get(k)
+def _render_guv_margen(ticker: str, src) -> None:
+    """Umsatz & GuV — Margen-Trend (inkl. F&E- und effektiver Steuerquote)."""
+    _, rows = _period_rows(ticker)
+    mt = pd.DataFrame(rows)
+    if mt.empty:
+        st.caption("Keine GuV-Daten verfuegbar.")
+        return
+    mt["period_end"] = pd.to_datetime(mt["period_end"])
+    mt = mt[mt["revenue"].notna()].sort_values("period_end")
+    if len(mt) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    rev_s = mt["revenue"].astype(float)
+
+    def _mg(col):
+        s = mt[col].astype(float) / rev_s * 100.0
+        s[rev_s <= 0] = float("nan")
+        return s
+
+    ptx = mt["pretax_income"].astype(float)
+    eff_tax = mt["tax_expense"].astype(float) / ptx * 100.0
+    eff_tax[ptx <= 0] = float("nan")
+    fig = go.Figure()
+    for name, ser, col in [
+            ("Bruttomarge", _mg("gross_profit"), "#0F6E56"),
+            ("Operative Marge", _mg("operating_income"), "#1D9E75"),
+            ("Nettomarge", _mg("net_income"), "#5DCAA5"),
+            ("F&E-Quote", _mg("rd_expense"), "#A32D2D"),
+            ("Steuerquote", eff_tax, "#B4862B")]:
+        fig.add_trace(go.Scatter(
+            x=mt["period_end"], y=ser, name=name, mode="lines+markers",
+            line=dict(color=col, width=2), connectgaps=False,
+            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{name}: "
+                          "%{y:.1f}%<extra></extra>"))
+    fig.update_layout(height=320, margin=dict(l=10, r=10, t=10, b=10),
+                      legend=dict(orientation="h", y=-0.2), yaxis_title="%",
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Margen = Anteil am Umsatz; Steuerquote = Steuern / "
+               "Vorsteuerergebnis (effektiv).")
+
+
+def _render_guv_kosten(ticker: str, src) -> None:
+    """Umsatz & GuV — absolute Kostenaufteilung (Stacked Bar)."""
+    cur = src.currency or "USD"
+    _, rows = _period_rows(ticker)
+    kt = pd.DataFrame(rows)
+    if kt.empty:
+        st.caption("Keine GuV-Daten verfuegbar.")
+        return
+    kt["period_end"] = pd.to_datetime(kt["period_end"])
+    kt = kt.sort_values("period_end")
+    cogs = kt["cost_of_revenue"].astype(float)
+    rd = kt["rd_expense"].astype(float)
+    sga = kt["sga_expense"].astype(float)
+    opex = kt["operating_expense"].astype(float)
+    opinc = kt["operating_income"].astype(float)
+    rest = (opex - rd.fillna(0) - sga.fillna(0)).clip(lower=0)
+    bands = [("Herstellkosten", cogs, "#A32D2D"), ("F&E", rd, "#C75B5B"),
+             ("Vertrieb & Verwaltung", sga, "#E08A8A"),
+             ("Uebriger Betriebsaufwand", rest, "#B4B2A9"),
+             ("Operatives Ergebnis", opinc, "#1D9E75")]
+    if not any(s.notna().any() and (s.fillna(0) != 0).any()
+               for _, s, _c in bands):
+        st.caption("Keine Kostenpositionen verfuegbar.")
+        return
+    fig = go.Figure()
+    for name, ser, col in bands:
+        fig.add_trace(go.Bar(
+            name=name, x=kt["period_end"], y=ser, marker_color=col,
+            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{name}: "
+                          "%{y:,.0f}<extra></extra>"))
+    fig.update_layout(barmode="stack", height=360,
+                      margin=dict(l=10, r=10, t=10, b=10),
+                      legend=dict(orientation="h", y=-0.2),
+                      yaxis_title=f"Aufwand / Ergebnis ({cur})",
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Umsatz = Herstellkosten + Betriebsaufwand + Operatives "
+               f"Ergebnis. Bandhoehe in {cur}; Summe je Balken = Umsatz.")
+
+
+def _render_guv_sankey(ticker: str, src) -> None:
+    """Umsatz & GuV — GuV-Struktur (Sankey) einer waehlbaren Periode."""
+    cur = src.currency or "USD"
+    _, rows = _period_rows(ticker)
+    if not rows:
+        st.info("Keine GuV-Daten verfuegbar.")
+        return
+    hist = pd.DataFrame(rows)
+    hist["period_end"] = pd.to_datetime(hist["period_end"])
+    hist = hist.sort_values("period_end")
+    seg_hist = _guv_segments(ticker, set(hist["period_end"]))
+    seg_axis = _guv_axis_picker(seg_hist, ticker, key_suffix="_sankey")
+
+    per_opts = list(hist["period_end"])
+
+    def _per_lbl(ts):
+        row = hist[hist["period_end"] == ts].iloc[0]
+        return f"{str(ts)[:10]} · {row.get('form_type') or '—'}"
+
+    sel_per = st.selectbox("Periode (Sankey)", per_opts,
+                           index=len(per_opts) - 1, format_func=_per_lbl,
+                           key=f"guv_sankey_per_{ticker}")
+    r = hist[hist["period_end"] == sel_per].iloc[0]
+    seg_curr = (seg_hist[seg_hist["period_end"] == sel_per]
+                if not seg_hist.empty else pd.DataFrame())
+    st.markdown(f"##### GuV-Struktur — {str(sel_per)[:10]}")
+
+    seg_rows = []
+    if seg_axis is not None and not seg_curr.empty:
+        cur_ax = seg_curr[seg_curr["axis"] == seg_axis]
+        seg_rows = [(rr["member_label"] or rr["member"], float(rr["value"]))
+                    for _, rr in cur_ax.iterrows()]
+
+    def _g(col):
+        v = r[col]
         return None if _missing(v) else float(v)
-    rev, cogs, gross = g("revenue"), g("cost_of_revenue"), g("gross_profit")
-    rd, sga, opex = g("rd_expense"), g("sga_expense"), g("operating_expense")
-    opinc, tax, net = g("operating_income"), g("tax_expense"), g("net_income")
-    if rev is None or net is None:
-        return
-    labels, idx, colors = [], {}, []
+
+    rev, cogs, gross = _g("revenue"), _g("cost_of_revenue"), _g("gross_profit")
+    rd, sga, opex = _g("rd_expense"), _g("sga_expense"), _g("operating_expense")
+    opinc, other = _g("operating_income"), _g("other_income")
+    ptax, tax, net = _g("pretax_income"), _g("tax_expense"), _g("net_income")
+
     GREEN, RED, GRAY = "#3B6D11", "#A32D2D", "#444441"
+    GL, RL, SL = "rgba(99,153,34,0.45)", "rgba(225,75,74,0.40)", \
+        "rgba(29,158,117,0.45)"
+    labels, colors, idx = [], [], {}
 
-    def node(key, name, color):
-        idx[key] = len(labels); labels.append(name); colors.append(color)
-    node("rev", "Umsatz", GRAY)
-    for k, n, c in [("cogs", "Herstellkosten", RED),
-                    ("gross", "Bruttogewinn", GREEN),
-                    ("opex", "Betriebsaufwand", RED), ("rd", "F&E", RED),
-                    ("sga", "Vertrieb & Verw.", RED),
-                    ("opinc", "Operatives Ergebnis", GREEN),
-                    ("tax", "Steuern", RED), ("net", "Nettogewinn", GREEN)]:
-        node(k, n, c)
-    S, T, V = [], [], []
+    def _node(key, name, val, color, *, force=False):
+        if val is None and not force:
+            return
+        idx[key] = len(labels)
+        labels.append(f"{name}<br>{_money(val, cur)}")
+        colors.append(color)
 
-    def link(a, b, v):
-        if v and v > 0 and a in idx and b in idx:
-            S.append(idx[a]); T.append(idx[b]); V.append(v)
-    link("rev", "cogs", cogs); link("rev", "gross", gross)
-    link("gross", "opex", opex); link("gross", "opinc", opinc)
-    link("opex", "rd", rd); link("opex", "sga", sga)
-    link("opinc", "tax", tax); link("opinc", "net", net)
+    _node("rev", "Umsatz", rev, GRAY, force=True)
+    for i, (lbl, val) in enumerate(seg_rows):
+        _node(f"s{i}", lbl, val, "#0F6E56")
+    _node("cogs", "Herstellkosten", cogs, RED)
+    _node("gross", "Bruttogewinn", gross, GREEN)
+    _node("opex", "Betriebsaufwand", opex, RED)
+    _node("rd", "F&E", rd, RED)
+    _node("sga", "Vertrieb & Verwaltung", sga, RED)
+    _node("opinc", "Operatives Ergebnis", opinc, GREEN)
+    has_other = other is not None and other > 0
+    if has_other:
+        _node("other", "Sonstiges Ergebnis", other, GREEN)
+    has_ptax = ptax is not None
+    if has_ptax:
+        _node("ptax", "Vorsteuerergebnis", ptax, GREEN)
+    _node("tax", "Steuern", tax, RED)
+    _node("net", "Nettogewinn", net, GREEN, force=True)
+
+    S, T, V, LC = [], [], [], []
+
+    def _link(a, b, val, color):
+        if val is None or val <= 0 or a not in idx or b not in idx:
+            return
+        S.append(idx[a]); T.append(idx[b]); V.append(val); LC.append(color)
+
+    for i, (_, val) in enumerate(seg_rows):
+        _link(f"s{i}", "rev", val, SL)
+    _link("rev", "cogs", cogs, RL)
+    _link("rev", "gross", gross, GL)
+    _link("gross", "opex", opex, RL)
+    _link("gross", "opinc", opinc, GL)
+    _link("opex", "rd", rd, RL)
+    _link("opex", "sga", sga, RL)
+    if has_ptax:
+        _link("opinc", "ptax", opinc, GL)
+        if has_other:
+            _link("other", "ptax", other, GL)
+        _link("ptax", "tax", tax, RL)
+        _link("ptax", "net", net, GL)
+    else:
+        _link("opinc", "tax", tax, RL)
+        _link("opinc", "net", net, GL)
+
     if not V:
+        st.info("GuV-Zeilen unvollstaendig — kein Sankey moeglich.")
         return
+    h = min(900, max(440, len(labels) * 46))
     fig = go.Figure(go.Sankey(
         arrangement="snap",
-        node=dict(label=labels, color=colors, pad=18, thickness=14,
+        textfont=dict(color="#10231A", size=13,
+                      family="Arial, sans-serif"),
+        node=dict(label=labels, color=colors, pad=26, thickness=16,
                   line=dict(color="white", width=1)),
-        link=dict(source=S, target=T, value=V)))
-    fig.update_layout(height=360, margin=dict(l=10, r=10, t=24, b=10),
-                      title=f"GuV-Struktur {str(r['period_end'])[:10]} ({cur})")
+        link=dict(source=S, target=T, value=V, color=LC)))
+    fig.update_layout(height=h, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig, use_container_width=True)
+
+    def _ratio_of(num, den):
+        return (float(num) / float(den)
+                if (num is not None and den not in (None, 0)
+                    and not _missing(num) and not _missing(den)) else None)
+
+    tax_base = ptax if ptax else ((net + tax) if (net is not None
+                                                  and tax is not None) else None)
+    st.markdown("**Ergebnisqualitaet**")
+    qc = st.columns(5)
+    qc[0].metric("Bruttomarge", _pct(_ratio_of(gross, rev)))
+    qc[1].metric("Operative Marge", _pct(_ratio_of(opinc, rev)))
+    qc[2].metric("Nettomarge", _pct(_ratio_of(net, rev)))
+    qc[3].metric("F&E-Quote", _pct(_ratio_of(rd, rev)))
+    qc[4].metric("Steuerquote", _pct(_ratio_of(tax, tax_base)))
+    st.caption(f"{r.get('form_type') or 'Filing'} · Periode "
+               f"{str(sel_per)[:10]} · Betraege wie berichtet ({cur}); "
+               "Bandbreite proportional zum Betrag.")
+
+
+def _guv_segments(ticker: str, valid_periods: set) -> pd.DataFrame:
+    """Segment-Historie (source-agnostisch), gefiltert auf die Perioden der
+    aktuellen Darstellung (PERIOD)."""
+    seg = _segments(ticker)
+    df = pd.DataFrame(seg.get("rows") or [])
+    if df.empty:
+        return df
+    df["period_end"] = pd.to_datetime(df["period_end"])
+    return df[df["period_end"].isin(valid_periods)]
+
+
+def _guv_axis_picker(seg_hist: pd.DataFrame, ticker: str, key_suffix=""):
+    """Achsen-Auswahl (radio) fuer die Umsatz-Aufschluesselung; None ohne
+    Segmente."""
+    if seg_hist.empty:
+        return None
+    try:
+        from modules.sec_filings.client import (AXIS_LABELS as _AX_LBL,
+                                                _humanize as _hum)
+    except Exception:  # noqa: BLE001
+        _AX_LBL, _hum = {}, (lambda s: s)
+    axes = list(dict.fromkeys(seg_hist["axis"].tolist()))
+    known = list(_AX_LBL.keys())
+    axes.sort(key=lambda a: (known.index(a) if a in known else 99, a))
+    opts = {_AX_LBL.get(a, _hum(a)): a for a in axes}
+    if len(opts) > 1:
+        chosen = st.radio("Umsatz-Aufschluesselung", list(opts.keys()),
+                          horizontal=True,
+                          key=f"guv_axis{key_suffix}_{ticker}")
+    else:
+        chosen = list(opts.keys())[0]
+    return opts[chosen]
 
 
 def _render_bal_snapshot(ticker: str, src) -> None:
@@ -1414,6 +1637,20 @@ CATEGORIES: list[Category] = [
                  Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
                         status="beta", expanded=False),
              ]),
+    Category("guv", "Umsatz & GuV",
+             question="Umsatz & GuV — Struktur und Qualitaet",
+             desc="Umsatz-Wachstum + Segmente, Margen-Trend, absolute "
+                  "Kostenaufteilung, GuV-Sankey (aus Thesis-Cockpit).",
+             err_label="Umsatz & GuV",
+             reports=[
+                 Report("guv_umsatz", "Umsatz-Verlauf & Segmente",
+                        _render_guv_umsatz),
+                 Report("guv_margen", "Margen-Trend", _render_guv_margen),
+                 Report("guv_kosten", "Kostenaufteilung (absolut)",
+                        _render_guv_kosten),
+                 Report("guv_sankey", "GuV-Struktur (Sankey)",
+                        _render_guv_sankey, status="beta"),
+             ]),
     Category("business", "1 Geschaeft",
              question="Ist das Geschaeft gut?",
              desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
@@ -1424,10 +1661,6 @@ CATEGORIES: list[Category] = [
                         _render_biz_growth_returns),
                  Report("biz_margins", "Margen-Trend", _render_biz_margins),
                  Report("biz_revenue", "Umsatzverlauf", _render_biz_revenue),
-                 Report("biz_guv",
-                        "Umsatz & GuV — Segmente, Kostenaufteilung, Sankey",
-                        _render_revenue_guv, status="beta", lazy=True,
-                        expanded=False),
                  Report("biz_phys",
                         "Physical Growth (PP&E, CapEx, Mitarbeiter)",
                         _report_physical, status="beta", lazy=True,
