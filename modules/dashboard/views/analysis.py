@@ -741,8 +741,8 @@ def _render_bal_trend(ticker: str, src) -> None:
     t2.plotly_chart(f2, use_container_width=True)
 
 
-def render_valuation_tab(ticker: str, src) -> None:
-    """Tab 6 — Ist die Bewertung attraktiv? (EV, EV/FCF, Yields, KGV, Kurs)."""
+def _render_val_metrics(ticker: str, src) -> None:
+    """Bewertungs-Report: EV, EV/FCF, KGV, Earnings Yields, Marktkap."""
     cur = src.currency or "USD"
     ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
     if not ym:
@@ -783,27 +783,27 @@ def render_valuation_tab(ticker: str, src) -> None:
                      help=f"Kurs {de_dec(price, 2)} {cur} × "
                           f"{de_dec(shares / 1e9, 2)} Mrd Aktien")
 
-    # --- Kurs-Chart (2 Jahre) ---
+    st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
+               "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
+
+
+def _render_val_price(ticker: str, src) -> None:
+    """Bewertungs-Report: Kursverlauf (2 Jahre)."""
+    cur = src.currency or "USD"
     end_iso = date.today().isoformat()
     start_iso = (pd.to_datetime(end_iso) - pd.Timedelta(days=730)) \
         .date().isoformat()
     px = _prices(ticker, start_iso, end_iso)
-    if px:
-        pdf = pd.DataFrame(
-            [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
-        fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
-                                   line=dict(color="#0F6E56", width=1.5)))
-        fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                          title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
-               "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
-
-    # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf (lazy) ---
-    _lazy_report("Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
-                 f"reval_{ticker}", _render_re_eps_ev, ticker, src,
-                 status="beta")
+    if not px:
+        st.caption("Keine Kursdaten verfuegbar.")
+        return
+    pdf = pd.DataFrame(
+        [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
+    fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
+                               line=dict(color="#0F6E56", width=1.5)))
+    fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                      title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_moat_tab(ticker: str, src) -> None:
@@ -1271,11 +1271,20 @@ CATEGORIES: list[Category] = [
              desc="Earnings-Quality-Score, GAAP vs non-GAAP, Owner Earnings "
                   "vs Nettogewinn vs FCF.",
              err_label="Gewinnqualitaet", is_question=True),
-    Category("valuation", "6 Bewertung", render_valuation_tab,
+    Category("valuation", "6 Bewertung",
              question="Ist die Bewertung attraktiv?",
              desc="EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, "
                   "Kurs.",
-             err_label="Bewertung", is_question=True),
+             err_label="Bewertung", is_question=True,
+             reports=[
+                 Report("val_metrics", "Bewertungskennzahlen",
+                        _render_val_metrics),
+                 Report("val_price", "Kurs (2 Jahre)", _render_val_price),
+                 Report("val_history",
+                        "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
+                        _render_re_eps_ev, status="beta", lazy=True,
+                        expanded=False),
+             ]),
     Category("portfolio", "Portfolio & Signale", render_portfolio,
              err_label="Portfolio"),
 ]
