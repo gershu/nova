@@ -1104,6 +1104,71 @@ def _render_eq_score(ticker: str, src) -> None:
                "aus dem Earnings-Exhibit.")
 
 
+def _render_eq_gaap(ticker: str, src) -> None:
+    """Gewinne-echt-Report: GAAP vs non-GAAP — Earnings-Exhibit (aus Ad-Hoc).
+
+    Heuristische Textanalyse des juengsten Earnings-8-K (Item 2.02, Exhibit
+    99); non-GAAP-Kennzahlen sind nicht im XBRL strukturiert.
+    """
+    ng = _nongaap(ticker)
+    if ng.get("categories") is None and ng.get("mentions") is None:
+        st.info(f"Kein Earnings-8-K (Item 2.02) mit Exhibit 99 fuer "
+                f"{src.ticker} gefunden ({ng.get('error') or '—'}).")
+        return
+    if ng.get("filed_at"):
+        st.caption(f"Quelle: Earnings-8-K, eingereicht "
+                   f"**{str(ng['filed_at'])[:10]}**.")
+
+    cats = ng.get("categories") or {}
+    mentions = ng.get("mentions") or 0
+    n_cat = len(cats)
+    cfg = _SCORE.get("gaap_vs_non_gaap", {})
+    aggressive = (ng.get("adds_back_sbc")
+                  or mentions > cfg.get("mentions_max", 15)
+                  or n_cat > cfg.get("categories_max", 3))
+    if not cats and mentions == 0:
+        st.success("Reporting wirkt **konservativ / transparent** — keine "
+                   "non-GAAP-Add-backs erkannt.")
+    elif aggressive:
+        st.warning("Reporting wirkt **aggressiv** — viele Add-backs bzw. SBC "
+                   "herausgerechnet.")
+    else:
+        st.info("Reporting wirkt **moderat**.")
+
+    m = st.columns(3)
+    m[0].metric("Non-GAAP-Erwaehnungen", str(mentions))
+    m[1].metric("Anpassungs-Kategorien", str(n_cat))
+    m[2].metric("SBC herausgerechnet?",
+                "Ja" if ng.get("adds_back_sbc") else "Nein",
+                help="Add-back von Aktienverguetung ist der klassische "
+                     "Aggressivitaets-Marker (echte, wiederkehrende Kosten).")
+
+    if cats:
+        st.markdown("**Gefundene Anpassungs-Kategorien**")
+        cat_df = (pd.DataFrame([{"Kategorie": k, "Treffer": v}
+                                for k, v in cats.items()])
+                  .sort_values("Treffer", ascending=False))
+        fig = go.Figure(go.Bar(
+            x=cat_df["Treffer"], y=cat_df["Kategorie"], orientation="h",
+            marker_color=["#A32D2D" if k.startswith("Aktienverguetung")
+                          else "#1D9E75" for k in cat_df["Kategorie"]]))
+        fig.update_layout(height=max(220, 40 * len(cat_df)),
+                          margin=dict(l=10, r=10, t=10, b=10),
+                          xaxis_title="Erwaehnungen")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("Keine bekannten Anpassungs-Kategorien erkannt — entweder "
+                "rein GAAP berichtet oder ungewohnte Formulierung.")
+
+    if ng.get("amounts"):
+        with st.expander("Betraege nahe 'non-GAAP' (heuristisch, ungeprueft)"):
+            st.write(", ".join(ng["amounts"]))
+            st.caption("Reine Textnaehe-Suche — keine Zuordnung zu GAAP/"
+                       "non-GAAP-Zeilen. Nur grobe Orientierung.")
+    if ng.get("link"):
+        st.caption(f"Original-Filing: {ng['link']}")
+
+
 def _render_owner_earnings(ticker: str, src) -> None:
     """Gewinne-echt-Report: Owner Earnings vs Nettogewinn vs FCF."""
     cur = src.currency or "USD"
@@ -1939,6 +2004,9 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("eq_score", "Earnings-Quality-Score",
                         _render_eq_score),
+                 Report("eq_gaap", "GAAP vs non-GAAP — Earnings-Exhibit",
+                        _render_eq_gaap, status="beta", lazy=True,
+                        expanded=False),
                  Report("owner_earnings",
                         "Owner Earnings vs Nettogewinn vs FCF",
                         _render_owner_earnings),

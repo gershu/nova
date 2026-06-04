@@ -279,7 +279,8 @@ def earnings_history(ticker: str, *, n_years: int = 8, period: str = "annual",
 def earnings_nongaap(ticker: str, *, src: Source | None = None) -> dict:
     """Add-back-Kategorien aus dem juengsten Earnings-8-K-Exhibit.
 
-    Returns {categories|None, mentions, adds_back_sbc, filed_at, error}.
+    Returns {categories|None, mentions, adds_back_sbc, amounts, filed_at,
+    link, error}.
     """
     src = src or resolve(ticker)
     try:
@@ -290,7 +291,9 @@ def earnings_nongaap(ticker: str, *, src: Source | None = None) -> dict:
         ana = _sec.analyze_non_gaap(text)
         return {"categories": ana["categories"], "mentions": ana["mentions"],
                 "adds_back_sbc": ana["adds_back_sbc"],
-                "filed_at": ex[0].get("filed_at"), "error": None}
+                "amounts": ana.get("amounts"),
+                "filed_at": ex[0].get("filed_at"),
+                "link": ex[0].get("link"), "error": None}
     except Exception as e:  # noqa: BLE001
         return {"categories": None, "error": f"{e.__class__.__name__}: {e}"}
 
