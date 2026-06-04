@@ -204,6 +204,46 @@ def _render_physical(ticker: str, cur: str) -> None:
                 _money(revemp_last, cur) if revemp_last is not None else "—",
                 delta=_pct(g_re) if g_re is not None else None,
                 delta_color="off")
+
+    # --- Verlauf ---
+    df = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "ppe": d.get("ppe_gross"),
+        "capex": _abs_or(d.get("capex")),
+        "employees": d.get("employees"),
+        "rev_emp": fm.safe_div(d.get("revenue"), d.get("employees")),
+    } for d in rows])
+    st.markdown("#### Verlauf")
+    t1, t2 = st.columns(2)
+    f1 = go.Figure()
+    f1.add_trace(go.Bar(name="PP&E", x=df["period_end"], y=df["ppe"],
+                        marker_color="#0F6E56"))
+    f1.add_trace(go.Bar(name="CapEx", x=df["period_end"], y=df["capex"],
+                        marker_color="#1D9E75"))
+    f1.update_layout(barmode="group", height=300,
+                     margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"PP&E & CapEx ({cur})", yaxis_title=cur,
+                     legend=dict(orientation="h", y=-0.2))
+    t1.plotly_chart(f1, use_container_width=True)
+    f2 = go.Figure(go.Bar(x=df["period_end"], y=df["employees"],
+                          marker_color="#B4862B"))
+    f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title="Mitarbeiter", yaxis_title="Anzahl")
+    t2.plotly_chart(f2, use_container_width=True)
+    if df["rev_emp"].notna().any():
+        f3 = go.Figure(go.Scatter(
+            x=df["period_end"], y=df["rev_emp"], mode="lines+markers",
+            line=dict(color="#444441", width=2), connectgaps=False,
+            hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}<extra></extra>"))
+        f3.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Umsatz / Mitarbeiter ({cur})",
+                         yaxis_title=cur)
+        st.plotly_chart(f3, use_container_width=True)
+    if emp_last is None:
+        st.caption("Mitarbeiterzahl nicht gefunden (dei:EntityNumberOfEmployees "
+                   "fehlt, auch 10-K-Textextraktion ohne Treffer) — Komponente "
+                   "ausgeklammert, Gewichte renormiert.")
+
     st.caption("Index = 0,4·ΔPP&E + 0,3·ΔMitarbeiter + 0,3·ΔCapEx (CAGR). "
                "PP&E via company-concept, Mitarbeiter via dei/10-K-Text.")
 

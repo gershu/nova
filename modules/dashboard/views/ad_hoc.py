@@ -160,6 +160,12 @@ def _abs_or(v):
     return abs(v) if v is not None else None
 
 
+def _cagr(first, last, years):
+    if first is None or last is None or first <= 0 or last <= 0 or years < 1:
+        return None
+    return (last / first) ** (1 / years) - 1
+
+
 def _trend_ampel(vals, up: float = 0.5, down: float = -0.5):
     """Trend einer Quoten-Reihe (Bruchteile) -> (cur, slope_pp_p.a., emoji, dc).
 
