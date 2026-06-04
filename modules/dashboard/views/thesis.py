@@ -230,68 +230,8 @@ a5.metric("Kurs (1 Jahr)",
 
 # ---------- Tabs ----------
 
-t_peers, t_news, t_sig, t_screen = st.tabs(
-    ["Branche & Dominanz", "Termine & News", "Signale", "Screener"])
-
-
-# --- Branche & Dominanz ---
-with t_peers:
-    if f is None or _missing(f["sector"]):
-        st.info("Kein Sektor hinterlegt — keine Branchen-Einordnung moeglich.")
-    else:
-        peers = fund_all[fund_all["sector"] == f["sector"]].copy()
-        peers = peers.merge(
-            run_query("SELECT ref_instrument_id, symbol, name "
-                      "FROM ref_instruments"),
-            on="ref_instrument_id", how="left")
-        peers = peers.sort_values("market_cap", ascending=False,
-                                  na_position="last").reset_index(drop=True)
-        _rank = peers.index[peers["ref_instrument_id"] == ref_id]
-        _sec_cap = peers["market_cap"].sum(skipna=True)
-        _self_cap = float(f["market_cap"]) if not _missing(f["market_cap"]) \
-            else None
-        d1, d2, d3 = st.columns(3)
-        d1.metric("Rang im Sektor",
-                  f"{int(_rank[0]) + 1} / {len(peers)}" if len(_rank)
-                  else f"— / {len(peers)}",
-                  help=f"Nach Market Cap, Sektor „{f['sector']}“.")
-        d2.metric("Sektor-Anteil",
-                  f"{de_dec(_self_cap / _sec_cap * 100, 1)} %"
-                  if _self_cap and _sec_cap else "—",
-                  help="Market Cap im Verhaeltnis zur Summe aller "
-                       "erfassten Sektor-Unternehmen.")
-        d3.metric("Market Cap", _fmt_cap(_self_cap))
-
-        _disp = peers[["ref_instrument_id", "symbol", "name", "market_cap",
-                       "pe_forward", "net_margin", "roic"]].copy()
-        _disp["net_margin"] = _disp["net_margin"] * 100.0
-        _disp["roic"]       = _disp["roic"] * 100.0
-
-        def _hl(r):
-            on = r["ref_instrument_id"] == ref_id
-            return ["background-color: #fff3cd" if on else ""] * len(r)
-
-        st.dataframe(
-            _disp.style.apply(_hl, axis=1).format({
-                "market_cap": _fmt_cap,
-                "pe_forward": lambda v: de_dec(v, 1) if not _missing(v) else "—",
-                "net_margin": lambda v: de_dec(v, 1) if not _missing(v) else "—",
-                "roic":       lambda v: de_dec(v, 1) if not _missing(v) else "—",
-            }),
-            use_container_width=True, hide_index=True,
-            column_config={
-                "ref_instrument_id": None,
-                "symbol":     st.column_config.TextColumn("Symbol", width="small"),
-                "name":       st.column_config.TextColumn("Name"),
-                "market_cap": st.column_config.TextColumn("Market Cap"),
-                "pe_forward": st.column_config.TextColumn("KGV fwd", width="small"),
-                "net_margin": st.column_config.TextColumn("Nettom. %", width="small"),
-                "roic":       st.column_config.TextColumn("ROIC %", width="small"),
-            },
-        )
-        st.caption("Dominanz-Indikator: Rang + Sektor-Anteil messen die "
-                   "relative Groesse — fuer Marktfuehrerschaft zusaetzlich "
-                   "Margen und ROIC gegen die Peers lesen.")
+t_news, t_sig, t_screen = st.tabs(
+    ["Termine & News", "Signale", "Screener"])
 
 
 # --- Termine & News ---
