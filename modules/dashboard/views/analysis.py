@@ -1968,6 +1968,202 @@ def _render_pf_overview(ticker: str, src) -> None:
                    "Portfolio-Kontext.")
 
 
+# ---- Gesamt-Qualitaets-Score (aus Ad-Hoc): 5 gewichtete Themen ----
+def _gs_subscore(checks):
+    if not checks:
+        return None
+    return sum(1 for _, ok in checks if ok) / len(checks)
+
+
+def _gs_balance(ticker):
+    bs = _balance(ticker)
+    if bs is None:
+        return None
+    t = _SCORE["thresholds"]["balance_sheet"]
+    out = []
+    cr = fm.safe_div(bs.assets_current, bs.liabilities_current)
+    if cr is not None:
+        out.append((f"Current Ratio > {de_dec(t['current_ratio_min'], 1)}",
+                    cr > t["current_ratio_min"]))
+    if bs.net_debt is not None:
+        out.append(("Netto-Cash (Net Debt < 0)", bs.net_debt < 0))
+    de = fm.safe_div(bs.total_debt, bs.equity)
+    if de is not None:
+        out.append((f"Debt/Equity < {de_dec(t['debt_to_equity_max'], 1)}",
+                    de < t["debt_to_equity_max"]))
+    eqr = fm.safe_div(bs.equity, bs.total_assets)
+    if eqr is not None:
+        out.append((f"Eigenkapitalquote > {_pct(t['equity_ratio_min'], 0)}",
+                    eqr > t["equity_ratio_min"]))
+    return out or None
+
+
+def _gs_returns(ticker):
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if not ym:
+        return None
+    rets = [fm.returns_from_metrics(d) for d in ym]
+    t = _SCORE["thresholds"]["return_on_capital"]
+    rl = rets[-1]
+    out = []
+    if rl.get("roic") is not None:
+        out.append((f"ROIC > {_pct(t['roic_min'], 0)}",
+                    rl["roic"] > t["roic_min"]))
+    if rl.get("roe") is not None:
+        out.append((f"ROE > {_pct(t['roe_min'], 0)}",
+                    rl["roe"] > t["roe_min"]))
+    if rl.get("roa") is not None:
+        out.append((f"ROA > {_pct(t['roa_min'], 0)}",
+                    rl["roa"] > t["roa_min"]))
+    all_roic = [r.get("roic") for r in rets if r.get("roic") is not None]
+    if len(all_roic) >= 2:
+        out.append(("ROIC durchgehend positiv", all(x > 0 for x in all_roic)))
+    return out or None
+
+
+def _gs_sbc(ticker):
+    rows = _sbc_hist(ticker, N_YEARS, PERIOD)
+    if not rows:
+        return None
+    last = rows[-1]
+    t = _SCORE["thresholds"]["stock_based_comp"]
+    sbc_rev = fm.safe_div(last.get("sbc"), last.get("revenue"))
+    sbc_cfo = fm.safe_div(last.get("sbc"), last.get("cfo"))
+    adj = fm.split_adjust_shares(rows, _splits(ticker))
+    sh = [(d["period_end"], d["diluted_shares"]) for d in adj
+          if d.get("diluted_shares")]
+    dil = None
+    if len(sh) >= 2:
+        yrs = (pd.to_datetime(sh[-1][0]) - pd.to_datetime(sh[0][0])).days \
+            / 365.25
+        if yrs >= 1:
+            dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
+    out = []
+    if sbc_rev is not None:
+        out.append((f"SBC < {_pct(t['sbc_to_revenue_max'], 0)} vom Umsatz",
+                    sbc_rev < t["sbc_to_revenue_max"]))
+    if sbc_cfo is not None:
+        out.append((f"SBC < {_pct(t['sbc_to_cfo_max'], 0)} vom operativen "
+                    "Cashflow", sbc_cfo < t["sbc_to_cfo_max"]))
+    if dil is not None:
+        out.append((f"Aktienzahl ≤ +{_pct(t['dilution_cagr_max'], 0)} p.a.",
+                    dil <= t["dilution_cagr_max"]))
+    return out or None
+
+
+def _gs_gaap(ticker):
+    ng = _nongaap(ticker)
+    if ng.get("categories") is None and ng.get("mentions") is None:
+        return None
+    t = _SCORE["thresholds"]["gaap_vs_non_gaap"]
+    cats = ng.get("categories") or {}
+    mentions = ng.get("mentions") or 0
+    return [
+        (f"Non-GAAP-Nutzung moderat (< {t['mentions_max']} Erwaehnungen)",
+         mentions < t["mentions_max"]),
+        ("SBC NICHT herausgerechnet", not ng.get("adds_back_sbc")),
+        (f"≤ {t['categories_max']} Anpassungskategorien",
+         len(cats) <= t["categories_max"]),
+    ]
+
+
+def _gs_insider(ticker):
+    tx = _insider_tx(ticker)
+    if not tx:
+        return None
+    years = N_YEARS if PERIOD == "annual" else max(1, N_YEARS // 4)
+    cutoff = (date.today() - timedelta(days=int(years) * 365)).isoformat()
+    df = pd.DataFrame(tx)
+    if not df.empty and "transaction_date" in df.columns:
+        df = df[df["transaction_date"] >= cutoff]
+    buy_val = sell_val = 0.0
+    n_buyers = n_sellers = 0
+    if not df.empty and "code" in df.columns:
+        buys, sells = df[df["code"] == "P"], df[df["code"] == "S"]
+        if "value" in df.columns:
+            buy_val = float(buys["value"].fillna(0).sum())
+            sell_val = float(sells["value"].fillna(0).sum())
+        if "owner" in df.columns:
+            n_buyers = int(buys["owner"].nunique())
+            n_sellers = int(sells["owner"].nunique())
+    cm = _SCORE["thresholds"]["insider"]["cluster_buyers_min"]
+    return [
+        ("Netto-Insiderkaeufe (Wert)", (buy_val - sell_val) > 0),
+        ("Mehr Kaeufer als Verkaeufer", n_buyers > n_sellers),
+        (f"Cluster-Kauf (>= {cm} Kaeufer)", n_buyers >= cm),
+    ]
+
+
+_GS_THEMES = [
+    ("Return on Capital", "return_on_capital", _gs_returns),
+    ("Balance Sheet", "balance_sheet", _gs_balance),
+    ("Stock-based Comp.", "stock_based_comp", _gs_sbc),
+    ("GAAP vs non-GAAP", "gaap_vs_non_gaap", _gs_gaap),
+    ("Insider", "insider", _gs_insider),
+]
+
+
+def _render_gesamt_score(ticker: str, src) -> None:
+    """Gesamt-Qualitaets-Score (aus Ad-Hoc): gewichteter Mittelwert ueber
+    fuenf Themen (fehlende ausgeklammert, Gewichte renormiert)."""
+    weights, bands = _SCORE["weights"], _SCORE["bands"]
+    rows = []
+    num = den = 0.0
+    for name, key, fn in _GS_THEMES:
+        try:
+            checks = fn(ticker)
+        except Exception:  # noqa: BLE001
+            checks = None
+        w = weights.get(key, 0)
+        sub = _gs_subscore(checks)
+        if sub is not None:
+            num += sub * w
+            den += w
+        rows.append({"Thema": name, "checks": checks, "sub": sub, "w": w})
+
+    if den == 0:
+        st.info("Keine Themen lieferten Daten — Ticker pruefen.")
+        return
+    score = round(100 * num / den)
+    n_ok = sum(1 for r in rows if r["sub"] is not None)
+    box = (st.success if score >= bands["strong"]
+           else st.info if score >= bands["mixed"] else st.warning)
+    verdict = ("hohe Qualitaet" if score >= bands["strong"]
+               else "gemischt" if score >= bands["mixed"] else "schwach")
+    box(f"## {score}/100 — {verdict}")
+    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/5 auswertbare Themen "
+               "(fehlende ausgeklammert, Gewichte renormiert).")
+
+    bar = pd.DataFrame([{
+        "Thema": r["Thema"],
+        "Score": round(100 * r["sub"]) if r["sub"] is not None else None,
+        "Gewicht": r["w"]} for r in rows])
+    fig = go.Figure(go.Bar(
+        x=bar["Score"], y=bar["Thema"], orientation="h",
+        marker_color=["#1D9E75" if (s is not None and s >= bands["strong"])
+                      else "#B4862B" if (s is not None and s >= bands["mixed"])
+                      else "#A32D2D" if s is not None else "#CFCDC6"
+                      for s in bar["Score"]],
+        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
+        textposition="auto", hovertemplate="%{y}: %{x}/100<extra></extra>"))
+    fig.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10),
+                      xaxis=dict(range=[0, 100], title="Teil-Score"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    for r in rows:
+        w_pct = f"{int(r['w'] * 100)} %"
+        if r["sub"] is None:
+            st.markdown(f"**{r['Thema']}** · Gewicht {w_pct} — _keine Daten / "
+                        "nicht auswertbar_")
+            continue
+        with st.expander(f"{r['Thema']} · {round(100 * r['sub'])}/100 · "
+                         f"Gewicht {w_pct}"):
+            for name, ok in r["checks"]:
+                st.markdown(f"{'✅' if ok else '❌'} {name}")
+    st.caption("Score = gewichteter Anteil erfuellter Qualitaets-Kriterien je "
+               "Thema. Heuristik, kein Anlageurteil.")
+
+
 CATEGORIES: list[Category] = [
     Category("overview", "Ueberblick", err_label="Ueberblick",
              reports=[
@@ -2093,6 +2289,16 @@ CATEGORIES: list[Category] = [
                  Report("pf_signale", "Signale & Alerts", _render_pf_signale),
                  Report("pf_overview", "Portfolio", _render_pf_overview,
                         status="beta", expanded=False),
+             ]),
+    Category("gesamt_score", "Gesamt Score",
+             question="Gesamt-Qualitaets-Score",
+             desc="Gewichteter Score ueber Return on Capital, Balance Sheet, "
+                  "SBC, GAAP vs non-GAAP, Insider (aus Ad-Hoc).",
+             err_label="Gesamt-Score",
+             reports=[
+                 Report("gesamt", "Gesamt-Qualitaets-Score",
+                        _render_gesamt_score, status="beta", lazy=True,
+                        expanded=False),
              ]),
 ]
 
