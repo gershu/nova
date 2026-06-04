@@ -651,8 +651,8 @@ def _sankey_guv(r: dict, cur: str) -> None:
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_balance_tab(ticker: str, src) -> None:
-    """Tab 3 — Ist die Bilanz solide?"""
+def _render_bal_snapshot(ticker: str, src) -> None:
+    """Bilanz-Report: Soliditaets-Check + Kennzahlen (juengster Stichtag)."""
     cur = src.currency or "USD"
     bs = _balance(ticker)
     if bs is None:
@@ -701,39 +701,44 @@ def render_balance_tab(ticker: str, src) -> None:
     m2[1].metric("Eigenkapitalquote", _pct(eqr))
     m2[2].metric("Goodwill + Intangibles", _pct(intang_pct))
 
+
+def _render_bal_trend(ticker: str, src) -> None:
+    """Bilanz-Report: Verlauf Current Ratio / Debt-Equity / Net Debt."""
+    cur = src.currency or "USD"
     hist = _balance_hist(ticker, N_YEARS, PERIOD)
-    if len(hist) >= 2:
-        bdf = pd.DataFrame([{
-            "period_end": pd.to_datetime(b.period_end),
-            "current_ratio": fm.safe_div(b.assets_current,
-                                         b.liabilities_current),
-            "debt_to_equity": fm.safe_div(b.total_debt, b.equity),
-            "net_debt": b.net_debt,
-        } for b in hist])
-        st.markdown("#### Trend (10-K, jaehrlich)")
-        t1, t2 = st.columns(2)
-        f1 = go.Figure()
-        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["current_ratio"],
-                                name="Current Ratio", mode="lines+markers",
-                                line=dict(color="#0F6E56", width=2)))
-        f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["debt_to_equity"],
-                                name="Debt/Equity", mode="lines+markers",
-                                line=dict(color="#A32D2D", width=2)))
-        f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                         title="Current Ratio & Debt/Equity",
-                         legend=dict(orientation="h", y=-0.2),
-                         hovermode="x unified")
-        t1.plotly_chart(f1, use_container_width=True)
-        nd_col = ["#1D9E75" if (v is not None and v < 0) else "#A32D2D"
-                  for v in bdf["net_debt"]]
-        f2 = go.Figure(go.Bar(x=bdf["period_end"], y=bdf["net_debt"],
-                              marker_color=nd_col,
-                              hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
-                                            "<extra></extra>"))
-        f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                         title=f"Net Debt ({cur}) — gruen = Netto-Cash",
-                         yaxis_title=cur)
-        t2.plotly_chart(f2, use_container_width=True)
+    if len(hist) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    bdf = pd.DataFrame([{
+        "period_end": pd.to_datetime(b.period_end),
+        "current_ratio": fm.safe_div(b.assets_current,
+                                     b.liabilities_current),
+        "debt_to_equity": fm.safe_div(b.total_debt, b.equity),
+        "net_debt": b.net_debt,
+    } for b in hist])
+    t1, t2 = st.columns(2)
+    f1 = go.Figure()
+    f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["current_ratio"],
+                            name="Current Ratio", mode="lines+markers",
+                            line=dict(color="#0F6E56", width=2)))
+    f1.add_trace(go.Scatter(x=bdf["period_end"], y=bdf["debt_to_equity"],
+                            name="Debt/Equity", mode="lines+markers",
+                            line=dict(color="#A32D2D", width=2)))
+    f1.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title="Current Ratio & Debt/Equity",
+                     legend=dict(orientation="h", y=-0.2),
+                     hovermode="x unified")
+    t1.plotly_chart(f1, use_container_width=True)
+    nd_col = ["#1D9E75" if (v is not None and v < 0) else "#A32D2D"
+              for v in bdf["net_debt"]]
+    f2 = go.Figure(go.Bar(x=bdf["period_end"], y=bdf["net_debt"],
+                          marker_color=nd_col,
+                          hovertemplate="%{x|" + _XHOVER + "}<br>%{y:,.0f}"
+                                        "<extra></extra>"))
+    f2.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Net Debt ({cur}) — gruen = Netto-Cash",
+                     yaxis_title=cur)
+    t2.plotly_chart(f2, use_container_width=True)
 
 
 def render_valuation_tab(ticker: str, src) -> None:
@@ -1231,11 +1236,17 @@ CATEGORIES: list[Category] = [
              desc="Moat-Score (Margen-Stabilitaet, ROIC-Stabilitaet, "
                   "F&E-Effizienz, Rueckkaeufe, Marktanteil) + Peers.",
              err_label="Burggraben", is_question=True),
-    Category("balance", "3 Bilanz", render_balance_tab,
+    Category("balance", "3 Bilanz",
              question="Ist die Bilanz solide?",
              desc="Current/Quick Ratio, Net Debt, Debt/Equity, "
                   "Eigenkapitalquote, Goodwill-Anteil + Trend.",
-             err_label="Bilanz", is_question=True),
+             err_label="Bilanz", is_question=True,
+             reports=[
+                 Report("bal_snapshot", "Soliditaet & Kennzahlen",
+                        _render_bal_snapshot),
+                 Report("bal_trend", "Bilanz-Trend (Verlauf)",
+                        _render_bal_trend),
+             ]),
     Category("management", "4 Management", render_management_tab,
              question="Ist das Management gut?",
              desc="Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
