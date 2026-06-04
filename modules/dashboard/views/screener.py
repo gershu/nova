@@ -135,14 +135,21 @@ else:
 # ---------- 2. Picks-Tabelle + Detail-Panel ----------
 
 if selected_run:
-    picks = run_query("""
-        SELECT rank, symbol, name, sector, market_cap,
-               quality_score, growth_score, value_score, composite_score,
-               trend_flags_json, criteria_detail_json, metrics_json,
-               ref_instrument_id
-        FROM sig_screen_picks
-        WHERE run_id = ?
-        ORDER BY rank
+    # Vorberechnete Gesamt-Qualitaets-Scores (Batch) joinen, falls vorhanden.
+    _has_qs = table_exists("ref_quality_score")
+    _qs_sel = (", q.score AS qscore_db, q.computed_at AS qscore_at"
+               if _has_qs else "")
+    _qs_join = ("LEFT JOIN ref_quality_score q USING (ref_instrument_id)"
+                if _has_qs else "")
+    picks = run_query(f"""
+        SELECT p.rank, p.symbol, p.name, p.sector, p.market_cap,
+               p.quality_score, p.growth_score, p.value_score,
+               p.composite_score, p.trend_flags_json, p.criteria_detail_json,
+               p.metrics_json, p.ref_instrument_id{_qs_sel}
+        FROM sig_screen_picks p
+        {_qs_join}
+        WHERE p.run_id = ?
+        ORDER BY p.rank
     """, (selected_run,))
 
     if picks.empty:
@@ -158,32 +165,50 @@ if selected_run:
         display["MV (Mrd)"] = display["market_cap"].apply(
             lambda v: de_dec(v / 1e9, 1) if pd.notna(v) else "—")
 
-        # --- Optional: on-Demand Gesamt-Qualitaets-Score (Shearn) ---
+        # --- Gesamt-Qualitaets-Score (Shearn): vorberechnet (Batch) per
+        #     Default, optional live on-Demand neu rechnen. ---
         _q1, _q2 = st.columns([2, 1])
-        _q_on = _q1.toggle(
-            "Gesamt-Qualitaets-Score laden (on-Demand, SEC-Filings)",
+        _live = _q1.toggle(
+            "Gesamt-Qualitaets-Score live neu berechnen (SEC-Filings)",
             key="sk_qscore_on",
-            help="Berechnet je Pick den 5-Themen-Score (Shearn-Checkliste) "
-                 "aus SEC-Filings — langsam, pro Ticker 24 h gecached. "
-                 "Ergaenzt das schnelle Q/G/V-Composite aus Fundamentaldaten.")
+            help="Standard: vorberechnete Werte aus ref_quality_score "
+                 "(Batch `python -m modules.quality_score run`). Aktiviert: "
+                 "je Pick on-Demand aus SEC-Filings neu rechnen (langsam, "
+                 "24 h gecached).")
+        _have_qcol = _has_qs or _live
         _min_q = _q2.slider("Min Q-Score", 0, 100, 0, 5, key="sk_minq",
-                            disabled=not _q_on)
+                            disabled=not _have_qcol)
         cols = ["rank", "symbol", "name", "sector", "MV (Mrd)",
                 "quality_score", "growth_score", "value_score",
                 "composite_score", "trends"]
-        if _q_on:
-            with st.spinner(f"Berechne Gesamt-Qualitaets-Score fuer "
-                            f"{len(display)} Picks …"):
-                display["qscore"] = [
-                    (_quality_score(s) if s else None)
-                    for s in display["symbol"]]
+        if _have_qcol:
+            if _live:
+                with st.spinner(f"Berechne Gesamt-Qualitaets-Score fuer "
+                                f"{len(display)} Picks …"):
+                    display["qscore"] = [
+                        (_quality_score(s) if s else None)
+                        for s in display["symbol"]]
+            else:
+                display["qscore"] = pd.to_numeric(
+                    display.get("qscore_db"), errors="coerce")
             if _min_q > 0:
                 keep = display["qscore"].fillna(-1) >= _min_q
                 display, picks = display[keep], picks[keep]
             display = display.reset_index(drop=True)
             picks = picks.reset_index(drop=True)
             cols.insert(9, "qscore")  # vor "trends"
-            st.caption(f"{len(display)} Picks mit Q-Score ≥ {_min_q}.")
+            if _has_qs and not _live:
+                _stand = pd.to_datetime(display.get("qscore_at"),
+                                        errors="coerce").max() \
+                    if "qscore_at" in display.columns else None
+                _suffix = (f" · Stand {str(_stand)[:16]}"
+                           if pd.notna(_stand) else
+                           " · noch nicht vorberechnet (Batch laufen lassen)")
+                st.caption(f"Q-Score vorberechnet{_suffix}. "
+                           f"{len(display)} mit Q-Score ≥ {_min_q}.")
+            else:
+                st.caption(f"{len(display)} Picks mit Q-Score ≥ {_min_q} "
+                           "(live berechnet).")
 
         _colcfg = {
             "rank": st.column_config.NumberColumn("#", width="small"),
