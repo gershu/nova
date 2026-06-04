@@ -229,6 +229,206 @@ def _money(v, cur: str = "USD") -> str:
     return f"{de_dec(v, 0)} {cur}"
 
 
+
+def _series_at(m: dict, period_iso: str, tol_days: int = 45):
+    """Wert aus {iso_date: value} am naechsten zu period_iso (<= tol_days).
+
+    Fuer Zeitreihen (PP&E/Mitarbeiter via company-concept, Jahresend-Kurse),
+    deren Stichtage nicht exakt auf das Bilanzdatum fallen. None, wenn nichts
+    innerhalb der Toleranz liegt.
+    """
+    if not m:
+        return None
+    try:
+        target = date.fromisoformat(str(period_iso)[:10])
+    except (TypeError, ValueError):
+        return None
+    best_v = best_d = None
+    for k, v in m.items():
+        try:
+            dk = date.fromisoformat(str(k)[:10])
+        except (TypeError, ValueError):
+            continue
+        dd = abs((dk - target).days)
+        if dd <= tol_days and (best_d is None or dd < best_d):
+            best_d, best_v = dd, v
+    return best_v
+
+_STATUS_BADGE = {"stable": "", "beta": "  ·  🟡 beta", "todo": "  ·  🔴 todo"}
+
+
+def _rep_label(title: str, status: str = "stable") -> str:
+    return f"{title}{_STATUS_BADGE.get(status, '')}"
+
+
+def _lazy_report(title: str, key: str, render_fn, *args,
+                 status: str = "beta", expanded: bool = False) -> None:
+    """Bericht als aufklappbarer Bereich; teure Daten erst auf Knopfdruck.
+
+    Streamlit fuehrt Expander-Inhalte bei jedem Rerun aus (auch zugeklappt),
+    daher wird das Laden ueber Button + session_state gated — die API-Calls
+    feuern erst, wenn der Bericht wirklich angefordert wurde.
+    """
+    with st.expander(_rep_label(title, status), expanded=expanded):
+        sk = f"lazy_{key}"
+        if st.session_state.get(sk) or st.button("Bericht laden",
+                                                 key=f"btn_{sk}"):
+            st.session_state[sk] = True
+            try:
+                render_fn(*args)
+            except Exception as e:  # noqa: BLE001
+                st.warning(f"{title} nicht ladbar: "
+                           f"{e.__class__.__name__}: {e}")
+        else:
+            st.caption("On-Demand — Button klicken (laedt mehrere API-Calls).")
+
+
+def _render_re_eps_ev(ticker: str, src) -> None:
+    """RE / EPS / Equity / FCF / EV — Verlauf (lazy, mehrere API-Calls)."""
+    cur = src.currency or "USD"
+    eh = _earnings_hist(ticker, N_YEARS, PERIOD)
+    if len(eh) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    splits = _splits(ticker)
+    yends = [str(d["period_end"])[:10] for d in eh]
+    start = (pd.to_datetime(min(yends)) - pd.Timedelta(days=10)) \
+        .date().isoformat()
+    px = _prices(ticker, start, date.today().isoformat())
+
+    def _evy(d):
+        sh = d.get("diluted_shares")
+        if sh:
+            sh *= fm.split_factor(splits, str(d["period_end"])[:10])
+        c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
+        return (c * sh + (d.get("net_debt") or 0.0)
+                if (c and sh) else None)
+
+    def _adj(d, key):
+        v = d.get(key)
+        return (v / fm.split_factor(splits, str(d["period_end"])[:10])
+                if v is not None else None)
+
+    edf = pd.DataFrame([{
+        "pe": pd.to_datetime(d["period_end"]),
+        "retained": d.get("retained_earnings"),
+        "equity": d.get("equity"), "fcf": d.get("fcf"),
+        "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
+        "ev": _evy(d)} for d in eh])
+
+    t1, t2 = st.columns(2)
+    rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+          for v in edf["retained"]]
+    f1 = go.Figure(go.Bar(x=edf["pe"], y=edf["retained"],
+                          marker_color=rc))
+    f1.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Gewinnruecklagen ({cur})")
+    t1.plotly_chart(f1, use_container_width=True)
+    f2 = go.Figure(go.Bar(x=edf["pe"], y=edf["equity"],
+                          marker_color="#1D9E75"))
+    f2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Eigenkapital ({cur})")
+    t2.plotly_chart(f2, use_container_width=True)
+
+    t3, t4 = st.columns(2)
+    f3 = go.Figure()
+    f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_b"],
+                            name="EPS unverw.", mode="lines+markers",
+                            line=dict(color="#0F6E56", width=2),
+                            connectgaps=False))
+    f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_d"],
+                            name="EPS verw.", mode="lines+markers",
+                            line=dict(color="#B4862B", width=2),
+                            connectgaps=False))
+    f3.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"EPS ({cur}, split-bereinigt)",
+                     legend=dict(orientation="h", y=-0.3))
+    t3.plotly_chart(f3, use_container_width=True)
+    fc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
+          for v in edf["fcf"]]
+    f4 = go.Figure(go.Bar(x=edf["pe"], y=edf["fcf"], marker_color=fc))
+    f4.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                     title=f"Free Cash Flow ({cur})")
+    t4.plotly_chart(f4, use_container_width=True)
+
+    if edf["ev"].notna().any():
+        f5 = go.Figure(go.Scatter(
+            x=edf["pe"], y=edf["ev"], mode="lines+markers",
+            line=dict(color="#444441", width=2), connectgaps=False))
+        f5.update_layout(height=260,
+                         margin=dict(l=10, r=10, t=30, b=10),
+                         title=f"Enterprise Value ({cur}, "
+                               "Jahresend-Kurs × Aktien + Net Debt)")
+        st.plotly_chart(f5, use_container_width=True)
+    st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
+               "Naeherung (Jahresend-Kurs).")
+
+
+def _render_fcf_alloc(ticker: str, src) -> None:
+    """FCF-Verwendung (Kapitalallokation, Verlauf) — lazy."""
+    cur = src.currency or "USD"
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    if len(ym) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    af = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "Rueckkaeufe": _abs_or(d.get("buybacks")),
+        "Dividenden": _abs_or(d.get("dividends")),
+        "Reinvestition": _abs_or(d.get("capex")),
+        "Akquisitionen": _abs_or(d.get("acquisitions")),
+    } for d in ym])
+    fig = go.Figure()
+    for name, color in [("Rueckkaeufe", "#0F6E56"),
+                        ("Dividenden", "#5DCAA5"),
+                        ("Reinvestition", "#1D9E75"),
+                        ("Akquisitionen", "#B4862B")]:
+        fig.add_trace(go.Bar(name=name, x=af["period_end"],
+                             y=af[name], marker_color=color))
+    fig.add_trace(go.Scatter(
+        name="Free Cash Flow", x=af["period_end"],
+        y=[d.get("fcf") for d in ym], mode="lines+markers",
+        line=dict(color="#444441", width=2, dash="dot")))
+    fig.update_layout(barmode="stack", height=320,
+                      margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title=cur, legend=dict(orientation="h",
+                                                   y=-0.2),
+                      hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("Mittelverwendung (positive Betraege) + FCF-Linie. "
+               "Zeigt, wie der freie Cashflow allokiert wird.")
+
+
+def _render_sbc_trend(ticker: str, src) -> None:
+    """Stock-based Compensation (Verlauf) — lazy."""
+    sbc_rows = _sbc_hist(ticker, N_YEARS, PERIOD)
+    if len(sbc_rows) < 2:
+        st.caption("Mind. 2 Perioden noetig.")
+        return
+    sdf = pd.DataFrame([{
+        "period_end": pd.to_datetime(d["period_end"]),
+        "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
+        "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
+    } for d in sbc_rows])
+    f1 = go.Figure()
+    f1.add_trace(go.Scatter(
+        x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
+        name="SBC / Umsatz", mode="lines+markers",
+        line=dict(color="#A32D2D", width=2), connectgaps=False))
+    f1.add_trace(go.Scatter(
+        x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
+        name="SBC / operativer CF", mode="lines+markers",
+        line=dict(color="#B4862B", width=2), connectgaps=False))
+    f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
+                     title="SBC-Belastung", yaxis_title="%",
+                     legend=dict(orientation="h", y=-0.25),
+                     hovermode="x unified")
+    st.plotly_chart(f1, use_container_width=True)
+    st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
+               "SBC-Quote = wachsende nicht-zahlungswirksame "
+               "Verguetung.")
+
+
 def render_business(ticker: str, src) -> None:
     """Tab 1 — Ist das Geschaeft gut? (Wachstum, Margen, Renditen, FCF)."""
     cur = src.currency or "USD"
@@ -316,20 +516,13 @@ def render_business(ticker: str, src) -> None:
                            title=f"Umsatz ({cur})", yaxis_title=cur)
         st.plotly_chart(fig2, use_container_width=True)
 
-    # --- Umsatz & GuV (Segmente, Kostenaufteilung, Sankey) ---
-    with st.expander("Umsatz & GuV — Segmente, Kostenaufteilung, Sankey"):
-        try:
-            _render_revenue_guv(ticker, src)
-        except Exception as e:  # noqa: BLE001
-            st.warning(f"Umsatz & GuV nicht ladbar: {e.__class__.__name__}")
-
-    # --- Physical Growth (button-gated, da Mitarbeiter-Text teuer) ---
-    with st.expander("Physical Growth (PP&E, CapEx, Mitarbeiter)"):
-        if st.button("Physical Growth laden", key=f"phys_{ticker}"):
-            _render_physical(ticker, cur)
-        else:
-            st.caption("Laedt PP&E/CapEx/Mitarbeiter + Index on-Demand "
-                       "(mehrere API-Calls).")
+    # --- Berichte (lazy, on-Demand) ---
+    _lazy_report("Umsatz & GuV — Segmente, Kostenaufteilung, Sankey",
+                 f"guv_{ticker}", _render_revenue_guv, ticker, src,
+                 status="beta")
+    _lazy_report("Physical Growth (PP&E, CapEx, Mitarbeiter)",
+                 f"phys_{ticker}", _render_physical, ticker, cur,
+                 status="beta")
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -594,83 +787,10 @@ def render_valuation_tab(ticker: str, src) -> None:
     st.caption("Bewertung mit aktuellem Marktpreis (yfinance) und letzter "
                "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
 
-    # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf ---
-    eh = _earnings_hist(ticker, N_YEARS, PERIOD)
-    if len(eh) >= 2:
-        with st.expander("Gewinnruecklagen, EPS, Equity, FCF & EV — "
-                         "Verlauf"):
-            splits = _splits(ticker)
-            yends = [str(d["period_end"])[:10] for d in eh]
-            start = (pd.to_datetime(min(yends)) - pd.Timedelta(days=10)) \
-                .date().isoformat()
-            px = _prices(ticker, start, date.today().isoformat())
-
-            def _evy(d):
-                sh = d.get("diluted_shares")
-                if sh:
-                    sh *= fm.split_factor(splits, str(d["period_end"])[:10])
-                c = _series_at(px, str(d["period_end"])[:10], tol_days=15)
-                return (c * sh + (d.get("net_debt") or 0.0)
-                        if (c and sh) else None)
-
-            def _adj(d, key):
-                v = d.get(key)
-                return (v / fm.split_factor(splits, str(d["period_end"])[:10])
-                        if v is not None else None)
-
-            edf = pd.DataFrame([{
-                "pe": pd.to_datetime(d["period_end"]),
-                "retained": d.get("retained_earnings"),
-                "equity": d.get("equity"), "fcf": d.get("fcf"),
-                "eps_b": _adj(d, "eps_basic"), "eps_d": _adj(d, "eps_diluted"),
-                "ev": _evy(d)} for d in eh])
-
-            t1, t2 = st.columns(2)
-            rc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
-                  for v in edf["retained"]]
-            f1 = go.Figure(go.Bar(x=edf["pe"], y=edf["retained"],
-                                  marker_color=rc))
-            f1.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Gewinnruecklagen ({cur})")
-            t1.plotly_chart(f1, use_container_width=True)
-            f2 = go.Figure(go.Bar(x=edf["pe"], y=edf["equity"],
-                                  marker_color="#1D9E75"))
-            f2.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Eigenkapital ({cur})")
-            t2.plotly_chart(f2, use_container_width=True)
-
-            t3, t4 = st.columns(2)
-            f3 = go.Figure()
-            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_b"],
-                                    name="EPS unverw.", mode="lines+markers",
-                                    line=dict(color="#0F6E56", width=2),
-                                    connectgaps=False))
-            f3.add_trace(go.Scatter(x=edf["pe"], y=edf["eps_d"],
-                                    name="EPS verw.", mode="lines+markers",
-                                    line=dict(color="#B4862B", width=2),
-                                    connectgaps=False))
-            f3.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"EPS ({cur}, split-bereinigt)",
-                             legend=dict(orientation="h", y=-0.3))
-            t3.plotly_chart(f3, use_container_width=True)
-            fc = ["#1D9E75" if (v is not None and v >= 0) else "#A32D2D"
-                  for v in edf["fcf"]]
-            f4 = go.Figure(go.Bar(x=edf["pe"], y=edf["fcf"], marker_color=fc))
-            f4.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
-                             title=f"Free Cash Flow ({cur})")
-            t4.plotly_chart(f4, use_container_width=True)
-
-            if edf["ev"].notna().any():
-                f5 = go.Figure(go.Scatter(
-                    x=edf["pe"], y=edf["ev"], mode="lines+markers",
-                    line=dict(color="#444441", width=2), connectgaps=False))
-                f5.update_layout(height=260,
-                                 margin=dict(l=10, r=10, t=30, b=10),
-                                 title=f"Enterprise Value ({cur}, "
-                                       "Jahresend-Kurs × Aktien + Net Debt)")
-                st.plotly_chart(f5, use_container_width=True)
-            st.caption("EPS und EV split-bereinigt; EV-Historie ist eine "
-                       "Naeherung (Jahresend-Kurs).")
+    # --- Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf (lazy) ---
+    _lazy_report("Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
+                 f"reval_{ticker}", _render_re_eps_ev, ticker, src,
+                 status="beta")
 
 
 def render_moat_tab(ticker: str, src) -> None:
@@ -945,62 +1065,15 @@ def render_management_tab(ticker: str, src) -> None:
                      _pct(dil) if dil is not None else "—",
                      help="+ = Verwaesserung, − = Rueckkauf (split-bereinigt)")
 
-    # --- FCF-Verwendung (Jahres-Trend) ---
-    if len(ym) >= 2:
-        with st.expander("FCF-Verwendung (Kapitalallokation, Verlauf)"):
-            af = pd.DataFrame([{
-                "period_end": pd.to_datetime(d["period_end"]),
-                "Rueckkaeufe": _abs_or(d.get("buybacks")),
-                "Dividenden": _abs_or(d.get("dividends")),
-                "Reinvestition": _abs_or(d.get("capex")),
-                "Akquisitionen": _abs_or(d.get("acquisitions")),
-            } for d in ym])
-            fig = go.Figure()
-            for name, color in [("Rueckkaeufe", "#0F6E56"),
-                                ("Dividenden", "#5DCAA5"),
-                                ("Reinvestition", "#1D9E75"),
-                                ("Akquisitionen", "#B4862B")]:
-                fig.add_trace(go.Bar(name=name, x=af["period_end"],
-                                     y=af[name], marker_color=color))
-            fig.add_trace(go.Scatter(
-                name="Free Cash Flow", x=af["period_end"],
-                y=[d.get("fcf") for d in ym], mode="lines+markers",
-                line=dict(color="#444441", width=2, dash="dot")))
-            fig.update_layout(barmode="stack", height=320,
-                              margin=dict(l=10, r=10, t=10, b=10),
-                              yaxis_title=cur, legend=dict(orientation="h",
-                                                           y=-0.2),
-                              hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-            st.caption("Mittelverwendung (positive Betraege) + FCF-Linie. "
-                       "Zeigt, wie der freie Cashflow allokiert wird.")
+    # --- FCF-Verwendung (Kapitalallokation, Verlauf) — lazy ---
+    _lazy_report("FCF-Verwendung (Kapitalallokation, Verlauf)",
+                 f"fcfalloc_{ticker}", _render_fcf_alloc, ticker, src,
+                 status="beta")
 
-    # --- Stock-based Compensation (Verlauf) ---
-    sbc_rows = _sbc_hist(ticker, N_YEARS, PERIOD)
-    if len(sbc_rows) >= 2:
-        with st.expander("Stock-based Compensation (SBC) — Verlauf"):
-            sdf = pd.DataFrame([{
-                "period_end": pd.to_datetime(d["period_end"]),
-                "sbc_rev": fm.safe_div(d.get("sbc"), d.get("revenue")),
-                "sbc_cfo": fm.safe_div(d.get("sbc"), d.get("cfo")),
-            } for d in sbc_rows])
-            f1 = go.Figure()
-            f1.add_trace(go.Scatter(
-                x=sdf["period_end"], y=sdf["sbc_rev"] * 100,
-                name="SBC / Umsatz", mode="lines+markers",
-                line=dict(color="#A32D2D", width=2), connectgaps=False))
-            f1.add_trace(go.Scatter(
-                x=sdf["period_end"], y=sdf["sbc_cfo"] * 100,
-                name="SBC / operativer CF", mode="lines+markers",
-                line=dict(color="#B4862B", width=2), connectgaps=False))
-            f1.update_layout(height=300, margin=dict(l=10, r=10, t=10, b=10),
-                             title="SBC-Belastung", yaxis_title="%",
-                             legend=dict(orientation="h", y=-0.25),
-                             hovermode="x unified")
-            st.plotly_chart(f1, use_container_width=True)
-            st.caption("SBC aus dem Cashflow-Statement. Hohe/steigende "
-                       "SBC-Quote = wachsende nicht-zahlungswirksame "
-                       "Verguetung.")
+    # --- Stock-based Compensation (SBC) — Verlauf — lazy ---
+    _lazy_report("Stock-based Compensation (SBC) — Verlauf",
+                 f"sbctrend_{ticker}", _render_sbc_trend, ticker, src,
+                 status="beta")
 
     st.caption("Tenure via fruehestes Insider-Filing (CIK). Ownership: "
                "DEF-14A (Insider) + 13F-Top-Sample (institutionell) + "
