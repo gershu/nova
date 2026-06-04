@@ -1556,6 +1556,126 @@ def _render_mgmt_ownership(ticker: str, src) -> None:
                "Untergrenzen.")
 
 
+def _render_mgmt_detail(ticker: str, src) -> None:
+    """Management-Report (aus Ad-Hoc): Stabilitaets-Verdict + Turnover je
+    Jahr + groesste Insider-Bestaende. Ergaenzt Tenure/Ownership oben."""
+    tx = _insider_tx(ticker)
+    changes = _mgmt_changes(ticker)
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    total_shares = ((ym[-1].get("shares_outstanding")
+                     or ym[-1].get("diluted_shares")) if ym else None)
+    years = N_YEARS if PERIOD == "annual" else max(1, N_YEARS // 4)
+    today = pd.Timestamp.utcnow()
+    df = pd.DataFrame(tx) if tx else pd.DataFrame()
+
+    # CEO-Tenure (fruehestes Insider-Filing der aktuellen Person)
+    ceo_ten = None
+    if not df.empty and "is_ceo" in df.columns:
+        sub = df[df["is_ceo"] == True]  # noqa: E712
+        if not sub.empty:
+            sub = sub.assign(_d=pd.to_datetime(sub["transaction_date"],
+                                               errors="coerce"))
+            cur_row = sub.sort_values("_d").iloc[-1]
+            owner = cur_row["owner"]
+            cik = (cur_row.get("owner_cik")
+                   if "owner_cik" in sub.columns else None)
+            f_iso = _first_filing(ticker, owner, cik)
+            if f_iso:
+                f_dt = pd.to_datetime(f_iso, utc=True, errors="coerce")
+                if pd.notna(f_dt):
+                    ceo_ten = (today - f_dt).days / 365.25
+
+    # Insider-Ownership: DEF 14A bevorzugt, sonst Form-4-Schaetzung
+    bo = _beneficial(ticker)
+    own = bo.get("group_pct") if bo else None
+    if own is None and not df.empty and "shares_following" in df.columns \
+            and total_shares:
+        held = df[df["shares_following"].notna()].copy()
+        held["gid"] = (held["owner_cik"].fillna(held["owner"])
+                       if "owner_cik" in held.columns else held["owner"])
+        held = held.sort_values("transaction_date")
+        a = held.groupby("gid").agg(
+            shares=("shares_following", "last"),
+            off=("is_officer", "max") if "is_officer" in held.columns
+            else ("shares_following", "size"),
+            dir=("is_director", "max") if "is_director" in held.columns
+            else ("shares_following", "size"))
+        mask = a["off"].astype(bool) | a["dir"].astype(bool)
+        own = fm.safe_div(float(a.loc[mask, "shares"].sum()), total_shares)
+
+    # Turnover (8-K Item 5.02) im Fenster
+    cutoff = today - pd.Timedelta(days=int(years) * 365)
+    chg_dts = pd.to_datetime([c.get("filed_at") for c in changes],
+                             errors="coerce", utc=True)
+    turnover = int((chg_dts >= cutoff).sum()) if len(chg_dts) else 0
+    per_year = turnover / max(1, int(years))
+
+    checks = []
+    if ceo_ten is not None:
+        checks.append(("CEO-Tenure ≥ 5 Jahre", ceo_ten >= 5))
+    if own is not None:
+        checks.append(("Insider Ownership ≥ 5 %", own >= 0.05))
+    checks.append((f"Management-Turnover ≤ 1/Jahr ({years} J)",
+                   per_year <= 1.0))
+    passed = sum(1 for _, ok in checks if ok)
+    r = passed / len(checks)
+    box = st.success if r >= 0.75 else st.info if r >= 0.5 else st.warning
+    verdict = ("stabil / engagiert" if r >= 0.75
+               else "durchschnittlich" if r >= 0.5
+               else "instabil / wenig Eigenanteil")
+    lines = "  \n".join(f"{'✅' if ok else '❌'} {n}" for n, ok in checks)
+    box(f"Management wirkt **{verdict}** — {passed}/{len(checks)}  \n{lines}")
+
+    if len(chg_dts):
+        cdf = pd.DataFrame({"dt": chg_dts})
+        cdf = cdf[cdf["dt"] >= cutoff]
+        if not cdf.empty:
+            cdf["Jahr"] = cdf["dt"].dt.year
+            per = cdf.groupby("Jahr").size().reset_index(name="Wechsel")
+            fig = go.Figure(go.Bar(x=per["Jahr"], y=per["Wechsel"],
+                                   marker_color="#B4862B"))
+            fig.update_layout(height=260, margin=dict(l=10, r=10, t=30, b=10),
+                              title="Management-Wechsel je Jahr (8-K 5.02)",
+                              yaxis_title="Anzahl")
+            st.plotly_chart(fig, use_container_width=True)
+
+    if not df.empty and "shares_following" in df.columns:
+        held = df[df["shares_following"].notna()].copy()
+        if not held.empty:
+            held["gid"] = (held["owner_cik"].fillna(held["owner"])
+                           if "owner_cik" in held.columns else held["owner"])
+            held = held.sort_values("transaction_date")
+            aggkw = {"shares": ("shares_following", "last"),
+                     "owner": ("owner", "last")}
+            for col, alias, how in [("relationship", "rel", "last"),
+                                    ("is_officer", "off", "max"),
+                                    ("is_director", "dir", "max"),
+                                    ("is_tenpct", "ten", "max")]:
+                if col in held.columns:
+                    aggkw[alias] = (col, how)
+            agg = held.groupby("gid").agg(**aggkw)
+            cols = agg.columns
+            with st.expander("Groesste Insider-Bestaende"):
+                top = agg.sort_values("shares", ascending=False).head(12)
+                st.dataframe(pd.DataFrame([{
+                    "Person": r2["owner"],
+                    "Funktion": (r2["rel"] if "rel" in cols else "—"),
+                    "Typ": ("Management"
+                            if ((r2.get("off") if "off" in cols else False)
+                                or (r2.get("dir") if "dir" in cols else False))
+                            else "10%-Eigner"
+                            if ("ten" in cols and r2["ten"]) else "—"),
+                    "Bestand (Stk.)": de_dec(r2["shares"], 0),
+                    "% ausstehend": (_pct(fm.safe_div(r2["shares"],
+                                                      total_shares))
+                                     if total_shares else "—"),
+                } for _g, r2 in top.iterrows()]),
+                    use_container_width=True, hide_index=True)
+    st.caption("Verdict aus CEO-Tenure, Insider-Ownership (DEF 14A bzw. "
+               "Form-4-Schaetzung) und Management-Turnover (8-K 5.02). "
+               "Tenure-/Ownership-Detail siehe Reports oben.")
+
+
 def _render_mgmt_capital(ticker: str, src) -> None:
     """Management-Report: Kapitalallokation + SBC/Verwaesserung (letztes
     Jahr)."""
@@ -2413,6 +2533,9 @@ CATEGORIES: list[Category] = [
                         _render_mgmt_insider_tx),
                  Report("mgmt_ownership", "Ownership-Struktur",
                         _render_mgmt_ownership),
+                 Report("mgmt_detail",
+                        "Management — Stabilitaet & Insider-Bestaende",
+                        _render_mgmt_detail),
              ]),
     Category("earnings_real", "5 Gewinne echt",
              question="Sind die Gewinne echt?",
