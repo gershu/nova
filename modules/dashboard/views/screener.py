@@ -25,8 +25,19 @@ import tempfile
 import pandas as pd
 import streamlit as st
 
+from modules.dashboard import quality as ql
 from modules.dashboard.components.format import de_dec, de_int
 from modules.dashboard.db import run_query, table_exists
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _quality_score(symbol: str):
+    """On-Demand Gesamt-Qualitaets-Score (Shearn, 0-100) — pro Ticker
+    gecached. None bei Fehler/fehlenden Daten."""
+    try:
+        return ql.overall_score(symbol).get("score")
+    except Exception:  # noqa: BLE001
+        return None
 
 
 st.title("🎯 Screener — Quality-GARP")
@@ -147,36 +158,52 @@ if selected_run:
         display["MV (Mrd)"] = display["market_cap"].apply(
             lambda v: de_dec(v / 1e9, 1) if pd.notna(v) else "—")
 
+        # --- Optional: on-Demand Gesamt-Qualitaets-Score (Shearn) ---
+        _q1, _q2 = st.columns([2, 1])
+        _q_on = _q1.toggle(
+            "Gesamt-Qualitaets-Score laden (on-Demand, SEC-Filings)",
+            key="sk_qscore_on",
+            help="Berechnet je Pick den 5-Themen-Score (Shearn-Checkliste) "
+                 "aus SEC-Filings — langsam, pro Ticker 24 h gecached. "
+                 "Ergaenzt das schnelle Q/G/V-Composite aus Fundamentaldaten.")
+        _min_q = _q2.slider("Min Q-Score", 0, 100, 0, 5, key="sk_minq",
+                            disabled=not _q_on)
+        cols = ["rank", "symbol", "name", "sector", "MV (Mrd)",
+                "quality_score", "growth_score", "value_score",
+                "composite_score", "trends"]
+        if _q_on:
+            with st.spinner(f"Berechne Gesamt-Qualitaets-Score fuer "
+                            f"{len(display)} Picks …"):
+                display["qscore"] = [
+                    (_quality_score(s) if s else None)
+                    for s in display["symbol"]]
+            if _min_q > 0:
+                keep = display["qscore"].fillna(-1) >= _min_q
+                display, picks = display[keep], picks[keep]
+            display = display.reset_index(drop=True)
+            picks = picks.reset_index(drop=True)
+            cols.insert(9, "qscore")  # vor "trends"
+            st.caption(f"{len(display)} Picks mit Q-Score ≥ {_min_q}.")
+
+        _colcfg = {
+            "rank": st.column_config.NumberColumn("#", width="small"),
+            "symbol": st.column_config.TextColumn("Symbol", width="small"),
+            "name": st.column_config.TextColumn("Name"),
+            "sector": st.column_config.TextColumn("Sektor"),
+            "MV (Mrd)": st.column_config.TextColumn("MV (Mrd)", width="small"),
+            "quality_score": "Quality", "growth_score": "Growth",
+            "value_score": "Value", "composite_score": "Composite",
+            "qscore": st.column_config.NumberColumn("Q-Score", width="small"),
+            "trends": st.column_config.TextColumn("Trends", width="small"),
+        }
         _evt = st.dataframe(
-            display[["rank", "symbol", "name", "sector", "MV (Mrd)",
-                     "quality_score", "growth_score", "value_score",
-                     "composite_score", "trends"]]
-                .style.format({
-                    "quality_score":   _fmt_score,
-                    "growth_score":    _fmt_score,
-                    "value_score":     _fmt_score,
-                    "composite_score": _fmt_score,
-                }),
+            display[cols].style.format({
+                "quality_score": _fmt_score, "growth_score": _fmt_score,
+                "value_score": _fmt_score, "composite_score": _fmt_score,
+            }),
             use_container_width=True, height=460, hide_index=True,
             on_select="rerun", selection_mode="single-row",
-            key="screener_picks_table",
-            column_config={
-                "rank":            st.column_config.NumberColumn("#",
-                                                                  width="small"),
-                "symbol":          st.column_config.TextColumn("Symbol",
-                                                                width="small"),
-                "name":            st.column_config.TextColumn("Name"),
-                "sector":          st.column_config.TextColumn("Sektor"),
-                "MV (Mrd)":        st.column_config.TextColumn(
-                                       "MV (Mrd)", width="small"),
-                "quality_score":   "Quality",
-                "growth_score":    "Growth",
-                "value_score":     "Value",
-                "composite_score": "Composite",
-                "trends":          st.column_config.TextColumn(
-                                       "Trends", width="small"),
-            },
-        )
+            key="screener_picks_table", column_config=_colcfg)
 
         st.caption(
             "Scores 0–100 = Anteil erfuellter Kriterien je Achse × 100. "

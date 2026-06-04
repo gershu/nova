@@ -24,6 +24,7 @@ from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
 from modules.dashboard import market as mkt
 from modules.dashboard import scoring as sc
+from modules.dashboard import quality as ql
 from modules.dashboard.score_config import CFG as _SCORE
 from modules.dashboard.components.format import _missing, de_dec
 
@@ -2344,114 +2345,31 @@ def _render_pf_overview(ticker: str, src) -> None:
                    "Portfolio-Kontext.")
 
 
-# ---- Gesamt-Qualitaets-Score (aus Ad-Hoc): 5 gewichtete Themen ----
-# Themen-Wrapper: laden die Daten und delegieren die pass/fail-Logik an das
-# zentrale scoring-Modul (gemeinsame Single Source mit den Report-Verdicts).
-def _gs_balance(ticker):
-    return sc.checks_balance(_balance(ticker),
-                             _SCORE["thresholds"]["balance_sheet"])
-
-
-def _gs_returns(ticker):
-    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
-    rets = [fm.returns_from_metrics(d) for d in ym]
-    return sc.checks_returns(rets, _SCORE["thresholds"]["return_on_capital"])
-
-
-def _gs_sbc(ticker):
-    rows = _sbc_hist(ticker, N_YEARS, PERIOD)
-    if not rows:
-        return []
-    last = rows[-1]
-    sbc_rev = fm.safe_div(last.get("sbc"), last.get("revenue"))
-    sbc_cfo = fm.safe_div(last.get("sbc"), last.get("cfo"))
-    adj = fm.split_adjust_shares(rows, _splits(ticker))
-    sh = [(d["period_end"], d["diluted_shares"]) for d in adj
-          if d.get("diluted_shares")]
-    dil = None
-    if len(sh) >= 2:
-        yrs = (pd.to_datetime(sh[-1][0]) - pd.to_datetime(sh[0][0])).days \
-            / 365.25
-        if yrs >= 1:
-            dil = fm.cagr(sh[0][1], sh[-1][1], yrs)
-    return sc.checks_sbc(sbc_rev, sbc_cfo, dil,
-                         _SCORE["thresholds"]["stock_based_comp"])
-
-
-def _gs_gaap(ticker):
-    ng = _nongaap(ticker)
-    if ng.get("categories") is None and ng.get("mentions") is None:
-        return []
-    return sc.checks_gaap(ng.get("mentions"), ng.get("adds_back_sbc"),
-                          len(ng.get("categories") or {}),
-                          _SCORE["thresholds"]["gaap_vs_non_gaap"])
-
-
-def _gs_insider(ticker):
-    tx = _insider_tx(ticker)
-    if not tx:
-        return []
-    years = N_YEARS if PERIOD == "annual" else max(1, N_YEARS // 4)
-    cutoff = (date.today() - timedelta(days=int(years) * 365)).isoformat()
-    df = pd.DataFrame(tx)
-    if not df.empty and "transaction_date" in df.columns:
-        df = df[df["transaction_date"] >= cutoff]
-    buy_val = sell_val = 0.0
-    n_buyers = n_sellers = 0
-    if not df.empty and "code" in df.columns:
-        buys, sells = df[df["code"] == "P"], df[df["code"] == "S"]
-        if "value" in df.columns:
-            buy_val = float(buys["value"].fillna(0).sum())
-            sell_val = float(sells["value"].fillna(0).sum())
-        if "owner" in df.columns:
-            n_buyers = int(buys["owner"].nunique())
-            n_sellers = int(sells["owner"].nunique())
-    return sc.checks_insider(buy_val, sell_val, n_buyers, n_sellers,
-                             _SCORE["thresholds"]["insider"])
-
-
-_GS_THEMES = [
-    ("Return on Capital", "return_on_capital", _gs_returns),
-    ("Balance Sheet", "balance_sheet", _gs_balance),
-    ("Stock-based Comp.", "stock_based_comp", _gs_sbc),
-    ("GAAP vs non-GAAP", "gaap_vs_non_gaap", _gs_gaap),
-    ("Insider", "insider", _gs_insider),
-]
+# ---- Gesamt-Qualitaets-Score: Orchestrierung in modules.dashboard.quality
+#      (Single Source — auch vom Screener genutzt). Hier nur Cache + Render. ----
+@st.cache_data(ttl=3600, show_spinner=False)
+def _overall_score(ticker: str, n: int, period: str):
+    return ql.overall_score(ticker, n_years=n, period=period)
 
 
 def _render_gesamt_score(ticker: str, src) -> None:
-    """Gesamt-Qualitaets-Score (aus Ad-Hoc): gewichteter Mittelwert ueber
-    fuenf Themen (fehlende ausgeklammert, Gewichte renormiert)."""
-    weights, bands = _SCORE["weights"], _SCORE["bands"]
-    rows = []
-    num = den = 0.0
-    for name, key, fn in _GS_THEMES:
-        try:
-            checks = fn(ticker)
-        except Exception:  # noqa: BLE001
-            checks = None
-        w = weights.get(key, 0)
-        sub = sc.subscore(checks)
-        if sub is not None:
-            num += sub * w
-            den += w
-        rows.append({"Thema": name, "checks": checks, "sub": sub, "w": w})
-
-    if den == 0:
+    """Gesamt-Qualitaets-Score: gewichteter Mittelwert ueber fuenf Themen
+    (fehlende ausgeklammert, Gewichte renormiert)."""
+    res = _overall_score(ticker, N_YEARS, PERIOD)
+    score, bands, rows = res["score"], res["bands"], res["rows"]
+    if score is None:
         st.info("Keine Themen lieferten Daten — Ticker pruefen.")
         return
-    score = round(100 * num / den)
-    n_ok = sum(1 for r in rows if r["sub"] is not None)
     box = (st.success if score >= bands["strong"]
            else st.info if score >= bands["mixed"] else st.warning)
     verdict = ("hohe Qualitaet" if score >= bands["strong"]
                else "gemischt" if score >= bands["mixed"] else "schwach")
     box(f"## {score}/100 — {verdict}")
-    st.caption(f"Gewichteter Mittelwert ueber {n_ok}/5 auswertbare Themen "
-               "(fehlende ausgeklammert, Gewichte renormiert).")
+    st.caption(f"Gewichteter Mittelwert ueber {res['n_ok']}/5 auswertbare "
+               "Themen (fehlende ausgeklammert, Gewichte renormiert).")
 
     bar = pd.DataFrame([{
-        "Thema": r["Thema"],
+        "Thema": r["theme"],
         "Score": round(100 * r["sub"]) if r["sub"] is not None else None,
         "Gewicht": r["w"]} for r in rows])
     fig = go.Figure(go.Bar(
@@ -2469,10 +2387,10 @@ def _render_gesamt_score(ticker: str, src) -> None:
     for r in rows:
         w_pct = f"{int(r['w'] * 100)} %"
         if r["sub"] is None:
-            st.markdown(f"**{r['Thema']}** · Gewicht {w_pct} — _keine Daten / "
+            st.markdown(f"**{r['theme']}** · Gewicht {w_pct} — _keine Daten / "
                         "nicht auswertbar_")
             continue
-        with st.expander(f"{r['Thema']} · {round(100 * r['sub'])}/100 · "
+        with st.expander(f"{r['theme']} · {round(100 * r['sub'])}/100 · "
                          f"Gewicht {w_pct}"):
             for name, ok in r["checks"]:
                 st.markdown(f"{'✅' if ok else '❌'} {name}")
