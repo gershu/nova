@@ -77,50 +77,6 @@ def _fmt_money_big(v, currency: str = "USD") -> str:
     return f"{s} {currency}".strip()
 
 
-_FMT = {"ratio": _ratio, "pct": _pct, "pct_raw": _pct_raw}
-
-
-# Kennzahl-Gruppen: (Spalte, Label, Format-Art)
-_VALUATION = [
-    ("pe_ttm",     "KGV (TTM)",        "ratio"),
-    ("pe_forward", "KGV (Forward)",    "ratio"),
-    ("peg_ratio",  "PEG-Ratio",        "ratio"),
-    ("pb",         "Kurs / Buchwert",  "ratio"),
-    ("ps_ttm",     "Kurs / Umsatz",    "ratio"),
-    ("p_fcf",      "Kurs / FCF",       "ratio"),
-    ("ev_ebitda",  "EV / EBITDA",      "ratio"),
-    ("ev_sales",   "EV / Umsatz",      "ratio"),
-]
-_PROFIT = [
-    ("gross_margin",     "Bruttomarge",            "pct"),
-    ("operating_margin", "Operative Marge",        "pct"),
-    ("net_margin",       "Nettomarge",             "pct"),
-    ("fcf_margin",       "FCF-Marge",              "pct"),
-    ("roe",              "Eigenkapitalrendite",    "pct"),
-    ("roa",              "Gesamtkapitalrendite",   "pct"),
-    ("roic",             "ROIC",                   "pct"),
-]
-_LEVERAGE = [
-    ("debt_to_equity",     "Verschuldungsgrad",         "ratio"),
-    ("net_debt_to_ebitda", "Nettoschulden / EBITDA",    "ratio"),
-    ("current_ratio",      "Liquiditaetsgrad 3",        "ratio"),
-    ("quick_ratio",        "Liquiditaetsgrad 2",        "ratio"),
-    ("interest_coverage",  "Zinsdeckungsgrad",          "ratio"),
-]
-_CASHDIV = [
-    ("fcf_yield",          "FCF-Rendite",          "pct"),
-    ("dividend_yield",     "Dividendenrendite",    "pct_raw"),
-    ("payout_ratio",       "Ausschuettungsquote",  "pct"),
-    ("dividend_per_share", "Dividende je Aktie",   "ratio"),
-]
-_GROWTH = [
-    ("revenue_cagr_5y",  "Umsatz-CAGR (5 J)",     "pct"),
-    ("eps_cagr_5y",      "EPS-CAGR (5 J)",        "pct"),
-    ("fcf_cagr_5y",      "FCF-CAGR (5 J)",        "pct"),
-    ("dividend_cagr_5y", "Dividenden-CAGR (5 J)", "pct"),
-]
-
-
 # ---------- Universum waehlen ----------
 
 _WATCHLISTS = {
@@ -274,93 +230,9 @@ a5.metric("Kurs (1 Jahr)",
 
 # ---------- Tabs ----------
 
-t_kpi, t_growth, t_guv, t_chart, t_peers, t_news, t_sig, t_screen = st.tabs(
-    ["Kennzahlen", "Wachstum & Momentum", "Umsatz & GuV", "Chart",
-     "Branche & Dominanz", "Termine & News", "Signale", "Screener"])
-
-
-def _metric_table(group: list[tuple[str, str, str]],
-                   sector_df: pd.DataFrame) -> None:
-    """Rendert eine Kennzahl-Gruppe mit Sektor-Median-Vergleich."""
-    rows = []
-    for col, label, kind in group:
-        raw = f[col] if f is not None else None
-        med = sector_df[col].median() if (col in sector_df
-                                          and not sector_df.empty) else None
-        fmt = _FMT[kind]
-        marker = "—"
-        if not _missing(raw) and not _missing(med):
-            marker = "▲" if float(raw) > float(med) else (
-                     "▼" if float(raw) < float(med) else "=")
-        rows.append({
-            "Kennzahl":      label,
-            "Wert":          fmt(raw),
-            "Sektor-Median": fmt(med),
-            "vs.":           marker,
-        })
-    st.dataframe(
-        pd.DataFrame(rows), use_container_width=True, hide_index=True,
-        column_config={
-            "Kennzahl":      st.column_config.TextColumn("Kennzahl"),
-            "Wert":          st.column_config.TextColumn("Wert"),
-            "Sektor-Median": st.column_config.TextColumn("Sektor-Median"),
-            "vs.": st.column_config.TextColumn(
-                "vs.", width="small",
-                help="▲ ueber / ▼ unter / = auf Sektor-Median"),
-        },
-    )
-
-
-# --- Kennzahlen ---
-with t_kpi:
-    if f is None:
-        st.info("Keine Fundamentaldaten fuer dieses Instrument hinterlegt.")
-    else:
-        _sec = fund_all[fund_all["sector"] == f["sector"]] \
-            if not _missing(f["sector"]) else fund_all.iloc[0:0]
-        st.caption(f"Sektor-Median aus {len(_sec)} Unternehmen im Sektor "
-                   f"„{f['sector'] or '—'}“.")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Bewertung**")
-            _metric_table(_VALUATION, _sec)
-            st.markdown("**Verschuldung & Liquiditaet**")
-            _metric_table(_LEVERAGE, _sec)
-        with c2:
-            st.markdown("**Profitabilitaet**")
-            _metric_table(_PROFIT, _sec)
-            st.markdown("**Cash & Dividende**")
-            _metric_table(_CASHDIV, _sec)
-
-
-# --- Wachstum & Momentum ---
-with t_growth:
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown("**Wachstum (5-Jahres-CAGR)**")
-        if f is None:
-            st.info("Keine Fundamentaldaten.")
-        else:
-            _grows = [{"Kennzahl": lbl, "Wert": _pct(f[col])}
-                      for col, lbl, _ in _GROWTH]
-            st.dataframe(pd.DataFrame(_grows), use_container_width=True,
-                         hide_index=True)
-            if all(_missing(f[c]) for c, _, _ in _GROWTH):
-                st.caption("⚠ 5-Jahres-CAGR-Felder sind in "
-                           "ref_fundamentals_latest noch nicht befuellt — "
-                           "Kurs-Momentum rechts dient als Ersatz.")
-    with g2:
-        st.markdown("**Kurs-Momentum (annualisiert nicht — Periodenrendite)**")
-        if not _returns:
-            st.info("Keine Kurshistorie.")
-        else:
-            _mom = [{"Zeitraum": k, "Rendite": f"{v * 100:+.1f} %"}
-                    for k, v in _returns.items()]
-            st.dataframe(pd.DataFrame(_mom), use_container_width=True,
-                         hide_index=True)
-            if not held.empty and pd.notna(held["valid_from"].min()):
-                st.caption(f"Im Bestand seit "
-                           f"{str(held['valid_from'].min())[:10]}.")
+t_guv, t_chart, t_peers, t_news, t_sig, t_screen = st.tabs(
+    ["Umsatz & GuV", "Chart", "Branche & Dominanz", "Termine & News",
+     "Signale", "Screener"])
 
 
 # --- Umsatz & GuV ---
