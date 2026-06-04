@@ -1174,16 +1174,24 @@ if PERIOD == "quarterly":
                "im 10-Q sind i.d.R. Year-to-Date — Renditen/FCF-Trends daher "
                "im Jahresmodus belastbarer.")
 
-# ---- Tabs aus der Metadaten-Registry generieren ----
-# (Verhaltensgleich zum bisherigen Aufbau; spaetere Schritte ersetzen
-#  st.tabs durch einen Navigator und machen die Inhalte lazy.)
-_tabs = st.tabs([c.title for c in CATEGORIES])
-for _tab, _cat in zip(_tabs, CATEGORIES):
-    with _tab:
-        if _cat.question:
-            st.markdown(f"#### {_cat.question}")
-        try:
-            _cat.render(ticker, src)
-        except Exception as e:  # noqa: BLE001
-            st.warning(f"{_cat.err_label} nicht ladbar: "
-                       f"{e.__class__.__name__}: {e}")
+# ---- Navigator aus der Metadaten-Registry ----
+# Einzelauswahl statt st.tabs: pro Rerun laeuft NUR die aktive Kategorie
+# (st.tabs rendert alle Tab-Inhalte bei jedem Rerun -> spuerbar langsamer).
+# segmented_control wenn vorhanden, sonst horizontales Radio als Fallback.
+_titles = [c.title for c in CATEGORIES]
+if hasattr(st, "segmented_control"):
+    _sel = st.segmented_control("Bereich", _titles, default=_titles[0],
+                                key="ana_nav",
+                                label_visibility="collapsed")
+else:
+    _sel = st.radio("Bereich", _titles, horizontal=True, key="ana_nav",
+                    label_visibility="collapsed")
+_cat = next((c for c in CATEGORIES if c.title == _sel), CATEGORIES[0])
+
+if _cat.question:
+    st.markdown(f"#### {_cat.question}")
+try:
+    _cat.render(ticker, src)
+except Exception as e:  # noqa: BLE001
+    st.warning(f"{_cat.err_label} nicht ladbar: "
+               f"{e.__class__.__name__}: {e}")
