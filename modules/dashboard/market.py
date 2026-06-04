@@ -44,3 +44,25 @@ def splits(ticker: str) -> dict:
                 if r and r > 0}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def company_info(ticker: str) -> dict:
+    """Stammdaten (Name, Sektor, Branche, Kurzbeschreibung, Market Cap) via
+    yfinance Ticker.info. Defensiv -> {} bei Fehler/fehlenden Feldern."""
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        try:
+            info = t.get_info() or {}
+        except Exception:  # noqa: BLE001
+            info = getattr(t, "info", {}) or {}
+        return {
+            "name": info.get("longName") or info.get("shortName"),
+            "sector": info.get("sector"),
+            "industry": info.get("industry"),
+            "summary": info.get("longBusinessSummary"),
+            "market_cap": info.get("marketCap"),
+            "currency": info.get("currency"),
+        }
+    except Exception:  # noqa: BLE001
+        return {}

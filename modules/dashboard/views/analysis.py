@@ -17,7 +17,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Callable, Optional
 
 from modules.dashboard import company_data as cd
@@ -69,6 +69,11 @@ def _balance_hist(ticker: str, n: int = 5, period: str = "annual"):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _latest_price(ticker: str):
     return mkt.latest_close(ticker)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _company_info(ticker: str):
+    return mkt.company_info(ticker)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -787,25 +792,6 @@ def _render_val_metrics(ticker: str, src) -> None:
                "Jahres-GuV/-Bilanz. EV/FCF & Yields wie im Earnings-Modul.")
 
 
-def _render_val_price(ticker: str, src) -> None:
-    """Bewertungs-Report: Kursverlauf (2 Jahre)."""
-    cur = src.currency or "USD"
-    end_iso = date.today().isoformat()
-    start_iso = (pd.to_datetime(end_iso) - pd.Timedelta(days=730)) \
-        .date().isoformat()
-    px = _prices(ticker, start_iso, end_iso)
-    if not px:
-        st.caption("Keine Kursdaten verfuegbar.")
-        return
-    pdf = pd.DataFrame(
-        [{"d": pd.to_datetime(k), "c": v} for k, v in sorted(px.items())])
-    fig = go.Figure(go.Scatter(x=pdf["d"], y=pdf["c"], mode="lines",
-                               line=dict(color="#0F6E56", width=1.5)))
-    fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
-                      title=f"Kurs ({cur}, 2 Jahre)", yaxis_title=cur)
-    st.plotly_chart(fig, use_container_width=True)
-
-
 def _render_moat_score(ticker: str, src) -> None:
     """Burggraben-Report: gewichteter Moat-Score aus 6 Signalen."""
     rows = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
@@ -1170,32 +1156,139 @@ def _render_report(rep: Report, ticker: str, src) -> None:
                        f"{e.__class__.__name__}: {e}")
 
 
-def render_overview(ticker: str, src) -> None:
-    """Ueberblick: Scorecard-Geruest + Datenbasis-Nachweis."""
-    st.markdown("#### Gesamturteil")
-    st.caption("Scorecard je Frage (Ampeln) folgt in Phase 3 — die "
-               "Score-Logik wird aus den bestehenden Ad-Hoc-Modulen "
-               "wiederverwendet.")
-    sc = [{"Frage": c.question, "Bewertung": "— (Phase 3)"}
+# Performance-Fenster: (Label, Kalendertage; None = YTD). 1D nur Tabelle.
+_PERF_WINDOWS = [("1D", 1), ("5D", 7), ("1M", 30), ("3M", 91),
+                 ("YTD", None), ("1Y", 365), ("5Y", 1825)]
+_CHART_WINDOWS = ["5D", "1M", "3M", "YTD", "1Y", "5Y"]
+
+
+def _window_start(last_d: date, label: str, days):
+    """Startdatum eines Performance-Fensters relativ zum letzten Handelstag."""
+    if label == "YTD":
+        return date(last_d.year, 1, 1)
+    return last_d - timedelta(days=days)
+
+
+def _perf_returns(px: dict) -> dict:
+    """Rendite je Fenster aus {iso: close}. {label: pct|None}."""
+    if not px:
+        return {}
+    items = sorted((date.fromisoformat(k), v) for k, v in px.items())
+    dates = [d for d, _ in items]
+    closes = [c for _, c in items]
+    last_d, last_c = dates[-1], closes[-1]
+
+    def close_on_or_before(target: date):
+        best = None
+        for d, c in zip(dates, closes):
+            if d <= target:
+                best = c
+            else:
+                break
+        return best
+
+    out = {}
+    for label, days in _PERF_WINDOWS:
+        ref = close_on_or_before(_window_start(last_d, label, days))
+        out[label] = (last_c / ref - 1) if (ref and ref > 0) else None
+    return out
+
+
+def _render_ov_summary(ticker: str, src) -> None:
+    """Ueberblick-Report: Unternehmen, Sektor, Market Cap, EV, KGV."""
+    cur = src.currency or "USD"
+    info = _company_info(ticker)
+    name = src.name or info.get("name") or ticker
+    sub = " · ".join(x for x in (info.get("sector"), info.get("industry"))
+                     if x)
+    st.markdown(f"**{name}**" + (f" — {sub}" if sub else ""))
+
+    ym = _year_metrics(ticker, N_YEARS, PERIOD).get("rows") or []
+    last = ym[-1] if ym else None
+    price = _latest_price(ticker)
+    shares = (last.get("shares_outstanding") or last.get("diluted_shares")) \
+        if last else None
+    mcap = (price * shares) if (price and shares) else info.get("market_cap")
+    ev = (mcap + (last.get("net_debt") or 0.0)) if (mcap and last) else None
+    pe = (mcap / last["net_income"]
+          if (mcap and last and last.get("net_income")
+              and last["net_income"] > 0) else None)
+
+    m = st.columns(3)
+    m[0].metric("Market Cap", _money(mcap, cur))
+    m[1].metric("Enterprise Value", _money(ev, cur))
+    m[2].metric("KGV (P/E)", f"{de_dec(pe, 1)}" if pe is not None else "—")
+    if info.get("summary"):
+        st.caption(info["summary"])
+
+
+def _render_ov_performance(ticker: str, src) -> None:
+    """Ueberblick-Report: Kurschart (Zeitraum-Auswahl) + Performance-Tabelle."""
+    cur = src.currency or "USD"
+    end_iso = date.today().isoformat()
+    start_iso = (date.today() - timedelta(days=1900)).isoformat()
+    px = _prices(ticker, start_iso, end_iso)
+    if not px:
+        st.caption("Keine Kursdaten verfuegbar.")
+        return
+    items = sorted((date.fromisoformat(k), v) for k, v in px.items())
+    last_d = items[-1][0]
+
+    # --- Kurs-Chart mit Zeitraum-Auswahl ---
+    if hasattr(st, "segmented_control"):
+        win = st.segmented_control("Zeitraum", _CHART_WINDOWS, default="1Y",
+                                   key=f"ov_perf_win_{ticker}")
+    else:
+        win = st.radio("Zeitraum", _CHART_WINDOWS, index=4, horizontal=True,
+                       key=f"ov_perf_win_{ticker}")
+    win = win or "1Y"
+    days = dict(_PERF_WINDOWS)[win]
+    wstart = _window_start(last_d, win, days)
+    sel = [(d, c) for d, c in items if d >= wstart]
+    if len(sel) >= 2:
+        pdf = pd.DataFrame({"d": [d for d, _ in sel],
+                            "c": [c for _, c in sel]})
+        up = sel[-1][1] >= sel[0][1]
+        fig = go.Figure(go.Scatter(
+            x=pdf["d"], y=pdf["c"], mode="lines",
+            line=dict(color="#0F6E56" if up else "#A32D2D", width=1.5)))
+        fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10),
+                          title=f"Kurs ({cur}, {win})", yaxis_title=cur)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Performance-Tabelle ---
+    perf = _perf_returns(px)
+    pt = pd.DataFrame([{"Zeitraum": lbl,
+                        "Performance": (_pct(perf.get(lbl))
+                                        if perf.get(lbl) is not None else "—")}
+                       for lbl, _ in _PERF_WINDOWS])
+    st.dataframe(pt, use_container_width=True, hide_index=True)
+    st.caption("Kursrenditen ggü. letztem Handelstag; YTD ab Jahresanfang.")
+
+
+def _render_ov_verdict(ticker: str, src) -> None:
+    """Ueberblick-Report: Gesamturteil-Scorecard (Geruest)."""
+    st.caption("Scorecard je Frage (Ampeln) folgt — die Score-Logik wird aus "
+               "den Reports der Fragen-Kategorien abgeleitet.")
+    sc = [{"Frage": c.question, "Bewertung": "— (geplant)"}
           for c in CATEGORIES if c.is_question]
     st.dataframe(sc, use_container_width=True, hide_index=True)
 
-    st.markdown("#### Datenbasis")
-    try:
-        ih = _income(ticker, N_YEARS, PERIOD)
-        rows = ih.get("rows") or []
-        last = rows[-1] if rows else None
-        m = st.columns(3)
-        m[0].metric("GuV-Quelle", ih.get("source", "—"))
-        m[1].metric("Perioden geladen", str(len(rows)))
-        m[2].metric("Letzter Umsatz",
-                    (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
-                     if last and last.get("revenue") else "—"))
-        if last:
-            st.caption(f"Letzte Periode {last['period_end']} "
-                       f"({last.get('form_type') or '—'}).")
-    except Exception as e:  # noqa: BLE001
-        st.warning(f"Datenbasis nicht ladbar: {e.__class__.__name__}: {e}")
+
+def _render_ov_datenbasis(ticker: str, src) -> None:
+    """Ueberblick-Report: Datenbasis-Nachweis (Quelle, Perioden)."""
+    ih = _income(ticker, N_YEARS, PERIOD)
+    rows = ih.get("rows") or []
+    last = rows[-1] if rows else None
+    m = st.columns(3)
+    m[0].metric("GuV-Quelle", ih.get("source", "—"))
+    m[1].metric("Perioden geladen", str(len(rows)))
+    m[2].metric("Letzter Umsatz",
+                (f"{last['revenue'] / 1e9:.2f} Mrd {last['currency']}"
+                 if last and last.get("revenue") else "—"))
+    if last:
+        st.caption(f"Letzte Periode {last['period_end']} "
+                   f"({last.get('form_type') or '—'}).")
 
 
 def render_portfolio(ticker: str, src) -> None:
@@ -1210,8 +1303,15 @@ def render_portfolio(ticker: str, src) -> None:
 
 
 CATEGORIES: list[Category] = [
-    Category("overview", "Ueberblick", render_overview,
-             err_label="Ueberblick"),
+    Category("overview", "Ueberblick", err_label="Ueberblick",
+             reports=[
+                 Report("ov_summary", "Summary", _render_ov_summary),
+                 Report("ov_performance", "Aktienperformance",
+                        _render_ov_performance),
+                 Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
+                 Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
+                        status="beta", expanded=False),
+             ]),
     Category("business", "1 Geschaeft",
              question="Ist das Geschaeft gut?",
              desc="Umsatzwachstum, Margen-Trend, ROIC/ROCE/ROE/ROA, "
@@ -1290,7 +1390,6 @@ CATEGORIES: list[Category] = [
              reports=[
                  Report("val_metrics", "Bewertungskennzahlen",
                         _render_val_metrics),
-                 Report("val_price", "Kurs (2 Jahre)", _render_val_price),
                  Report("val_history",
                         "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
                         _render_re_eps_ev, status="beta", lazy=True,
