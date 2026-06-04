@@ -1860,13 +1860,16 @@ CATEGORIES: list[Category] = [
                  Report("guv_sankey", "GuV-Struktur (Sankey)",
                         _render_guv_sankey, status="beta"),
              ]),
-    Category("retained_ev", "Gewinnruecklagen, EPS, Equity, FCF & EV",
-             question="Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
-             desc="Mehrjahres-Verlauf von Gewinnruecklagen, EPS (split-"
+    Category("retained_ev", "Earnings, EPS, Equity, FCF & EV",
+             question="Earnings, EPS, Equity, FCF & EV",
+             desc="Bewertungskennzahlen (EV, EV/FCF, KGV, Earnings Yields) "
+                  "plus Mehrjahres-Verlauf von Gewinnruecklagen, EPS (split-"
                   "bereinigt), Eigenkapital, Free Cash Flow und Enterprise "
                   "Value.",
-             err_label="Gewinnruecklagen/EV",
+             err_label="Earnings/EV",
              reports=[
+                 Report("val_metrics", "Bewertungskennzahlen",
+                        _render_val_metrics),
                  Report("re_eps_ev",
                         "Gewinnruecklagen, EPS, Equity, FCF & EV — Verlauf",
                         _render_re_eps_ev, status="beta", lazy=True,
@@ -1939,15 +1942,6 @@ CATEGORIES: list[Category] = [
                  Report("owner_earnings",
                         "Owner Earnings vs Nettogewinn vs FCF",
                         _render_owner_earnings),
-             ]),
-    Category("valuation", "6 Bewertung",
-             question="Ist die Bewertung attraktiv?",
-             desc="EV, EV/FCF, Earnings Yield (EBIT/EV + klassisch), KGV, "
-                  "Kurs.",
-             err_label="Bewertung", is_question=True,
-             reports=[
-                 Report("val_metrics", "Bewertungskennzahlen",
-                        _render_val_metrics),
              ]),
     Category("portfolio", "Portfolio & Signale", err_label="Portfolio",
              reports=[
