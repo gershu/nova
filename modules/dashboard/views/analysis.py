@@ -1291,6 +1291,106 @@ def _render_ov_datenbasis(ticker: str, src) -> None:
                    f"({last.get('form_type') or '—'}).")
 
 
+# ---- Kennzahlen vs. Sektor (aus Thesis-Cockpit; DB ref_fundamentals_latest) -
+_KPI_VALUATION = [
+    ("pe_ttm", "KGV (TTM)", "ratio"), ("pe_forward", "KGV (Forward)", "ratio"),
+    ("peg_ratio", "PEG-Ratio", "ratio"), ("pb", "Kurs / Buchwert", "ratio"),
+    ("ps_ttm", "Kurs / Umsatz", "ratio"), ("p_fcf", "Kurs / FCF", "ratio"),
+    ("ev_ebitda", "EV / EBITDA", "ratio"), ("ev_sales", "EV / Umsatz", "ratio"),
+]
+_KPI_PROFIT = [
+    ("gross_margin", "Bruttomarge", "pct"),
+    ("operating_margin", "Operative Marge", "pct"),
+    ("net_margin", "Nettomarge", "pct"), ("fcf_margin", "FCF-Marge", "pct"),
+    ("roe", "Eigenkapitalrendite", "pct"),
+    ("roa", "Gesamtkapitalrendite", "pct"), ("roic", "ROIC", "pct"),
+]
+_KPI_LEVERAGE = [
+    ("debt_to_equity", "Verschuldungsgrad", "ratio"),
+    ("net_debt_to_ebitda", "Nettoschulden / EBITDA", "ratio"),
+    ("current_ratio", "Liquiditaetsgrad 3", "ratio"),
+    ("quick_ratio", "Liquiditaetsgrad 2", "ratio"),
+    ("interest_coverage", "Zinsdeckungsgrad", "ratio"),
+]
+_KPI_CASHDIV = [
+    ("fcf_yield", "FCF-Rendite", "pct"),
+    ("dividend_yield", "Dividendenrendite", "pct_raw"),
+    ("payout_ratio", "Ausschuettungsquote", "pct"),
+    ("dividend_per_share", "Dividende je Aktie", "ratio"),
+]
+
+
+def _kpi_fmt(kind: str, v) -> str:
+    if _missing(v):
+        return "—"
+    if kind == "pct":
+        return de_dec(float(v) * 100.0, 1) + " %"
+    if kind == "pct_raw":
+        return de_dec(float(v), 2) + " %"
+    return de_dec(v, 2)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fundamentals_all():
+    """Komplette ref_fundamentals_latest (DB) oder None — fuer Sektor-Median."""
+    if _run_query is None:
+        return None
+    try:
+        return _run_query("SELECT * FROM ref_fundamentals_latest", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _kpi_table(group, f, sec) -> None:
+    rows = []
+    for col, label, kind in group:
+        raw = f.get(col)
+        med = (sec[col].median() if (col in sec.columns and not sec.empty)
+               else None)
+        marker = "—"
+        if not _missing(raw) and not _missing(med):
+            marker = ("▲" if float(raw) > float(med)
+                      else "▼" if float(raw) < float(med) else "=")
+        rows.append({"Kennzahl": label, "Wert": _kpi_fmt(kind, raw),
+                     "Sektor-Median": _kpi_fmt(kind, med), "vs.": marker})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True,
+                 column_config={"vs.": st.column_config.TextColumn(
+                     "vs.", width="small",
+                     help="▲ ueber / ▼ unter / = auf Sektor-Median")})
+
+
+def _render_ov_kennzahlen(ticker: str, src) -> None:
+    """Ueberblick-Report: Kennzahlen vs. Sektor-Median (Universum, DB)."""
+    if not (src.in_universe and src.ref_instrument_id):
+        st.caption("Kennzahlen-Vergleich nur fuer Universums-Werte "
+                   "(ref_fundamentals_latest).")
+        return
+    fa = _fundamentals_all()
+    if fa is None or fa.empty:
+        st.caption("Keine Fundamentaldaten verfuegbar.")
+        return
+    own = fa[fa["ref_instrument_id"] == src.ref_instrument_id]
+    if own.empty:
+        st.caption("Keine Fundamentaldaten fuer diesen Wert hinterlegt.")
+        return
+    f = own.iloc[0]
+    sector = f["sector"] if "sector" in own.columns else None
+    sec = fa[fa["sector"] == sector] if not _missing(sector) else fa.iloc[0:0]
+    st.caption(f"Sektor-Median aus {len(sec)} Unternehmen im Sektor "
+               f"„{sector or '—'}“.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Bewertung**")
+        _kpi_table(_KPI_VALUATION, f, sec)
+        st.markdown("**Verschuldung & Liquiditaet**")
+        _kpi_table(_KPI_LEVERAGE, f, sec)
+    with c2:
+        st.markdown("**Profitabilitaet**")
+        _kpi_table(_KPI_PROFIT, f, sec)
+        st.markdown("**Cash & Dividende**")
+        _kpi_table(_KPI_CASHDIV, f, sec)
+
+
 def render_portfolio(ticker: str, src) -> None:
     """Portfolio & Signale (nur Universums-Werte) — Geruest."""
     st.markdown("#### Portfolio & Signale")
@@ -1306,6 +1406,8 @@ CATEGORIES: list[Category] = [
     Category("overview", "Ueberblick", err_label="Ueberblick",
              reports=[
                  Report("ov_summary", "Summary", _render_ov_summary),
+                 Report("ov_kennzahlen", "Kennzahlen (vs. Sektor)",
+                        _render_ov_kennzahlen),
                  Report("ov_performance", "Aktienperformance",
                         _render_ov_performance),
                  Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
