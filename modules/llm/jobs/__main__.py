@@ -35,6 +35,7 @@ import time
 import duckdb
 
 from modules.common import dblock
+from modules.llm.client import LLMError, OllamaClient
 from . import handlers, queue as q
 
 
@@ -94,6 +95,15 @@ def _fail(job, err: str) -> None:
 
 
 def cmd_worker(args) -> int:
+    # Preflight: ist die LLM (nova-w5) ueberhaupt erreichbar? Sonst gar nichts
+    # claimen — Jobs bleiben pending, naechster Lauf versucht erneut.
+    with OllamaClient() as llm:
+        ok, msg = llm.health_check()
+    if not ok:
+        print(f"LLM nicht erreichbar ({msg}) — Lauf uebersprungen, Jobs "
+              "bleiben pending.", file=sys.stderr)
+        return 0
+
     try:
         with dblock.rw_connection() as con:
             q.apply_schema(con)
@@ -129,6 +139,17 @@ def cmd_worker(args) -> int:
         # 2) Compute — langsam (LLM), KEIN Lock/DB.
         try:
             result = fn_c(job, model=args.model)
+        except LLMError as e:
+            # Transienter Infra-Ausfall (z.B. nova-w5 down): Job NICHT
+            # verbrennen, sondern zurueck auf pending und Lauf abbrechen.
+            try:
+                with dblock.rw_connection(timeout=args.lock_timeout) as con:
+                    q.requeue(con, job["job_id"], note=f"LLM: {e}")
+            except TimeoutError:
+                pass
+            print(f"LLM-Problem ({e}) — Job requeued, Lauf abgebrochen.",
+                  file=sys.stderr)
+            break
         except Exception as e:  # noqa: BLE001
             _fail(job, f"{e.__class__.__name__}: {e}")
             err += 1
@@ -172,6 +193,14 @@ def cmd_show(args) -> int:
     return 0
 
 
+def cmd_reset(args) -> int:
+    with dblock.rw_connection() as con:
+        q.apply_schema(con)
+        n = q.reset(con, errors=True, stuck=args.stuck)
+    print(f"{n} Jobs auf 'pending' zurueckgesetzt.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m modules.llm.jobs")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -195,6 +224,11 @@ def main(argv=None) -> int:
     ps = sub.add_parser("show", help="Jobs + Status zeigen")
     ps.add_argument("--limit", type=int, default=20)
     ps.set_defaults(func=cmd_show)
+
+    prs = sub.add_parser("reset", help="error/haengende Jobs -> pending")
+    prs.add_argument("--stuck", action="store_true",
+                     help="auch 'running' (haengende) Jobs zuruecksetzen")
+    prs.set_defaults(func=cmd_reset)
 
     args = p.parse_args(argv)
     return args.func(args)

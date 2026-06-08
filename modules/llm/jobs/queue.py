@@ -72,6 +72,27 @@ def fail(con, job_id: str, error: str) -> None:
                 "WHERE job_id=?", [error[:2000], _now(), job_id])
 
 
+def requeue(con, job_id: str, note: str | None = None) -> None:
+    """Job zurueck auf 'pending' (z.B. bei transientem LLM-Ausfall) — wird
+    beim naechsten Lauf erneut versucht."""
+    con.execute("UPDATE llm_jobs SET status='pending', error=?, updated_at=? "
+                "WHERE job_id=?", [note, _now(), job_id])
+
+
+def reset(con, *, errors: bool = True, stuck: bool = False) -> int:
+    """'error' (und optional haengende 'running') Jobs auf 'pending' setzen.
+    Returnt Anzahl betroffener Zeilen."""
+    states = (["error"] if errors else []) + (["running"] if stuck else [])
+    if not states:
+        return 0
+    ph = ",".join("?" for _ in states)
+    n = con.execute(f"SELECT COUNT(*) FROM llm_jobs WHERE status IN ({ph})",
+                    states).fetchone()[0]
+    con.execute(f"UPDATE llm_jobs SET status='pending', error=NULL, "
+                f"updated_at=? WHERE status IN ({ph})", [_now(), *states])
+    return int(n)
+
+
 def counts(con) -> dict:
     rows = con.execute(
         "SELECT status, COUNT(*) FROM llm_jobs GROUP BY status").fetchall()
