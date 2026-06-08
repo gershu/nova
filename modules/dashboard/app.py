@@ -67,6 +67,7 @@ nav = st.navigation({
     "Markt & Signale": [
         st.Page("views/marktlage.py",       title="Marktlage",    icon="🌡"),
         st.Page("views/alerts.py",          title="Alerts",       icon="🔔"),
+        st.Page("views/thesis_drift.py",    title="Thesis-Drift", icon="⚠️"),
         st.Page("views/filings.py",         title="Filing-Aenderungen", icon="🗞"),
         st.Page("views/csp_picks.py",       title="CSP Picks",    icon="📞"),
     ],
