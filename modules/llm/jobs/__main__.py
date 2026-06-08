@@ -1,47 +1,42 @@
 """nova-lab LLM-Job-Queue CLI.
 
 Subcommands:
-    enqueue-quality [--all] [--limit N]
+    enqueue-quality [--limit N]
         Scannt ref_quality_score und legt fuer jeden Wert mit (geaendertem)
         Score einen 'quality_narrative'-Job an (Idempotent ueber input_hash +
         Dedupe offener Jobs). Producer — schnell, keine LLM-Calls.
-    worker [--once] [--max N] [--idle-seconds S] [--throttle S] [--model M]
-        Always-On-Konsument: drainiert llm_jobs seriell ueber die lokale LLM.
-        --once: bis Queue leer, dann Ende (fuer Cron/Test). Ohne --once:
-        Dauerlauf mit Idle-Sleep (fuer launchd KeepAlive).
+    worker [--once] [--max N] [--idle-seconds S] [--throttle S]
+           [--lock-timeout S] [--model M]
+        Konsument: drainiert llm_jobs ueber die lokale LLM. Haelt die
+        schreibende DuckDB-Connection NUR kurz (Claim/Persist, unter
+        Schreib-Lock); die Inferenz laeuft lock-/connection-frei -> Dashboard
+        kann waehrenddessen lesen. --once: bis Queue leer, dann Ende (fuer
+        launchd StartInterval). Ohne --once: Dauerlauf mit Idle-Sleep.
     show [--limit N]
-        Letzte Jobs + Status-Zaehler.
+        Letzte Jobs + Status-Zaehler (read-only).
 
 Environment:
     LAB_DB_PATH        optional — default ~/nova_data/lab.duckdb
-    LLM_OLLAMA_HOST / LLM_DEFAULT_MODEL  (siehe modules.llm.client)
+    LLM_OLLAMA_HOST / LLM_DEFAULT_MODEL  (siehe modules.llm.client; LLM laeuft
+                       auf nova-w5, wird per HTTP angesprochen)
 
 Beispiele:
     python -m modules.llm.jobs enqueue-quality
     python -m modules.llm.jobs worker --once
-    python -m modules.llm.jobs worker            # Dauerlauf (Daemon)
     python -m modules.llm.jobs show
 """
 
 from __future__ import annotations
 
 import argparse
-import os
-import pathlib
 import sys
 import time
 
 import duckdb
 
+from modules.common import dblock
 from . import handlers, queue as q
 
-
-DB_PATH = pathlib.Path(
-    os.environ.get(
-        "LAB_DB_PATH",
-        str(pathlib.Path.home() / "nova_data" / "lab.duckdb"),
-    )
-)
 
 _SUB_COLS = [
     ("sub_return_on_capital", "return_on_capital"),
@@ -53,8 +48,8 @@ _SUB_COLS = [
 
 
 def cmd_enqueue_quality(args) -> int:
-    con = duckdb.connect(str(DB_PATH))
-    try:
+    # Producer ist schnell (keine LLM-Calls) -> kurzer Lock-Block.
+    with dblock.rw_connection() as con:
         q.apply_schema(con)
         if not con.execute(
                 "SELECT 1 FROM information_schema.tables "
@@ -69,13 +64,9 @@ def cmd_enqueue_quality(args) -> int:
             "ORDER BY score DESC").fetchall()
         if args.limit:
             rows = rows[:args.limit]
-        # bestehende Hashes (Staleness)
         have = dict(con.execute(
             "SELECT ref_instrument_id, input_hash "
-            "FROM ref_quality_narrative").fetchall()) \
-            if con.execute("SELECT 1 FROM information_schema.tables WHERE "
-                           "table_name='ref_quality_narrative'").fetchone() \
-            else {}
+            "FROM ref_quality_narrative").fetchall())
         n_new = n_skip = 0
         for r in rows:
             rid, sym, score = r[0], r[1], r[2]
@@ -87,56 +78,86 @@ def cmd_enqueue_quality(args) -> int:
             jid = q.enqueue(con, "quality_narrative", ref_instrument_id=rid,
                             payload={"symbol": sym, "score": score,
                                      "subs": subs}, priority=100, input_hash=h)
-            if jid:
-                n_new += 1
-            else:
-                n_skip += 1
+            n_new += 1 if jid else 0
+            n_skip += 0 if jid else 1
         print(f"quality_narrative: {n_new} Jobs angelegt, {n_skip} "
               "uebersprungen (aktuell/offen).")
-    finally:
-        con.close()
     return 0
 
 
-def cmd_worker(args) -> int:
-    con = duckdb.connect(str(DB_PATH))
+def _fail(job, err: str) -> None:
     try:
-        q.apply_schema(con)
-        done = err = 0
-        while True:
-            job = q.claim(con)
-            if job is None:
-                if args.once:
-                    break
-                time.sleep(args.idle_seconds)
-                continue
-            fn = handlers.HANDLERS.get(job["kind"])
-            if fn is None:
-                q.fail(con, job["job_id"], f"kein Handler fuer '{job['kind']}'")
-                err += 1
-                continue
-            try:
-                res = fn(con, job, model=args.model)
-                q.complete(con, job["job_id"], res)
-                done += 1
-                print(f"  ✓ {job['kind']} {res}")
-            except Exception as e:  # noqa: BLE001
-                q.fail(con, job["job_id"], f"{e.__class__.__name__}: {e}")
-                err += 1
-                print(f"  ✗ {job['kind']} {job.get('ref_instrument_id')}: "
-                      f"{e.__class__.__name__}: {e}", file=sys.stderr)
-            if args.max and (done + err) >= args.max:
+        with dblock.rw_connection() as con:
+            q.fail(con, job["job_id"], err)
+    except TimeoutError:
+        pass  # Job bleibt 'running' (wird beim naechsten enqueue nicht doppelt)
+
+
+def cmd_worker(args) -> int:
+    try:
+        with dblock.rw_connection() as con:
+            q.apply_schema(con)
+    except TimeoutError as e:
+        print(e, file=sys.stderr)
+        return 1
+
+    done = err = 0
+    while True:
+        # 1) Claim — kurz, gelockt.
+        try:
+            with dblock.rw_connection(timeout=args.lock_timeout) as con:
+                job = q.claim(con)
+        except TimeoutError:
+            if args.once:
                 break
-            if args.throttle:
-                time.sleep(args.throttle)
-        print(f"Worker: {done} erledigt, {err} Fehler.")
-    finally:
-        con.close()
+            time.sleep(args.idle_seconds)
+            continue
+        if job is None:
+            if args.once:
+                break
+            time.sleep(args.idle_seconds)
+            continue
+
+        kind = job["kind"]
+        fn_c = handlers.COMPUTE.get(kind)
+        fn_p = handlers.PERSIST.get(kind)
+        if not fn_c or not fn_p:
+            _fail(job, f"kein Handler fuer '{kind}'")
+            err += 1
+            continue
+
+        # 2) Compute — langsam (LLM), KEIN Lock/DB.
+        try:
+            result = fn_c(job, model=args.model)
+        except Exception as e:  # noqa: BLE001
+            _fail(job, f"{e.__class__.__name__}: {e}")
+            err += 1
+            print(f"  ✗ {kind} {job.get('ref_instrument_id')}: "
+                  f"{e.__class__.__name__}: {e}", file=sys.stderr)
+            continue
+
+        # 3) Persist — kurz, gelockt.
+        try:
+            with dblock.rw_connection(timeout=args.lock_timeout) as con:
+                msg = fn_p(con, job, result)
+                q.complete(con, job["job_id"], msg)
+            done += 1
+            print(f"  ✓ {kind} {msg}")
+        except Exception as e:  # noqa: BLE001
+            _fail(job, f"persist: {e.__class__.__name__}: {e}")
+            err += 1
+
+        if args.max and (done + err) >= args.max:
+            break
+        if args.throttle:
+            time.sleep(args.throttle)
+
+    print(f"Worker: {done} erledigt, {err} Fehler.")
     return 0
 
 
 def cmd_show(args) -> int:
-    con = duckdb.connect(str(DB_PATH), read_only=True)
+    con = duckdb.connect(dblock.db_path(), read_only=True)
     try:
         print("Status:", q.counts(con))
         rows = con.execute(
@@ -157,18 +178,17 @@ def main(argv=None) -> int:
 
     pe = sub.add_parser("enqueue-quality",
                         help="Q-Score-Narrativ-Jobs aus ref_quality_score")
-    pe.add_argument("--all", action="store_true")
     pe.add_argument("--limit", type=int, default=0)
     pe.set_defaults(func=cmd_enqueue_quality)
 
     pw = sub.add_parser("worker", help="Queue drainieren (LLM)")
-    pw.add_argument("--once", action="store_true",
-                    help="bis Queue leer, dann Ende")
+    pw.add_argument("--once", action="store_true")
     pw.add_argument("--max", type=int, default=0)
     pw.add_argument("--idle-seconds", dest="idle_seconds", type=float,
                     default=30.0)
-    pw.add_argument("--throttle", type=float, default=0.0,
-                    help="Pause (s) zwischen Jobs")
+    pw.add_argument("--throttle", type=float, default=0.0)
+    pw.add_argument("--lock-timeout", dest="lock_timeout", type=float,
+                    default=30.0)
     pw.add_argument("--model", type=str, default=None)
     pw.set_defaults(func=cmd_worker)
 

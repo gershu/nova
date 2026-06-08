@@ -1,6 +1,12 @@
-"""Job-Handler je `kind`. Jeder Handler bekommt (con, job) und schreibt sein
-Ergebnis in die passende Tabelle; Rueckgabe ist eine kurze Status-Zeile (geht
-in llm_jobs.result)."""
+"""Job-Handler je `kind`, zweiphasig getrennt:
+
+  compute(job, model) -> dict   : LANGSAM (LLM-Inferenz), KEIN DB-Zugriff.
+  persist(con, job, result) -> str : SCHNELL, schreibt das Ergebnis.
+
+Diese Trennung ist bewusst: der Worker haelt die schreibende DuckDB-Connection
+nur fuer das kurze persist() (unter dem Schreib-Lock); die langsame Inferenz
+laeuft connection-/lock-frei -> das Dashboard kann waehrenddessen lesen.
+"""
 
 from __future__ import annotations
 
@@ -46,7 +52,6 @@ def quality_input_hash(score, subs: dict) -> str:
 
 
 def _parse(text: str):
-    """JSON aus der LLM-Antwort ziehen (auch wenn in Markdown gewrappt)."""
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
         try:
@@ -58,7 +63,10 @@ def _parse(text: str):
     return text.strip(), ""
 
 
-def handle_quality_narrative(con, job, *, model=None) -> str:
+# ---- quality_narrative ----
+
+def quality_compute(job, *, model=None) -> dict:
+    """LLM-Call (langsam, kein DB)."""
     p = job["payload"]
     symbol = p.get("symbol") or job.get("ref_instrument_id")
     score = p.get("score")
@@ -68,11 +76,15 @@ def handle_quality_narrative(con, job, *, model=None) -> str:
         f"{round(v * 100) if isinstance(v, (int, float)) else 'n/a'}"
         for k, v in subs.items())
     prompt = _PROMPT.format(symbol=symbol, score=score, lines=lines)
-
     with OllamaClient() as llm:
-        r = llm.generate(prompt, system=_SYSTEM, json_mode=True,
-                         model=model)
+        r = llm.generate(prompt, system=_SYSTEM, json_mode=True, model=model)
     narrative, red_flag = _parse(r.text)
+    return {"symbol": symbol, "score": score, "narrative": narrative,
+            "red_flag": red_flag, "model": getattr(r, "model", model or "?")}
+
+
+def quality_persist(con, job, result: dict) -> str:
+    """Ergebnis schreiben (schnell, unter Schreib-Lock)."""
     now = datetime.now(timezone.utc)
     con.execute("DELETE FROM ref_quality_narrative WHERE ref_instrument_id=?",
                 [job["ref_instrument_id"]])
@@ -80,11 +92,11 @@ def handle_quality_narrative(con, job, *, model=None) -> str:
         "INSERT INTO ref_quality_narrative (ref_instrument_id, symbol, score, "
         "narrative, red_flag, model, input_hash, generated_at) "
         "VALUES (?,?,?,?,?,?,?,?)",
-        [job["ref_instrument_id"], symbol, score, narrative, red_flag,
-         getattr(r, "model", model or "?"), job.get("input_hash"), now])
-    return f"{symbol}: {narrative[:70]}"
+        [job["ref_instrument_id"], result["symbol"], result["score"],
+         result["narrative"], result["red_flag"], result["model"],
+         job.get("input_hash"), now])
+    return f"{result['symbol']}: {result['narrative'][:70]}"
 
 
-HANDLERS = {
-    "quality_narrative": handle_quality_narrative,
-}
+COMPUTE = {"quality_narrative": quality_compute}
+PERSIST = {"quality_narrative": quality_persist}

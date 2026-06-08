@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab llm_worker LaunchDaemon — LLM-Job-Queue-Worker.
+
+  Schedule: alle 5 Minuten (StartInterval 300). Jeder Lauf enqueued faellige
+  Q-Score-Narrative und drainiert die Queue EINMAL (Once-Mode). Bewusst KEIN
+  KeepAlive/Dauerlauf: die schreibende DuckDB-Connection wird nur kurz
+  (Claim/Persist, Schreib-Lock) gehalten, also kein Single-Writer-Konflikt
+  mit Dashboard-Reads oder den Batches. LLM-Inferenz laeuft remote auf nova-w5.
+
+  Initial-Setup: scripts/install_daemon.sh lab.llm_worker
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-llm-worker.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.llm_worker</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_llm_worker.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-llm-worker.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-llm-worker.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

@@ -36,6 +36,7 @@ from datetime import datetime, timezone
 
 import duckdb
 
+from modules.common import dblock
 from modules.dashboard import quality as ql
 
 
@@ -106,44 +107,46 @@ def cmd_run(args) -> int:
     if not os.environ.get("NOVA_SEC_API_KEY", "").strip():
         print("FEHLER: NOVA_SEC_API_KEY nicht gesetzt.", file=sys.stderr)
         return 2
-    con = duckdb.connect(str(DB_PATH))
-    try:
+    # Schema + Universum: kurzer gelockter RW-Block (Lesen ist hier ok).
+    with dblock.rw_connection() as con:
         apply_schema(con)
         if args.symbols:
             wanted = {s.strip().upper() for s in args.symbols.split(",") if s}
-            uni = [(rid, sym) for rid, sym in _universe(con, all_instruments=True)
+            uni = [(rid, sym) for rid, sym
+                   in _universe(con, all_instruments=True)
                    if (sym or "").upper() in wanted]
         else:
             uni = _universe(con, all_instruments=args.all)
-        if args.limit:
-            uni = uni[:args.limit]
-        print(f"Quality-Score-Batch: {len(uni)} Werte · n_years="
-              f"{args.n_years} · period={args.period}")
+    if args.limit:
+        uni = uni[:args.limit]
+    print(f"Quality-Score-Batch: {len(uni)} Werte · n_years="
+          f"{args.n_years} · period={args.period}")
 
-        ok = err = 0
-        for i, (rid, sym) in enumerate(uni, 1):
-            now = datetime.now(timezone.utc)
-            try:
-                res = ql.overall_score(sym, n_years=args.n_years,
-                                       period=args.period)
-                _upsert(con, rid, sym, res, n_years=args.n_years,
-                        period=args.period, error=None, now=now)
-                ok += 1
-                tag = (f"{res['score']}" if res["score"] is not None
-                       else "—")
-            except Exception as e:  # noqa: BLE001
-                _upsert(con, rid, sym, None, n_years=args.n_years,
-                        period=args.period,
-                        error=f"{e.__class__.__name__}: {e}", now=now)
-                err += 1
-                tag = "ERR"
-            if i % 10 == 0 or i == len(uni):
-                print(f"  [{i}/{len(uni)}] {sym}: {tag}")
-            if args.sleep:
-                time.sleep(args.sleep)
-        print(f"Fertig: {ok} ok, {err} Fehler -> ref_quality_score.")
-    finally:
-        con.close()
+    ok = err = 0
+    for i, (rid, sym) in enumerate(uni, 1):
+        # Score berechnen — langsam (sec-api), KEIN Lock/DB.
+        res, error = None, None
+        try:
+            res = ql.overall_score(sym, n_years=args.n_years,
+                                   period=args.period)
+        except Exception as e:  # noqa: BLE001
+            error = f"{e.__class__.__name__}: {e}"
+        # Persistieren — kurzer gelockter RW-Block.
+        now = datetime.now(timezone.utc)
+        with dblock.rw_connection() as con:
+            _upsert(con, rid, sym, res, n_years=args.n_years,
+                    period=args.period, error=error, now=now)
+        if error:
+            err += 1
+            tag = "ERR"
+        else:
+            ok += 1
+            tag = f"{res['score']}" if res["score"] is not None else "—"
+        if i % 10 == 0 or i == len(uni):
+            print(f"  [{i}/{len(uni)}] {sym}: {tag}")
+        if args.sleep:
+            time.sleep(args.sleep)
+    print(f"Fertig: {ok} ok, {err} Fehler -> ref_quality_score.")
     return 0
 
 
