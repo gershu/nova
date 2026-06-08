@@ -2311,6 +2311,44 @@ def _render_ov_termine_news(ticker: str, src) -> None:
             st.divider()
 
 
+_IMPACT_PIC = {"positiv": "🟢", "negativ": "🔴", "neutral": "⚪", "n/a": "·"}
+
+
+def _render_ov_filings(ticker: str, src) -> None:
+    """Ueberblick-Report: LLM-Zusammenfassungen der juengsten Filing-
+    Aenderungen (ref_filing_change, vom filing-watcher). 10-K/10-Q als
+    GuV-Diff, 8-K als Text-Summary. Nur Universums-Werte (DB)."""
+    if not (src.in_universe and src.ref_instrument_id):
+        st.caption("Filing-Aenderungen nur fuer Universums-Werte (DB).")
+        return
+    rows = _db_by_instrument(
+        "SELECT form, period, prior_period, summary, impact, model, "
+        "generated_at FROM ref_filing_change WHERE ref_instrument_id = ? "
+        "ORDER BY generated_at DESC LIMIT 12", src.ref_instrument_id)
+    if rows is None:
+        st.caption("Keine Filing-Change-Tabelle vorhanden "
+                   "(filing-watcher noch nicht gelaufen).")
+        return
+    if rows.empty:
+        st.caption("Noch keine Filing-Aenderungen erfasst "
+                   "(Watcher laeuft 2x taeglich).")
+        return
+    for _, r in rows.iterrows():
+        imp = (r["impact"] or "n/a").lower()
+        per = r["period"] or "—"
+        head = f"{_IMPACT_PIC.get(imp, '·')} **{r['form']}** {per}"
+        if r["prior_period"]:
+            head += f"  (vs. {r['prior_period']})"
+        st.markdown(head)
+        if r["summary"]:
+            st.write(r["summary"])
+        st.caption(f"Impact: {imp} · {r['model'] or 'LLM'} · Stand "
+                   f"{str(r['generated_at'])[:16]}")
+        st.divider()
+    st.caption("Vorberechnet vom filing-watcher (LLM). Faktische Zusammen"
+               "fassung der Filing-Aenderung, kein Anlageurteil.")
+
+
 def _render_pf_signale(ticker: str, src) -> None:
     """Portfolio-Report: Empfehlungen + Alerts (Universum, DB)."""
     if not (src.in_universe and src.ref_instrument_id):
@@ -2442,6 +2480,8 @@ CATEGORIES: list[Category] = [
                         _render_ov_performance),
                  Report("ov_termine_news", "Termine & News",
                         _render_ov_termine_news),
+                 Report("ov_filings", "Filing-Aenderungen (LLM)",
+                        _render_ov_filings),
                  Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
                  Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
                         status="beta", expanded=False),
