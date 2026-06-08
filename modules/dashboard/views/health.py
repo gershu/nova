@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import pathlib
 import subprocess
+from datetime import datetime, timezone
 
 import pandas as pd
 import streamlit as st
@@ -189,6 +190,133 @@ for grp in df_all["group"].drop_duplicates().tolist():
                     st.caption("(tail failed)")
             else:
                 st.caption(f"Kein Log unter {log_path}.")
+
+st.divider()
+
+# ---------- LLM-Pipeline (Job-Queue + nova-w5) ----------
+
+_STATUS_ORDER = ["pending", "running", "done", "error"]
+
+
+def _ago(dt) -> str:
+    """Relativzeit; tz-aware -> UTC, naive -> lokale Wanduhr (DuckDB liefert
+    TIMESTAMP naiv in Lokalzeit)."""
+    if dt is None:
+        return "—"
+    now = (datetime.now(timezone.utc) if getattr(dt, "tzinfo", None)
+           else datetime.now())
+    sec = int((now - dt).total_seconds())
+    past, sec = sec >= 0, abs(sec)
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m, _ = divmod(rem, 60)
+    s = " ".join(p for p in (f"{d}d" if d else "", f"{h}h" if h else "",
+                             f"{m}m" if (m and not d) else "") if p) or "0m"
+    return f"vor {s}" if past else f"in {s}"
+
+
+def _gb(n) -> str:
+    try:
+        return f"{float(n) / 1e9:.1f} GB"
+    except (TypeError, ValueError):
+        return "?"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _llm_status() -> dict:
+    """Queue-Zaehler (llm_jobs) + nova-w5 health/ps. Defensiv: fehlende
+    Tabelle / LLM down werden abgefangen."""
+    out: dict = {"have_table": False, "counts": {}, "matrix": [],
+                 "oldest": None, "last_done": None, "err": None,
+                 "host": None, "health_ok": None, "health_msg": "",
+                 "models": []}
+    con = get_connection()
+    try:
+        if con.execute("SELECT 1 FROM information_schema.tables "
+                       "WHERE table_name='llm_jobs'").fetchone():
+            out["have_table"] = True
+            out["counts"] = dict(con.execute(
+                "SELECT status, COUNT(*) FROM llm_jobs "
+                "GROUP BY status").fetchall())
+            out["matrix"] = [list(r) for r in con.execute(
+                "SELECT kind, status, COUNT(*) FROM llm_jobs "
+                "GROUP BY kind, status").fetchall()]
+            out["oldest"] = con.execute("SELECT MIN(created_at) FROM llm_jobs "
+                                        "WHERE status='pending'").fetchone()[0]
+            out["last_done"] = con.execute("SELECT MAX(updated_at) FROM "
+                                           "llm_jobs WHERE status='done'"
+                                           ).fetchone()[0]
+            e = con.execute(
+                "SELECT updated_at, kind, ref_instrument_id, error "
+                "FROM llm_jobs WHERE status='error' "
+                "ORDER BY updated_at DESC LIMIT 1").fetchone()
+            out["err"] = list(e) if e else None
+    finally:
+        con.close()
+    try:
+        from modules.llm.client import OllamaClient
+        out["host"] = OllamaClient().host
+        with OllamaClient() as llm:
+            ok, msg = llm.health_check()
+            out["health_ok"], out["health_msg"] = ok, msg
+            if ok:
+                out["models"] = [{
+                    "name": m.get("name") or m.get("model") or "?",
+                    "size": m.get("size"), "size_vram": m.get("size_vram"),
+                    "expires_at": m.get("expires_at")} for m in llm.ps()]
+    except Exception as e:  # noqa: BLE001
+        out["health_ok"], out["health_msg"] = False, \
+            f"{e.__class__.__name__}: {e}"
+    return out
+
+
+st.subheader("🧠 LLM-Pipeline")
+L = _llm_status()
+
+if not L["have_table"]:
+    st.caption("Keine `llm_jobs`-Tabelle — Worker noch nicht gelaufen. "
+               "Init: `python -m modules.llm.jobs worker --once`.")
+else:
+    c = L["counts"]
+    j1, j2, j3, j4 = st.columns(4)
+    j1.metric("pending", c.get("pending", 0))
+    j2.metric("running", c.get("running", 0))
+    j3.metric("done", c.get("done", 0))
+    j4.metric("error", c.get("error", 0),
+              delta=None if not c.get("error") else "prüfen",
+              delta_color="inverse")
+    st.caption(
+        f"Ältester pending: {_fmt_ts(L['oldest'])} ({_ago(L['oldest'])})  ·  "
+        f"letzter done: {_fmt_ts(L['last_done'])} ({_ago(L['last_done'])})")
+    if L["err"]:
+        ts, kind, rid, emsg = L["err"]
+        st.warning(f"Letzter Fehler — {_fmt_ts(ts)} · `{kind}` {rid or ''}: "
+                   f"{(emsg or '')[:160]}")
+    if L["matrix"]:
+        mdf = pd.DataFrame(L["matrix"], columns=["kind", "status", "n"])
+        piv = (mdf.pivot_table(index="kind", columns="status", values="n",
+                               aggfunc="sum", fill_value=0)
+               .reindex(columns=_STATUS_ORDER, fill_value=0).reset_index())
+        st.dataframe(piv, use_container_width=True, hide_index=True)
+
+st.markdown(f"**nova-w5** (`{L.get('host') or '—'}`)")
+if L["health_ok"]:
+    st.success(f"erreichbar — {L['health_msg']}")
+    if not L["models"]:
+        st.caption("/api/ps: kein Modell resident (idle).")
+    for m in L["models"]:
+        when = ""
+        exp = m.get("expires_at")
+        if exp:
+            try:
+                dt = datetime.fromisoformat(str(exp).replace("Z", "+00:00"))
+                when = f"  ·  entladen {_ago(dt)}"
+            except ValueError:
+                pass
+        st.caption(f"`{m['name']}`  ·  {_gb(m['size'])} "
+                   f"(VRAM {_gb(m['size_vram'])}){when}")
+else:
+    st.error(f"nicht erreichbar — {L['health_msg']}")
 
 st.divider()
 
