@@ -25,6 +25,7 @@ from modules.dashboard import finmetrics as fm
 from modules.dashboard import market as mkt
 from modules.dashboard import scoring as sc
 from modules.dashboard import quality as ql
+from modules.dashboard import deepdive as dd
 from modules.dashboard.score_config import CFG as _SCORE
 from modules.dashboard.components.format import _missing, de_dec
 
@@ -2471,6 +2472,60 @@ def _render_gesamt_score(ticker: str, src) -> None:
                "Thema. Heuristik, kein Anlageurteil.")
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _deep_dive(ticker: str, key: str, n: int, period: str, use_mdna: bool):
+    return dd.deep_dive(ticker, key, n_years=n, period=period,
+                        use_mdna=use_mdna)
+
+
+def _render_deep_dive(ticker: str, src) -> None:
+    """On-Demand Deep Dive: eine gewaehlte Kennzahl + Verlauf + fokussierte
+    LLM-Bewertung (synchron, gecacht). Optional inkl. MD&A-Text."""
+    labels = [m["label"] for m in dd.METRICS]
+    c1, c2 = st.columns([2, 1.4])
+    with c1:
+        sel = st.selectbox("Kennzahl", labels, key=f"dd_metric_{ticker}")
+    with c2:
+        use_mdna = st.checkbox(
+            "MD&A-Text einbeziehen", value=True, key=f"dd_mdna_{ticker}",
+            help="Zieht Item 7 (10-K) / part1item2 (10-Q) des juengsten "
+                 "Filings — etwas langsamer, dafuer qualitative Treiber.")
+    key = next(m["key"] for m in dd.METRICS if m["label"] == sel)
+    go = st.button("🔍 Deep Dive starten", key=f"dd_go_{ticker}",
+                   type="primary")
+    state_key = f"dd_res_{ticker}"
+    if go:
+        with st.spinner("LLM bewertet die Kennzahl (nova-w5) …"):
+            st.session_state[state_key] = _deep_dive(
+                src.ticker, key, N_YEARS, PERIOD, use_mdna)
+    res = st.session_state.get(state_key)
+    if not res:
+        st.caption("Kennzahl waehlen und starten — die Bewertung laeuft "
+                   "on-demand auf der lokalen LLM (einige Sekunden).")
+        return
+
+    pts = res.get("points") or []
+    if pts:
+        unit = dd._UNIT.get(res["key"], "cur")
+        ys = [v * 100 if unit == "pct" else v for _, v in pts]
+        fig = go.Figure(go.Scatter(
+            x=[p for p, _ in pts], y=ys, mode="lines+markers",
+            line=dict(color="#1D9E75")))
+        fig.update_layout(height=240, margin=dict(l=10, r=10, t=10, b=10),
+                          yaxis_title=res["label"]
+                          + (" (%)" if unit == "pct" else ""))
+        st.plotly_chart(fig, use_container_width=True)
+
+    if res.get("error"):
+        st.warning(res["error"])
+        return
+    st.markdown(f"**{res['label']} — LLM-Einordnung**")
+    st.write(res.get("assessment") or "_(keine Antwort)_")
+    st.caption(f"{res.get('model') or 'LLM'} · MD&A einbezogen: "
+               f"{'ja' if res.get('mdna_used') else 'nein'} · "
+               f"{len(pts)} Datenpunkte · Heuristik, kein Anlageurteil.")
+
+
 CATEGORIES: list[Category] = [
     Category("overview", "Ueberblick", err_label="Ueberblick",
              reports=[
@@ -2486,6 +2541,15 @@ CATEGORIES: list[Category] = [
                  Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
                  Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
                         status="beta", expanded=False),
+             ]),
+    Category("deep_dive", "🔍 Deep Dive",
+             question="Deep Dive — eine Kennzahl im Fokus",
+             desc="Gewaehlte Kennzahl im Verlauf + fokussierte LLM-Bewertung "
+                  "on-demand (optional inkl. MD&A-Text des juengsten Filings).",
+             err_label="Deep Dive",
+             reports=[
+                 Report("dd_metric", "Kennzahl-Bewertung (LLM)",
+                        _render_deep_dive, expanded=True),
              ]),
     Category("guv", "Umsatz & GuV",
              question="Umsatz & GuV — Struktur und Qualitaet",

@@ -66,6 +66,27 @@ def fetch_employees_from_filing(accession_no: str):
     return parse_employees(text)
 
 
+def fetch_mdna_from_filing(accession_no: str, form_type: str | None = None,
+                           *, max_chars: int = 12000) -> str:
+    """MD&A-Sektion (Management's Discussion & Analysis) als Plain-Text.
+
+    10-K -> Item 7, 10-Q -> part1item2. Liefert '' bei Fehlschlag oder leerer
+    Sektion (2 API-Calls: Query + Extractor). max_chars begrenzt die Laenge
+    fuer LLM-Prompts.
+    """
+    if not accession_no:
+        return ""
+    item = "part1item2" if (form_type or "").upper().startswith("10-Q") else "7"
+    try:
+        url = find_filing_url(accession_no)
+        if not url:
+            return ""
+        text = fetch_section(url, item)
+    except SecApiError:
+        return ""
+    return (text or "").strip()[:max_chars]
+
+
 def find_filing_url(accession_no: str) -> str | None:
     """linkToFilingDetails (primary HTM doc) fuer eine Accession-No.
 
