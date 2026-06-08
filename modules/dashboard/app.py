@@ -54,6 +54,7 @@ nav = st.navigation({
                 default=True),
         st.Page("views/allocation.py",      title="Allokation",   icon="⚖️"),
         st.Page("views/screener.py",        title="Screener",       icon="🧪"),
+        st.Page("views/quality_ranking.py", title="Qualitaets-Ranking", icon="🏅"),
     ],
     "Entscheidungs-Assistent": [
         st.Page("views/tagesbriefing.py",   title="Tagesbriefing",    icon="📝"),
