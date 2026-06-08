@@ -12,7 +12,6 @@ Aufrufer (Streamlit st.cache_data). Reine Funktionen, kein Streamlit-Import.
 
 from __future__ import annotations
 
-from modules.dashboard import company_data as cd
 from modules.llm.client import LLMError, OllamaClient
 
 
@@ -133,51 +132,42 @@ def build_prompt(symbol, name, key, period, points, mdna_text):
         lines=lines, cagr=cagr, mdna=mdna, mdna_hint=hint)
 
 
-def deep_dive(ticker: str, key: str, *, n_years: int = 8,
-              period: str = "annual", use_mdna: bool = True,
-              model: str | None = None) -> dict:
-    """Synchroner Deep Dive. Returns dict mit points/cagr/assessment/meta.
-    error gesetzt (statt assessment), wenn keine Daten oder LLM nicht
-    erreichbar."""
-    src = cd.resolve(ticker)
-    label = _LABEL.get(key, key)
-    base = {"key": key, "label": label, "symbol": src.ticker,
-            "name": src.name, "points": [], "mdna_used": False,
-            "assessment": None, "model": None, "error": None}
-
-    ym = cd.year_metrics(ticker, n_years=n_years, period=period, src=src)
-    points = series(ym.get("rows", []), key)
-    base["points"] = points
-    if len(points) < 2:
-        base["error"] = "Zu wenige Datenpunkte fuer diese Kennzahl."
-        return base
+def assess(symbol: str, name, key: str, period: str,
+           points: list[tuple[str, float]], *, use_mdna: bool = True,
+           accession: str | None = None, form_type: str | None = None,
+           model: str | None = None) -> dict:
+    """Optionale, synchrone LLM-Einordnung zu einer bereits berechneten
+    Kennzahl-Serie (die graphisch/tabellarische Aufbereitung passiert in der
+    View ohne LLM). Liefert {assessment, model, mdna_used, error}; error statt
+    assessment bei zu wenig Daten oder wenn nova-w5 nicht erreichbar ist."""
+    out = {"assessment": None, "model": None, "mdna_used": False,
+           "error": None}
+    if not points or len(points) < 2:
+        out["error"] = "Zu wenige Datenpunkte fuer eine Bewertung."
+        return out
 
     # MD&A optional (langsam: 2 sec-api-Calls) — best effort.
     mdna_text = ""
-    if use_mdna:
-        rows = ym.get("rows", [])
-        acc = rows[-1].get("accession_no") if rows else None
-        form = rows[-1].get("form_type") if rows else None
-        if acc:
-            try:
-                from modules.sec_filings.extractor import fetch_mdna_from_filing
-                mdna_text = fetch_mdna_from_filing(acc, form, max_chars=4000)
-            except Exception:  # noqa: BLE001
-                mdna_text = ""
-    base["mdna_used"] = bool(mdna_text)
+    if use_mdna and accession:
+        try:
+            from modules.sec_filings.extractor import fetch_mdna_from_filing
+            mdna_text = fetch_mdna_from_filing(accession, form_type,
+                                               max_chars=4000)
+        except Exception:  # noqa: BLE001
+            mdna_text = ""
+    out["mdna_used"] = bool(mdna_text)
 
-    # LLM-Preflight (nova-w5 erreichbar?) + synchroner Call.
     try:
         with OllamaClient() as llm:
             ok, msg = llm.health_check()
             if not ok:
-                base["error"] = f"LLM nicht erreichbar: {msg}"
-                return base
-            prompt = build_prompt(src.ticker, src.name, key, period, points,
+                out["error"] = f"LLM nicht erreichbar: {msg}"
+                return out
+            prompt = build_prompt(symbol, name, key, period, list(points),
                                   mdna_text)
             r = llm.generate(prompt, system=_SYSTEM, model=model)
-        base["assessment"] = (r.text or "").strip()
-        base["model"] = getattr(r, "model", model or "?")
+        out["assessment"] = (r.text or "").strip()
+        out["model"] = getattr(r, "model", model or "?")
     except LLMError as e:
-        base["error"] = f"LLM-Fehler: {e}"
-    return base
+        out["error"] = f"LLM-Fehler: {e}"
+    return out

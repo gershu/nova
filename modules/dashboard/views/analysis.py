@@ -2473,57 +2473,94 @@ def _render_gesamt_score(ticker: str, src) -> None:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
-def _deep_dive(ticker: str, key: str, n: int, period: str, use_mdna: bool):
-    return dd.deep_dive(ticker, key, n_years=n, period=period,
-                        use_mdna=use_mdna)
+def _dd_assess(symbol: str, name, key: str, period: str, points: tuple,
+               use_mdna: bool, accession, form_type):
+    """Gecachte, optionale LLM-Einordnung (separat von der Datenaufbereitung)."""
+    return dd.assess(symbol, name, key, period, list(points),
+                     use_mdna=use_mdna, accession=accession,
+                     form_type=form_type)
 
 
 def _render_deep_dive(ticker: str, src) -> None:
-    """On-Demand Deep Dive: eine gewaehlte Kennzahl + Verlauf + fokussierte
-    LLM-Bewertung (synchron, gecacht). Optional inkl. MD&A-Text."""
+    """Eine gewaehlte Kennzahl: PRIMAER graphisch + tabellarisch (sofort, ohne
+    LLM). Die fokussierte LLM-Einordnung ist ein optionaler Zusatz per Button."""
     labels = [m["label"] for m in dd.METRICS]
-    c1, c2 = st.columns([2, 1.4])
-    with c1:
-        sel = st.selectbox("Kennzahl", labels, key=f"dd_metric_{ticker}")
-    with c2:
+    sel = st.selectbox("Kennzahl", labels, key=f"dd_metric_{ticker}")
+    key = next(m["key"] for m in dd.METRICS if m["label"] == sel)
+    unit = dd._UNIT.get(key, "cur")
+
+    ym = _year_metrics(src.ticker, N_YEARS, PERIOD)
+    rows = ym.get("rows", []) if isinstance(ym, dict) else []
+    points = dd.series(rows, key)
+    if len(points) < 2:
+        st.info("Zu wenige Datenpunkte fuer diese Kennzahl — Universum/"
+                "Periode/Jahre pruefen.")
+        return
+
+    # --- Primaer: Verlauf-Chart ---
+    ys = [v * 100 if unit == "pct" else v for _, v in points]
+    fig = go.Figure(go.Scatter(
+        x=[p for p, _ in points], y=ys, mode="lines+markers",
+        line=dict(color="#1D9E75"), hovertemplate="%{x}: %{y:.2f}<extra></extra>"))
+    fig.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title=sel + (" (%)" if unit == "pct" else ""),
+                      xaxis=dict(type="category"))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Eckwerte ---
+    first, last = points[0][1], points[-1][1]
+    vals = [v for _, v in points]
+    cg = dd._cagr(points, unit)
+    m = st.columns(4)
+    m[0].metric("Aktuell", dd._fmt(last, unit))
+    m[1].metric("Start", dd._fmt(first, unit))
+    if cg is not None:
+        m[2].metric("CAGR", f"{cg * 100:+.1f}%")
+    else:
+        m[2].metric("Δ gesamt", f"{(last - first) * (100 if unit == 'pct' else 1):+.1f}"
+                    + (" pp" if unit == "pct" else ""))
+    m[3].metric("Min / Max", f"{dd._fmt(min(vals), unit)} / "
+                f"{dd._fmt(max(vals), unit)}")
+
+    # --- Tabelle (Wert + YoY) ---
+    tbl = pd.DataFrame({"Periode": [p for p, _ in points], "_v": vals})
+    tbl["Wert"] = tbl["_v"].map(lambda v: dd._fmt(v, unit))
+    yoy = tbl["_v"].pct_change()
+    tbl["Veraenderung"] = [
+        "—" if pd.isna(x) else f"{x * 100:+.1f}%" for x in yoy]
+    st.dataframe(tbl[["Periode", "Wert", "Veraenderung"]],
+                 use_container_width=True, hide_index=True)
+    st.caption(f"Quelle: {ym.get('source', '—')} · {len(points)} Perioden "
+               f"({'Jahre' if PERIOD == 'annual' else 'Quartale'}).")
+
+    # --- Optional: fokussierte LLM-Einordnung ---
+    st.divider()
+    cc1, cc2 = st.columns([1.5, 2])
+    with cc1:
         use_mdna = st.checkbox(
             "MD&A-Text einbeziehen", value=True, key=f"dd_mdna_{ticker}",
-            help="Zieht Item 7 (10-K) / part1item2 (10-Q) des juengsten "
-                 "Filings — etwas langsamer, dafuer qualitative Treiber.")
-    key = next(m["key"] for m in dd.METRICS if m["label"] == sel)
-    go = st.button("🔍 Deep Dive starten", key=f"dd_go_{ticker}",
-                   type="primary")
-    state_key = f"dd_res_{ticker}"
-    if go:
+            help="Item 7 (10-K) / part1item2 (10-Q) des juengsten Filings — "
+                 "langsamer, dafuer qualitative Treiber.")
+    with cc2:
+        run = st.button("🔍 LLM-Einordnung (optional)", key=f"dd_go_{ticker}")
+    state_key = f"dd_res_{ticker}_{key}"
+    if run:
+        acc = rows[-1].get("accession_no") if rows else None
+        form = rows[-1].get("form_type") if rows else None
         with st.spinner("LLM bewertet die Kennzahl (nova-w5) …"):
-            st.session_state[state_key] = _deep_dive(
-                src.ticker, key, N_YEARS, PERIOD, use_mdna)
+            st.session_state[state_key] = _dd_assess(
+                src.ticker, src.name, key, PERIOD, tuple(points), use_mdna,
+                acc, form)
     res = st.session_state.get(state_key)
-    if not res:
-        st.caption("Kennzahl waehlen und starten — die Bewertung laeuft "
-                   "on-demand auf der lokalen LLM (einige Sekunden).")
-        return
-
-    pts = res.get("points") or []
-    if pts:
-        unit = dd._UNIT.get(res["key"], "cur")
-        ys = [v * 100 if unit == "pct" else v for _, v in pts]
-        fig = go.Figure(go.Scatter(
-            x=[p for p, _ in pts], y=ys, mode="lines+markers",
-            line=dict(color="#1D9E75")))
-        fig.update_layout(height=240, margin=dict(l=10, r=10, t=10, b=10),
-                          yaxis_title=res["label"]
-                          + (" (%)" if unit == "pct" else ""))
-        st.plotly_chart(fig, use_container_width=True)
-
-    if res.get("error"):
-        st.warning(res["error"])
-        return
-    st.markdown(f"**{res['label']} — LLM-Einordnung**")
-    st.write(res.get("assessment") or "_(keine Antwort)_")
-    st.caption(f"{res.get('model') or 'LLM'} · MD&A einbezogen: "
-               f"{'ja' if res.get('mdna_used') else 'nein'} · "
-               f"{len(pts)} Datenpunkte · Heuristik, kein Anlageurteil.")
+    if res:
+        if res.get("error"):
+            st.warning(res["error"])
+        else:
+            st.markdown(f"**{sel} — LLM-Einordnung**")
+            st.write(res.get("assessment") or "_(keine Antwort)_")
+            st.caption(f"{res.get('model') or 'LLM'} · MD&A einbezogen: "
+                       f"{'ja' if res.get('mdna_used') else 'nein'} · "
+                       "Heuristik, kein Anlageurteil.")
 
 
 CATEGORIES: list[Category] = [
@@ -2544,8 +2581,9 @@ CATEGORIES: list[Category] = [
              ]),
     Category("deep_dive", "🔍 Deep Dive",
              question="Deep Dive — eine Kennzahl im Fokus",
-             desc="Gewaehlte Kennzahl im Verlauf + fokussierte LLM-Bewertung "
-                  "on-demand (optional inkl. MD&A-Text des juengsten Filings).",
+             desc="Gewaehlte Kennzahl sofort als Verlauf-Chart + Tabelle "
+                  "(Wert, YoY, CAGR); optionale fokussierte LLM-Einordnung "
+                  "on-demand (inkl. MD&A-Text des juengsten Filings).",
              err_label="Deep Dive",
              reports=[
                  Report("dd_metric", "Kennzahl-Bewertung (LLM)",
