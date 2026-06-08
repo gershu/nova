@@ -304,14 +304,16 @@ def cmd_show(args) -> int:
 
 
 def _ago(dt) -> str:
-    """Kompakte Relativzeit ggue. jetzt (UTC). dt naiv=UTC oder tz-aware."""
+    """Kompakte Relativzeit ggue. jetzt. tz-aware dt -> Vergleich in UTC;
+    naive dt -> als LOKALE Wanduhr behandeln (DuckDB konvertiert aware-UTC
+    beim TIMESTAMP-Insert in Lokalzeit und liefert sie naiv zurueck)."""
     from datetime import datetime, timezone
     if dt is None:
         return "—"
     if getattr(dt, "tzinfo", None) is not None:
         now = datetime.now(timezone.utc)
     else:
-        now = datetime.utcnow()
+        now = datetime.now()
     sec = (now - dt).total_seconds()
     past = sec >= 0
     sec = abs(int(sec))
