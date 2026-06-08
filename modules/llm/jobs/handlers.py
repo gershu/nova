@@ -98,5 +98,136 @@ def quality_persist(con, job, result: dict) -> str:
     return f"{result['symbol']}: {result['narrative'][:70]}"
 
 
-COMPUTE = {"quality_narrative": quality_compute}
-PERSIST = {"quality_narrative": quality_persist}
+# ---- filing_change ----
+
+_FC_SYSTEM = (
+    "Du bist ein nuechterner Analyst. Du fasst die Veraenderung zwischen zwei "
+    "SEC-Filings rein faktisch zusammen — keine Kauf-/Verkaufsempfehlung, "
+    "keine Kursprognose, keine erfundenen Zahlen.")
+
+_FC_PROMPT = """{symbol} {form}: neue Periode {period} vs. Vorperiode {prior}.
+{lines}
+
+Aufgabe:
+1. "summary": 2-3 nuechterne deutsche Saetze, was sich wesentlich geaendert
+   hat (Umsatz/Margen/Gewinn) und ob es die Qualitaets-These stuetzt oder
+   belastet.
+2. "impact": eines von "positiv" | "neutral" | "negativ" fuer die These.
+
+Antworte ausschliesslich als JSON: {{"summary": "...", "impact": "..."}}"""
+
+
+def _num(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pct_delta(new, old):
+    n, o = _num(new), _num(old)
+    if n is None or o in (None, 0):
+        return None
+    return n / o - 1.0
+
+
+def _margin(part, base):
+    p, b = _num(part), _num(base)
+    return (p / b) if (p is not None and b not in (None, 0)) else None
+
+
+def filing_deltas(inc_new, inc_old) -> dict:
+    """Umsatz-/Margen-/Gewinn-Deltas zweier IncomeStatement-Objekte."""
+    def g(o, a):
+        return getattr(o, a, None) if o is not None else None
+    rn, ro = g(inc_new, "revenue"), g(inc_old, "revenue")
+    return {
+        "revenue_new": _num(rn), "revenue_old": _num(ro),
+        "revenue_delta": _pct_delta(rn, ro),
+        "gross_margin_new": _margin(g(inc_new, "gross_profit"), rn),
+        "gross_margin_old": _margin(g(inc_old, "gross_profit"), ro),
+        "op_margin_new": _margin(g(inc_new, "operating_income"), rn),
+        "op_margin_old": _margin(g(inc_old, "operating_income"), ro),
+        "net_income_new": _num(g(inc_new, "net_income")),
+        "net_income_old": _num(g(inc_old, "net_income")),
+        "ni_delta": _pct_delta(g(inc_new, "net_income"),
+                               g(inc_old, "net_income")),
+    }
+
+
+def _fc_lines(d: dict) -> str:
+    def pc(x):
+        return f"{x * 100:+.1f}%" if isinstance(x, (int, float)) else "n/a"
+
+    def mg(x):
+        return f"{x * 100:.1f}%" if isinstance(x, (int, float)) else "n/a"
+    return "\n".join([
+        f"- Umsatz: {d.get('revenue_old')} -> {d.get('revenue_new')} "
+        f"({pc(d.get('revenue_delta'))})",
+        f"- Bruttomarge: {mg(d.get('gross_margin_old'))} -> "
+        f"{mg(d.get('gross_margin_new'))}",
+        f"- Operative Marge: {mg(d.get('op_margin_old'))} -> "
+        f"{mg(d.get('op_margin_new'))}",
+        f"- Nettogewinn: {d.get('net_income_old')} -> "
+        f"{d.get('net_income_new')} ({pc(d.get('ni_delta'))})",
+    ])
+
+
+def filing_change_compute(job, *, model=None) -> dict:
+    from modules.sec_filings import client as sec
+    p = job["payload"]
+    nf, pf = p.get("new_filing"), p.get("prior_filing")
+    inc_new = sec.fetch_income_from_filing(nf) if nf else None
+    inc_old = sec.fetch_income_from_filing(pf) if pf else None
+    deltas = filing_deltas(inc_new, inc_old)
+    base = {"symbol": p.get("symbol"), "form": p.get("form"),
+            "accession": p.get("accession"), "period": p.get("period"),
+            "prior_period": p.get("prior_period"), "deltas": deltas}
+    if inc_new is None:
+        return {**base, "summary": "Keine verwertbaren GuV-Daten im neuen "
+                "Filing.", "impact": "n/a", "model": "—"}
+    prompt = _FC_PROMPT.format(symbol=p.get("symbol"), form=p.get("form"),
+                               period=p.get("period"),
+                               prior=p.get("prior_period") or "—",
+                               lines=_fc_lines(deltas))
+    with OllamaClient() as llm:
+        r = llm.generate(prompt, system=_FC_SYSTEM, json_mode=True, model=model)
+    m = re.search(r"\{.*\}", r.text, re.DOTALL)
+    summary, impact = (r.text.strip(), "n/a")
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            summary = str(d.get("summary", "")).strip() or r.text.strip()
+            impact = str(d.get("impact", "n/a")).strip() or "n/a"
+        except Exception:  # noqa: BLE001
+            pass
+    return {**base, "summary": summary, "impact": impact,
+            "model": getattr(r, "model", model or "?")}
+
+
+def filing_change_persist(con, job, result: dict) -> str:
+    now = datetime.now(timezone.utc)
+    rid = job["ref_instrument_id"]
+    con.execute("DELETE FROM ref_filing_change WHERE ref_instrument_id=? "
+                "AND form=? AND accession=?",
+                [rid, result["form"], result["accession"]])
+    con.execute(
+        "INSERT INTO ref_filing_change (ref_instrument_id, symbol, form, "
+        "accession, period, prior_period, summary, impact, deltas_json, "
+        "model, generated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [rid, result["symbol"], result["form"], result["accession"],
+         result["period"], result["prior_period"], result["summary"],
+         result["impact"], json.dumps(result["deltas"]), result["model"], now])
+    # 'seen' bestaetigen (wurde beim enqueue gesetzt; hier idempotent halten).
+    con.execute("UPDATE ref_filing_seen SET last_accession=?, last_period=?, "
+                "seen_at=? WHERE ref_instrument_id=? AND form=?",
+                [result["accession"], result["period"], now, rid,
+                 result["form"]])
+    return (f"{result['symbol']} {result['form']} {result['period']}: "
+            f"{result['impact']} — {result['summary'][:50]}")
+
+
+COMPUTE = {"quality_narrative": quality_compute,
+           "filing_change": filing_change_compute}
+PERSIST = {"quality_narrative": quality_persist,
+           "filing_change": filing_change_persist}

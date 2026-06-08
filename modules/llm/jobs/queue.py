@@ -24,10 +24,12 @@ def _now():
 
 
 def enqueue(con, kind: str, *, ref_instrument_id=None, payload=None,
-            priority: int = 100, input_hash=None) -> str | None:
-    """Job anlegen. Dedupe: existiert fuer (kind, ref_instrument_id) bereits
-    ein offener Job (pending/running), wird None zurueckgegeben."""
-    if ref_instrument_id is not None:
+            priority: int = 100, input_hash=None, dedupe: bool = True) -> str | None:
+    """Job anlegen. Dedupe (default): existiert fuer (kind, ref_instrument_id)
+    bereits ein offener Job (pending/running), wird None zurueckgegeben.
+    dedupe=False, wenn die Eindeutigkeit anders sichergestellt ist (z.B.
+    filing_change ueber ref_filing_seen + mehrere Formen je Wert)."""
+    if dedupe and ref_instrument_id is not None:
         dup = con.execute(
             "SELECT 1 FROM llm_jobs WHERE kind = ? AND ref_instrument_id = ? "
             "AND status IN ('pending','running') LIMIT 1",

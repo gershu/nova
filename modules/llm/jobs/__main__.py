@@ -86,6 +86,90 @@ def cmd_enqueue_quality(args) -> int:
     return 0
 
 
+def _universe(con, all_instruments: bool):
+    if all_instruments:
+        rows = con.execute(
+            "SELECT ref_instrument_id, symbol FROM ref_instruments "
+            "WHERE active AND symbol IS NOT NULL ORDER BY symbol").fetchall()
+    else:
+        rows = con.execute(
+            "SELECT i.ref_instrument_id, i.symbol FROM ref_fundamentals_latest "
+            "f JOIN ref_instruments i USING (ref_instrument_id) "
+            "WHERE i.symbol IS NOT NULL ORDER BY i.symbol").fetchall()
+    seen, out = set(), []
+    for rid, sym in rows:
+        if rid in seen:
+            continue
+        seen.add(rid)
+        out.append((rid, sym))
+    return out
+
+
+def cmd_enqueue_filings(args) -> int:
+    """Neue 10-K/10-Q/8-K je Universums-Wert erkennen -> filing_change-Jobs.
+    --seed: aktuelle Filings nur als 'gesehen' markieren (Baseline, keine
+    Jobs) — einmalig vor der ersten echten Ueberwachung."""
+    from datetime import datetime, timezone
+    from modules.sec_filings import client as sec
+
+    forms = tuple(f.strip() for f in args.forms.split(",") if f.strip())
+    # Universum + bisher gesehener Stand: kurzer Lock-Block, dann lockfrei
+    # die (langsamen) sec-api-Calls.
+    with dblock.rw_connection() as con:
+        q.apply_schema(con)
+        uni = _universe(con, args.all)
+        seen = {(rid, form): acc for rid, form, acc in con.execute(
+            "SELECT ref_instrument_id, form, last_accession "
+            "FROM ref_filing_seen").fetchall()}
+    if args.limit:
+        uni = uni[:args.limit]
+
+    n_new = n_seed = n_skip = 0
+    for rid, sym in uni:
+        for form in forms:
+            try:
+                fil = sec.find_filings(sym, n=2, forms=(form,))
+            except Exception:  # noqa: BLE001
+                continue
+            if not fil:
+                continue
+            latest = fil[0]
+            acc = latest.get("accession_no")
+            if seen.get((rid, form)) == acc:
+                n_skip += 1
+                continue
+            first_time = (rid, form) not in seen
+            now = datetime.now(timezone.utc)
+            with dblock.rw_connection() as con:
+                con.execute(
+                    "DELETE FROM ref_filing_seen WHERE ref_instrument_id=? "
+                    "AND form=?", [rid, form])
+                con.execute(
+                    "INSERT INTO ref_filing_seen (ref_instrument_id, form, "
+                    "last_accession, last_period, seen_at) VALUES (?,?,?,?,?)",
+                    [rid, form, acc, latest.get("period_of_report"), now])
+                if first_time and args.seed:
+                    n_seed += 1
+                else:
+                    prior = fil[1] if len(fil) > 1 else None
+                    q.enqueue(con, "filing_change", ref_instrument_id=rid,
+                              payload={"symbol": sym, "form": form,
+                                       "accession": acc,
+                                       "period": latest.get(
+                                           "period_of_report"),
+                                       "new_filing": latest,
+                                       "prior_filing": prior,
+                                       "prior_period": (prior or {}).get(
+                                           "period_of_report")},
+                              priority=80, dedupe=False)
+                    n_new += 1
+        if args.sleep:
+            time.sleep(args.sleep)
+    print(f"filing_change: {n_new} Jobs, {n_seed} geseedet, {n_skip} "
+          "unveraendert.")
+    return 0
+
+
 def _fail(job, err: str) -> None:
     try:
         with dblock.rw_connection() as con:
@@ -209,6 +293,17 @@ def main(argv=None) -> int:
                         help="Q-Score-Narrativ-Jobs aus ref_quality_score")
     pe.add_argument("--limit", type=int, default=0)
     pe.set_defaults(func=cmd_enqueue_quality)
+
+    pf = sub.add_parser("enqueue-filings",
+                        help="neue 10-K/10-Q/8-K -> filing_change-Jobs")
+    pf.add_argument("--all", action="store_true")
+    pf.add_argument("--limit", type=int, default=0)
+    pf.add_argument("--forms", type=str, default="10-K,10-Q,8-K")
+    pf.add_argument("--seed", action="store_true",
+                    help="aktuelle Filings nur als gesehen markieren "
+                         "(Baseline, keine Jobs)")
+    pf.add_argument("--sleep", type=float, default=0.0)
+    pf.set_defaults(func=cmd_enqueue_filings)
 
     pw = sub.add_parser("worker", help="Queue drainieren (LLM)")
     pw.add_argument("--once", action="store_true")
