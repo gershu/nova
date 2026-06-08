@@ -137,17 +137,23 @@ else:
 if selected_run:
     # Vorberechnete Gesamt-Qualitaets-Scores (Batch) joinen, falls vorhanden.
     _has_qs = table_exists("ref_quality_score")
+    _has_qn = table_exists("ref_quality_narrative")
     _qs_sel = (", q.score AS qscore_db, q.computed_at AS qscore_at"
                if _has_qs else "")
     _qs_join = ("LEFT JOIN ref_quality_score q USING (ref_instrument_id)"
                 if _has_qs else "")
+    _qn_sel = (", qn.red_flag AS red_flag, qn.narrative AS narrative"
+               if _has_qn else "")
+    _qn_join = ("LEFT JOIN ref_quality_narrative qn USING (ref_instrument_id)"
+                if _has_qn else "")
     picks = run_query(f"""
         SELECT p.rank, p.symbol, p.name, p.sector, p.market_cap,
                p.quality_score, p.growth_score, p.value_score,
                p.composite_score, p.trend_flags_json, p.criteria_detail_json,
-               p.metrics_json, p.ref_instrument_id{_qs_sel}
+               p.metrics_json, p.ref_instrument_id{_qs_sel}{_qn_sel}
         FROM sig_screen_picks p
         {_qs_join}
+        {_qn_join}
         WHERE p.run_id = ?
         ORDER BY p.rank
     """, (selected_run,))
@@ -210,6 +216,12 @@ if selected_run:
                 st.caption(f"{len(display)} Picks mit Q-Score ≥ {_min_q} "
                            "(live berechnet).")
 
+        # LLM-Red-Flag (aus ref_quality_narrative) als kompakte Spalte, wenn da.
+        if (_has_qn and "red_flag" in display.columns
+                and display["red_flag"].fillna("").astype(str).str.strip()
+                .ne("").any()):
+            cols.append("red_flag")
+
         _colcfg = {
             "rank": st.column_config.NumberColumn("#", width="small"),
             "symbol": st.column_config.TextColumn("Symbol", width="small"),
@@ -220,6 +232,8 @@ if selected_run:
             "value_score": "Value", "composite_score": "Composite",
             "qscore": st.column_config.NumberColumn("Q-Score", width="small"),
             "trends": st.column_config.TextColumn("Trends", width="small"),
+            "red_flag": st.column_config.TextColumn(
+                "Red Flag (LLM)", width="large"),
         }
         _evt = st.dataframe(
             display[cols].style.format({

@@ -2151,6 +2151,27 @@ def _instruments():
         return None
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _quality_narrative(ref_instrument_id):
+    """Vorberechnete LLM-Einordnung zum Gesamt-Score (ref_quality_narrative,
+    vom llm.jobs-Worker). None, wenn nicht vorhanden."""
+    if _run_query is None or not ref_instrument_id:
+        return None
+    try:
+        df = _run_query(
+            "SELECT narrative, red_flag, score, model, generated_at "
+            "FROM ref_quality_narrative WHERE ref_instrument_id = ?",
+            (ref_instrument_id,))
+    except Exception:  # noqa: BLE001
+        return None
+    if df is None or df.empty:
+        return None
+    r = df.iloc[0]
+    return {"narrative": r["narrative"], "red_flag": r["red_flag"],
+            "score": r["score"], "model": r["model"],
+            "generated_at": r["generated_at"]}
+
+
 def _render_moat_dominanz(ticker: str, src) -> None:
     """Burggraben-Report: Branche & Dominanz (Rang/Sektor-Anteil + Peers).
 
@@ -2367,6 +2388,19 @@ def _render_gesamt_score(ticker: str, src) -> None:
     box(f"## {score}/100 — {verdict}")
     st.caption(f"Gewichteter Mittelwert ueber {res['n_ok']}/5 auswertbare "
                "Themen (fehlende ausgeklammert, Gewichte renormiert).")
+
+    # LLM-Einordnung (vorberechnet vom llm.jobs-Worker), nur Universumswerte.
+    nar = _quality_narrative(src.ref_instrument_id) if src.in_universe else None
+    if nar and nar.get("narrative"):
+        st.markdown(f"🧠 **LLM-Einordnung:** {nar['narrative']}")
+        if nar.get("red_flag"):
+            st.markdown(f"⚠ **Red Flag:** {nar['red_flag']}")
+        ns = nar.get("score")
+        stale = (f" · zu Score {int(ns)} berechnet"
+                 if ns is not None and ns != score else "")
+        st.caption(f"Vorberechnet ({nar.get('model') or 'LLM'}, Stand "
+                   f"{str(nar.get('generated_at'))[:16]}{stale}). Heuristische "
+                   "Synthese der Score-Themen, kein Anlageurteil.")
 
     bar = pd.DataFrame([{
         "Thema": r["theme"],
