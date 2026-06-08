@@ -96,11 +96,18 @@ def _universe(con, all_instruments: bool):
             "SELECT i.ref_instrument_id, i.symbol FROM ref_fundamentals_latest "
             "f JOIN ref_instruments i USING (ref_instrument_id) "
             "WHERE i.symbol IS NOT NULL ORDER BY i.symbol").fetchall()
-    seen, out = set(), []
+    # Dedupe nach normalisiertem sec-Ticker: Vendor-Varianten desselben
+    # Filers (BRK.B vs. BRK_B) kollabieren -> ein Job statt zwei. Rows sind
+    # nach Symbol sortiert ('.' < '_'), daher gewinnt die Punkt-Variante —
+    # dieselbe, die das Dashboard via resolve() bevorzugt.
+    from modules.sec_filings.client import _sec_ticker
+    seen_rid, seen_norm, out = set(), set(), []
     for rid, sym in rows:
-        if rid in seen:
+        norm = _sec_ticker(sym)
+        if rid in seen_rid or norm in seen_norm:
             continue
-        seen.add(rid)
+        seen_rid.add(rid)
+        seen_norm.add(norm)
         out.append((rid, sym))
     return out
 

@@ -123,6 +123,16 @@ def _api_key() -> str:
 
 # ---------- Filing-Suche ----------
 
+def _sec_ticker(ticker: str) -> str:
+    """Symbol -> sec-api/EDGAR-Ticker normalisieren.
+
+    Datenvendoren (IB) kodieren Class-Shares mit Unterstrich (BRK_B); sec-api
+    erwartet den Punkt (BRK.B). US-Ticker enthalten nie '_', daher ist die
+    Ersetzung eindeutig sicher. Whitespace/Case ebenfalls bereinigt.
+    """
+    return (ticker or "").strip().upper().replace("_", ".")
+
+
 def find_filings(
     ticker: str,
     *,
@@ -135,6 +145,7 @@ def find_filings(
     Leere Liste, wenn der Name kein passendes EDGAR-Filing hat (z.B. ETFs,
     nicht US-gelistete Werte).
     """
+    ticker = _sec_ticker(ticker)
     form_q = " OR ".join(f'formType:"{f}"' for f in forms)
     payload = {
         "query": f"ticker:{ticker} AND ({form_q})",
@@ -668,6 +679,7 @@ def find_8k_filings(ticker: str, *, n: int = 2) -> list[dict]:
     8-K-Item-Bezeichnungen aus sec-api (z.B. ["Item 2.02 ...", "Item 9.01 ..."]).
     Schluessel kompatibel zu find_filings (accession_no/period_of_report).
     """
+    ticker = _sec_ticker(ticker)
     filings = _query_raw(f'ticker:{ticker} AND formType:"8-K"', n)
     out = []
     for f in filings:
