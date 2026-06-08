@@ -47,9 +47,18 @@ with f3:
 
 since = (date.today() - timedelta(days=int(days))).isoformat()
 
-base = """
+# event_type erst seit Migration 0003 — defensiv pruefen (Dashboard migriert
+# nicht selbst; alte DBs koennten die Spalte noch nicht haben).
+_cols = run_query("SELECT column_name FROM information_schema.columns "
+                  "WHERE table_name = 'ref_filing_change'", None)
+_has_event = (_cols is not None
+              and "event_type" in _cols["column_name"].tolist())
+_ev_sel = ("COALESCE(c.event_type, '') AS event_type" if _has_event
+           else "'' AS event_type")
+base = f"""
     SELECT c.generated_at, c.ref_instrument_id, i.symbol, i.name, i.currency,
-           c.form, c.period, c.prior_period, c.impact, c.summary, c.model
+           c.form, c.period, c.prior_period, c.impact, c.summary, c.model,
+           {_ev_sel}
     FROM ref_filing_change c
     LEFT JOIN ref_instruments i USING (ref_instrument_id)
     WHERE c.generated_at >= ?
@@ -93,14 +102,18 @@ st.divider()
 
 forms = sorted(rows["form"].dropna().unique().tolist())
 impacts = sorted(rows["impact"].dropna().unique().tolist())
+events = sorted([e for e in rows["event_type"].dropna().unique().tolist() if e])
 
-c1, c2, c3 = st.columns(3)
+c1, c2, c3, c4 = st.columns(4)
 with c1:
     form_choice = st.multiselect("Form", forms, default=forms)
 with c2:
     imp_choice = st.multiselect("Impact", impacts, default=impacts)
 with c3:
-    search = st.text_input("Filter (Symbol / Name / Text)", "",
+    ev_choice = st.multiselect("Ereignistyp (8-K)", events, default=[],
+                               help="Leer = alle. Nur fuer 8-K gesetzt.")
+with c4:
+    search = st.text_input("Suche (Symbol / Name / Text)", "",
                            placeholder="z.B. AAPL")
 
 view = rows.copy()
@@ -108,6 +121,8 @@ if form_choice:
     view = view[view["form"].isin(form_choice)]
 if imp_choice:
     view = view[view["impact"].isin(imp_choice)]
+if ev_choice:
+    view = view[view["event_type"].isin(ev_choice)]
 if search:
     mask = view.astype(str).apply(
         lambda r: r.str.contains(search, case=False, na=False)).any(axis=1)
@@ -133,6 +148,8 @@ for _, r in view.iterrows():
     symbol = r["symbol"] or r["ref_instrument_id"]
     per = r["period"] or "—"
     head = (f"{_IMPACT_PIC.get(imp, '·')} **{symbol}**  ·  `{r['form']}` {per}")
+    if r.get("event_type"):
+        head += f"  ·  _{r['event_type']}_"
     if r["prior_period"]:
         head += f"  (vs. {r['prior_period']})"
     st.markdown(head)
@@ -148,8 +165,8 @@ for _, r in view.iterrows():
 # ---------- Rohdaten-Tabelle ----------
 
 with st.expander(f"Rohdaten-Tabelle ({len(view)} Zeilen)", expanded=False):
-    show = ["generated_at", "symbol", "form", "period", "prior_period",
-            "impact", "summary", "model"]
+    show = ["generated_at", "symbol", "form", "event_type", "period",
+            "prior_period", "impact", "summary", "model"]
     st.dataframe(
         view[show], use_container_width=True, hide_index=True,
         column_config={

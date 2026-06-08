@@ -2323,7 +2323,8 @@ def _render_ov_filings(ticker: str, src) -> None:
         return
     rows = _db_by_instrument(
         "SELECT form, period, prior_period, summary, impact, model, "
-        "generated_at FROM ref_filing_change WHERE ref_instrument_id = ? "
+        "generated_at, COALESCE(event_type, '') AS event_type "
+        "FROM ref_filing_change WHERE ref_instrument_id = ? "
         "ORDER BY generated_at DESC LIMIT 12", src.ref_instrument_id)
     if rows is None:
         st.caption("Keine Filing-Change-Tabelle vorhanden "
