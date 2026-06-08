@@ -358,9 +358,83 @@ def filing_8k_compute(job, *, model=None) -> dict:
             "model": getattr(r, "model", model or "?")}
 
 
+# ---- portfolio_digest (woechentlicher Wochenueberblick je Holding) ----
+#
+# Producer (enqueue-digest) sammelt alle Inputs in die Payload; compute macht
+# nur den LLM-Call (lock-/DB-frei), persist schreibt nach ref_portfolio_digest.
+
+_DG_SYSTEM = (
+    "Du bist ein nuechterner Buy-and-Hold-Investmentanalyst. Du fasst die "
+    "vorgegebenen Fakten zu einem kurzen Wochenueberblick zusammen — keine "
+    "Kauf-/Verkaufsempfehlung, keine Kursprognose, keine erfundenen Zahlen.")
+
+_DG_PROMPT = """Wochenueberblick fuer die Portfolio-Position {symbol} ({name}).
+
+Fakten:
+- Gesamt-Qualitaets-Score: {score} ({band}), auswertbare Themen: {n_ok}/5
+- Q-Score-Einordnung: {narrative}
+- Groesstes Red Flag: {red_flag}
+- Juengste Filing-Aenderung: {filing}
+- Negative Filing-Aenderungen (letzte 90 Tage): {neg_count}
+
+Aufgabe: "digest" = 3-4 nuechterne deutsche Saetze, die den aktuellen Stand
+der These zusammenfassen — Qualitaet, wichtigste Staerke/Schwaeche, relevante
+juengste Aenderung. Wenn ein Faktum fehlt ("—"/leer), nicht erwaehnen.
+
+Antworte ausschliesslich als JSON: {{"digest": "..."}}"""
+
+
+def digest_input_hash(payload: dict) -> str:
+    key = "|".join(str(payload.get(k, "")) for k in (
+        "score", "red_flag", "filing", "neg_count"))
+    return hashlib.sha1(key.encode()).hexdigest()[:16]
+
+
+def digest_compute(job, *, model=None) -> dict:
+    p = job["payload"]
+    prompt = _DG_PROMPT.format(
+        symbol=p.get("symbol") or job.get("ref_instrument_id"),
+        name=p.get("name") or "—",
+        score=p.get("score") if p.get("score") is not None else "—",
+        band=p.get("band") or "—",
+        n_ok=p.get("n_ok") if p.get("n_ok") is not None else "—",
+        narrative=p.get("narrative") or "—",
+        red_flag=p.get("red_flag") or "—",
+        filing=p.get("filing") or "—",
+        neg_count=p.get("neg_count", 0))
+    with OllamaClient() as llm:
+        r = llm.generate(prompt, system=_DG_SYSTEM, json_mode=True, model=model)
+    digest = r.text.strip()
+    m = re.search(r"\{.*\}", r.text, re.DOTALL)
+    if m:
+        try:
+            digest = str(json.loads(m.group(0)).get("digest", "")).strip() \
+                or r.text.strip()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"symbol": p.get("symbol"), "score": p.get("score"),
+            "digest": digest, "input_hash": job.get("input_hash"),
+            "model": getattr(r, "model", model or "?")}
+
+
+def digest_persist(con, job, result: dict) -> str:
+    now = datetime.now(timezone.utc)
+    rid = job["ref_instrument_id"]
+    con.execute("DELETE FROM ref_portfolio_digest WHERE ref_instrument_id=?",
+                [rid])
+    con.execute(
+        "INSERT INTO ref_portfolio_digest (ref_instrument_id, symbol, digest, "
+        "score, input_hash, model, generated_at) VALUES (?,?,?,?,?,?,?)",
+        [rid, result["symbol"], result["digest"], result["score"],
+         result.get("input_hash"), result["model"], now])
+    return f"{result['symbol']}: {result['digest'][:70]}"
+
+
 COMPUTE = {"quality_narrative": quality_compute,
            "filing_change": filing_change_compute,
-           "filing_8k": filing_8k_compute}
+           "filing_8k": filing_8k_compute,
+           "portfolio_digest": digest_compute}
 PERSIST = {"quality_narrative": quality_persist,
            "filing_change": filing_change_persist,
-           "filing_8k": filing_change_persist}
+           "filing_8k": filing_change_persist,
+           "portfolio_digest": digest_persist}

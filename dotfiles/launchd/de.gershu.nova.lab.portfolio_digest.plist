@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab portfolio_digest LaunchDaemon — Portfolio-Wochen-Digest-Producer.
+
+  Schedule: woechentlich, Montag 06:00 (StartCalendarInterval). Legt je
+  offener Position einen portfolio_digest-Job an; die LLM-Synthese erledigt
+  danach der llm_worker (alle 5 Minuten). Woechentlich, da ein Wochen-
+  ueberblick keine haeufigere Neuberechnung braucht; unveraenderte Positionen
+  werden ueber den input_hash ohnehin uebersprungen. Producer macht nur kurze
+  DuckDB-Schreibzugriffe (Schreib-Lock), keine LLM-Calls.
+
+  Eigenstaendig vom bestehenden lab.digest (taeglicher Markdown-Digest 23:30).
+
+  Initial-Setup: scripts/install_daemon.sh lab.portfolio_digest
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-portfolio-digest.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.portfolio_digest</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_portfolio_digest.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>1</integer>
+        <key>Hour</key><integer>6</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-portfolio-digest.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-portfolio-digest.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

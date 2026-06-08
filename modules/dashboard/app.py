@@ -58,6 +58,7 @@ nav = st.navigation({
     ],
     "Entscheidungs-Assistent": [
         st.Page("views/tagesbriefing.py",   title="Tagesbriefing",    icon="📝"),
+        st.Page("views/portfolio_digest.py", title="Wochen-Digest",   icon="📰"),
         st.Page("views/action_items.py",    title="Action Items",     icon="🎯"),
         st.Page("views/decision_journal.py", title="Decision Journal", icon="📓"),
     ],

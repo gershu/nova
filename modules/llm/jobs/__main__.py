@@ -5,6 +5,10 @@ Subcommands:
         Scannt ref_quality_score und legt fuer jeden Wert mit (geaendertem)
         Score einen 'quality_narrative'-Job an (Idempotent ueber input_hash +
         Dedupe offener Jobs). Producer — schnell, keine LLM-Calls.
+    enqueue-digest [--limit N]
+        Je offener Portfolio-Position (pos_holdings) einen portfolio_digest-
+        Job — kurzer Wochenueberblick aus Q-Score + juengster Filing-
+        Aenderung + Red-Flag. Producer — schnell, keine LLM-Calls.
     worker [--once] [--max N] [--idle-seconds S] [--throttle S]
            [--lock-timeout S] [--model M]
         Konsument: drainiert llm_jobs ueber die lokale LLM. Haelt die
@@ -193,6 +197,91 @@ def cmd_enqueue_filings(args) -> int:
             time.sleep(args.sleep)
     print(f"filing watcher: {n_new} Jobs, {n_seed} geseedet, {n_skip} "
           "unveraendert.")
+    return 0
+
+
+def _has(con, name: str) -> bool:
+    return bool(con.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = ?",
+        [name]).fetchone())
+
+
+def cmd_enqueue_digest(args) -> int:
+    """Je offener Portfolio-Position einen portfolio_digest-Job. Producer
+    sammelt Q-Score + juengste Filing-Aenderung + Red-Flag in die Payload
+    (compute macht nur den LLM-Call). Idempotent ueber input_hash + Dedupe."""
+    from datetime import date, timedelta
+    _STRONG, _WEAK = 70, 40
+    since = (date.today() - timedelta(days=90)).isoformat()
+    with dblock.rw_connection() as con:
+        q.apply_schema(con)
+        if not _has(con, "pos_holdings"):
+            print("pos_holdings fehlt — kein Portfolio-Kontext.",
+                  file=sys.stderr)
+            return 2
+        hold = con.execute(
+            "SELECT DISTINCT h.ref_instrument_id, i.symbol, i.name "
+            "FROM pos_holdings h LEFT JOIN ref_instruments i "
+            "ON i.ref_instrument_id = h.ref_instrument_id "
+            "WHERE h.valid_to IS NULL ORDER BY i.symbol").fetchall()
+        if args.limit:
+            hold = hold[:args.limit]
+
+        qmap = {}
+        if _has(con, "ref_quality_score"):
+            qmap = {r[0]: (r[1], r[2]) for r in con.execute(
+                "SELECT ref_instrument_id, score, n_ok "
+                "FROM ref_quality_score").fetchall()}
+        nmap = {}
+        if _has(con, "ref_quality_narrative"):
+            nmap = {r[0]: (r[1], r[2]) for r in con.execute(
+                "SELECT ref_instrument_id, narrative, red_flag "
+                "FROM ref_quality_narrative").fetchall()}
+        fmap, negmap = {}, {}
+        if _has(con, "ref_filing_change"):
+            for r in con.execute(
+                    "SELECT ref_instrument_id, form, period, impact, summary, "
+                    "COALESCE(event_type, '') FROM ref_filing_change "
+                    "QUALIFY row_number() OVER (PARTITION BY ref_instrument_id "
+                    "ORDER BY generated_at DESC) = 1").fetchall():
+                fmap[r[0]] = r[1:]
+            negmap = {r[0]: r[1] for r in con.execute(
+                "SELECT ref_instrument_id, COUNT(*) FROM ref_filing_change "
+                "WHERE lower(impact) = 'negativ' AND generated_at >= ? "
+                "GROUP BY ref_instrument_id", [since]).fetchall()}
+        have = {}
+        if _has(con, "ref_portfolio_digest"):
+            have = dict(con.execute(
+                "SELECT ref_instrument_id, input_hash "
+                "FROM ref_portfolio_digest").fetchall())
+
+        n_new = n_skip = 0
+        for rid, sym, name in hold:
+            score, n_ok = qmap.get(rid, (None, None))
+            band = ("hohe Qualitaet" if (score is not None and score >= _STRONG)
+                    else "gemischt" if (score is not None and score >= _WEAK)
+                    else "schwach" if score is not None else "—")
+            narrative, red_flag = nmap.get(rid, (None, None))
+            f = fmap.get(rid)
+            filing = None
+            if f:
+                form, period, impact, summary, ev = f
+                filing = (f"{form} {period or ''} [{ev or impact}]: "
+                          f"{(summary or '')[:200]}")
+            payload = {"symbol": sym, "name": name, "score": score,
+                       "band": band, "n_ok": n_ok, "narrative": narrative,
+                       "red_flag": red_flag, "filing": filing,
+                       "neg_count": int(negmap.get(rid, 0))}
+            h = handlers.digest_input_hash(payload)
+            if have.get(rid) == h:
+                n_skip += 1
+                continue
+            jid = q.enqueue(con, "portfolio_digest", ref_instrument_id=rid,
+                            payload=payload, priority=120, input_hash=h)
+            n_new += 1 if jid else 0
+            n_skip += 0 if jid else 1
+        print(f"portfolio_digest: {n_new} Jobs angelegt, {n_skip} "
+              "uebersprungen (aktuell/offen).")
     return 0
 
 
@@ -434,6 +523,11 @@ def main(argv=None) -> int:
                          "(Baseline, keine Jobs)")
     pf.add_argument("--sleep", type=float, default=0.0)
     pf.set_defaults(func=cmd_enqueue_filings)
+
+    pd_ = sub.add_parser("enqueue-digest",
+                         help="portfolio_digest-Jobs je offener Position")
+    pd_.add_argument("--limit", type=int, default=0)
+    pd_.set_defaults(func=cmd_enqueue_digest)
 
     pw = sub.add_parser("worker", help="Queue drainieren (LLM)")
     pw.add_argument("--once", action="store_true")
