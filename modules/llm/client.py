@@ -133,6 +133,20 @@ class OllamaClient:
         r.raise_for_status()
         return r.json().get("models", [])
 
+    def ps(self) -> list[dict[str, Any]]:
+        """Aktuell in den Speicher geladene Modelle (/api/ps).
+
+        Jeder Eintrag hat u.a. name/model, size, size_vram, expires_at. Leere
+        Liste = kein Modell resident (idle). Wirft LLMError bei Unerreichbar-
+        keit (Connection/Timeout) — HTTP-Fehler werden als [] behandelt."""
+        r = self._request("GET", "/api/ps", timeout=10)
+        if not r.ok:
+            return []
+        try:
+            return r.json().get("models", []) or []
+        except json.JSONDecodeError:
+            return []
+
     def generate(
         self,
         prompt:    str,

@@ -14,6 +14,9 @@ Subcommands:
         launchd StartInterval). Ohne --once: Dauerlauf mit Idle-Sleep.
     show [--limit N]
         Letzte Jobs + Status-Zaehler (read-only).
+    status
+        Kompakter Report: Queue-Zaehler (Status x Kind, aeltester pending,
+        letzter Fehler) + nova-w5 health + geladene Modelle (/api/ps).
 
 Environment:
     LAB_DB_PATH        optional — default ~/nova_data/lab.duckdb
@@ -300,6 +303,107 @@ def cmd_show(args) -> int:
     return 0
 
 
+def _ago(dt) -> str:
+    """Kompakte Relativzeit ggue. jetzt (UTC). dt naiv=UTC oder tz-aware."""
+    from datetime import datetime, timezone
+    if dt is None:
+        return "—"
+    if getattr(dt, "tzinfo", None) is not None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.utcnow()
+    sec = (now - dt).total_seconds()
+    past = sec >= 0
+    sec = abs(int(sec))
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m, _ = divmod(rem, 60)
+    parts = [f"{d}d" if d else "", f"{h}h" if h else "",
+             f"{m}m" if (m and not d) else ""]
+    s = " ".join(p for p in parts if p) or "0m"
+    return f"vor {s}" if past else f"in {s}"
+
+
+def _gb(n) -> str:
+    try:
+        return f"{float(n) / 1e9:.1f} GB"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def cmd_status(args) -> int:
+    """Kompakter Health-Report: Queue-Zaehler + nova-w5 /api/ps + health."""
+    from datetime import datetime, timezone
+
+    con = duckdb.connect(dblock.db_path(), read_only=True)
+    try:
+        counts = q.counts(con)
+        oldest = con.execute("SELECT MIN(created_at) FROM llm_jobs "
+                             "WHERE status='pending'").fetchone()[0]
+        last_done = con.execute("SELECT MAX(updated_at) FROM llm_jobs "
+                                "WHERE status='done'").fetchone()[0]
+        err = con.execute(
+            "SELECT updated_at, kind, ref_instrument_id, error FROM llm_jobs "
+            "WHERE status='error' ORDER BY updated_at DESC LIMIT 1").fetchone()
+        matrix = con.execute(
+            "SELECT kind, status, COUNT(*) FROM llm_jobs "
+            "GROUP BY kind, status").fetchall()
+    finally:
+        con.close()
+
+    print(f"nova-lab LLM-Job-Status   (DB: {dblock.db_path()})")
+    print("=" * 60)
+    order = ["pending", "running", "done", "error"]
+    line = " · ".join(f"{s} {counts.get(s, 0)}" for s in order
+                      if s in counts or s in order)
+    print(f"Queue:  {line}")
+    print(f"        aeltester pending: {str(oldest)[:16]}  ({_ago(oldest)})")
+    print(f"        letzter done:      {str(last_done)[:16]}  "
+          f"({_ago(last_done)})")
+    if err:
+        ts, kind, rid, emsg = err
+        print(f"        letzter Fehler:    {str(ts)[:16]}  {kind} "
+              f"{rid or ''}")
+        print(f"          {(emsg or '')[:80]}")
+
+    if matrix:
+        kinds = sorted({k for k, _, _ in matrix})
+        by = {(k, s): n for k, s, n in matrix}
+        print()
+        print(f"  {'kind':<20}" + "".join(f"{s:>9}" for s in order))
+        for k in kinds:
+            print(f"  {k:<20}"
+                  + "".join(f"{by.get((k, s), 0):>9}" for s in order))
+
+    host = OllamaClient().host
+    print()
+    print(f"nova-w5 ({host}):")
+    try:
+        with OllamaClient() as llm:
+            ok, msg = llm.health_check()
+            print(f"        health: {'OK' if ok else 'DOWN'} — {msg}")
+            if ok:
+                loaded = llm.ps()
+                if not loaded:
+                    print("        /api/ps: kein Modell resident (idle)")
+                for m in loaded:
+                    name = m.get("name") or m.get("model") or "?"
+                    exp = m.get("expires_at")
+                    when = ""
+                    if exp:
+                        try:
+                            dt = datetime.fromisoformat(
+                                str(exp).replace("Z", "+00:00"))
+                            when = f"  entladen {_ago(dt)}"
+                        except ValueError:
+                            pass
+                    print(f"        {name:<32} {_gb(m.get('size'))} "
+                          f"(VRAM {_gb(m.get('size_vram'))}){when}")
+    except LLMError as e:
+        print(f"        health: DOWN — {e}")
+    return 0
+
+
 def cmd_reset(args) -> int:
     with dblock.rw_connection() as con:
         q.apply_schema(con)
@@ -343,6 +447,10 @@ def main(argv=None) -> int:
     ps = sub.add_parser("show", help="Jobs + Status zeigen")
     ps.add_argument("--limit", type=int, default=20)
     ps.set_defaults(func=cmd_show)
+
+    pst = sub.add_parser("status",
+                         help="Queue-Zaehler + nova-w5 /api/ps + health")
+    pst.set_defaults(func=cmd_status)
 
     prs = sub.add_parser("reset", help="error/haengende Jobs -> pending")
     prs.add_argument("--stuck", action="store_true",
