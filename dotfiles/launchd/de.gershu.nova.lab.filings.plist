@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  nova-lab filings LaunchDaemon — Filing-Watcher-Producer.
+
+  Schedule: zweimal taeglich (07:30 und 19:30) per StartCalendarInterval.
+  Erkennt neue SEC-Filings je Universums-Wert und legt LLM-Jobs an
+  (10-K/10-Q als GuV-Diff, 8-K als Text-Summary). Bewusst getrennt vom
+  llm_worker (alle 5 Minuten), weil dieser Producer sec-api-lastig ist und
+  ein bis zwei Laeufe pro Tag genuegen. Die LLM-Inferenz uebernimmt danach
+  der llm_worker auf nova-w5; hier laufen nur sec-api-Reads plus kurze
+  DuckDB-Schreibzugriffe (Schreib-Lock).
+
+  Initial-Setup: scripts/install_daemon.sh lab.filings
+  Logs:          /Users/novaadm/Library/Logs/nova-lab-filings.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>de.gershu.nova.lab.filings</string>
+
+    <key>UserName</key>
+    <string>novaadm</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/novaadm/nova/scripts/lab_filings.sh</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>7</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>19</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-filings.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/novaadm/Library/Logs/nova-lab-filings.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <false/>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/novaadm</string>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/novaadm/nova</string>
+</dict>
+</plist>

@@ -652,6 +652,41 @@ def find_earnings_exhibits(ticker: str, *, n: int = 4) -> list[dict]:
     return out
 
 
+def _pick_8k_doc(docs: list[dict]) -> str | None:
+    """Primaeres 8-K-Body-Dokument (type == '8-K')."""
+    for d in docs or []:
+        if (d.get("type") or "").lower().startswith("8-k"):
+            return d.get("documentUrl")
+    return None
+
+
+def find_8k_filings(ticker: str, *, n: int = 2) -> list[dict]:
+    """Juengste 8-K eines Tickers mit Items + bestem Text-Dokument.
+
+    text_url-Praeferenz: EX-99.1/EX-99-Exhibit (Press-Release) > primaeres
+    8-K-Body-Dokument > linkToFilingDetails. items ist die (Roh-)Liste der
+    8-K-Item-Bezeichnungen aus sec-api (z.B. ["Item 2.02 ...", "Item 9.01 ..."]).
+    Schluessel kompatibel zu find_filings (accession_no/period_of_report).
+    """
+    filings = _query_raw(f'ticker:{ticker} AND formType:"8-K"', n)
+    out = []
+    for f in filings:
+        docs = f.get("documentFormatFiles") or []
+        text_url = (_pick_earnings_exhibit(docs) or _pick_8k_doc(docs)
+                    or f.get("linkToFilingDetails"))
+        out.append({
+            "accession_no":     f.get("accessionNo"),
+            "form_type":        f.get("formType"),
+            "period_of_report": f.get("periodOfReport"),
+            "filed_at":         f.get("filedAt"),
+            "ticker":           f.get("ticker"),
+            "items":            f.get("items") or [],
+            "description":      f.get("description") or "",
+            "text_url":         text_url,
+        })
+    return out
+
+
 # SEC verlangt einen User-Agent mit Kontakt (Fair-Access-Policy); ein
 # generischer UA fuehrt zu HTTP 403. Primaer laeuft der Download aber ueber
 # die authentifizierte Proxy von sec-api.io (archive.sec-api.io + token).

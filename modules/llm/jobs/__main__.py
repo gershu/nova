@@ -106,9 +106,10 @@ def _universe(con, all_instruments: bool):
 
 
 def cmd_enqueue_filings(args) -> int:
-    """Neue 10-K/10-Q/8-K je Universums-Wert erkennen -> filing_change-Jobs.
-    --seed: aktuelle Filings nur als 'gesehen' markieren (Baseline, keine
-    Jobs) — einmalig vor der ersten echten Ueberwachung."""
+    """Neue Filings je Universums-Wert erkennen -> Jobs nach Form routen:
+    10-K/10-Q -> 'filing_change' (GuV-Diff), 8-K -> 'filing_8k' (Text-Summary,
+    da 8-K keine GuV hat). --seed: aktuelle Filings nur als 'gesehen' markieren
+    (Baseline, keine Jobs) — einmalig vor der ersten echten Ueberwachung."""
     from datetime import datetime, timezone
     from modules.sec_filings import client as sec
 
@@ -128,7 +129,12 @@ def cmd_enqueue_filings(args) -> int:
     for rid, sym in uni:
         for form in forms:
             try:
-                fil = sec.find_filings(sym, n=2, forms=(form,))
+                # 8-K hat keine GuV -> Text-Summary-Pfad (find_8k_filings
+                # liefert items + text_url). 10-K/10-Q -> GuV-Diff.
+                if form == "8-K":
+                    fil = sec.find_8k_filings(sym, n=2)
+                else:
+                    fil = sec.find_filings(sym, n=2, forms=(form,))
             except Exception:  # noqa: BLE001
                 continue
             if not fil:
@@ -150,6 +156,16 @@ def cmd_enqueue_filings(args) -> int:
                     [rid, form, acc, latest.get("period_of_report"), now])
                 if first_time and args.seed:
                     n_seed += 1
+                elif form == "8-K":
+                    q.enqueue(con, "filing_8k", ref_instrument_id=rid,
+                              payload={"symbol": sym, "accession": acc,
+                                       "period": latest.get(
+                                           "period_of_report"),
+                                       "filed_at": latest.get("filed_at"),
+                                       "items": latest.get("items") or [],
+                                       "text_url": latest.get("text_url")},
+                              priority=80, dedupe=False)
+                    n_new += 1
                 else:
                     prior = fil[1] if len(fil) > 1 else None
                     q.enqueue(con, "filing_change", ref_instrument_id=rid,
@@ -165,7 +181,7 @@ def cmd_enqueue_filings(args) -> int:
                     n_new += 1
         if args.sleep:
             time.sleep(args.sleep)
-    print(f"filing_change: {n_new} Jobs, {n_seed} geseedet, {n_skip} "
+    print(f"filing watcher: {n_new} Jobs, {n_seed} geseedet, {n_skip} "
           "unveraendert.")
     return 0
 
@@ -295,7 +311,8 @@ def main(argv=None) -> int:
     pe.set_defaults(func=cmd_enqueue_quality)
 
     pf = sub.add_parser("enqueue-filings",
-                        help="neue 10-K/10-Q/8-K -> filing_change-Jobs")
+                        help="neue Filings -> filing_change (K/Q) / "
+                             "filing_8k (8-K)")
     pf.add_argument("--all", action="store_true")
     pf.add_argument("--limit", type=int, default=0)
     pf.add_argument("--forms", type=str, default="10-K,10-Q,8-K")

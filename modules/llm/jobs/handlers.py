@@ -227,7 +227,82 @@ def filing_change_persist(con, job, result: dict) -> str:
             f"{result['impact']} — {result['summary'][:50]}")
 
 
+# ---- filing_8k (Text-Summary statt GuV-Diff) ----
+#
+# 8-K-Filings haben keine GuV (Ereignis-Meldungen) -> der filing_change-Diff
+# liefert dort nur "keine GuV-Daten". Stattdessen: Exhibit/Body-Text holen und
+# das Ereignis kurz zusammenfassen. Ergebnis landet in derselben Tabelle
+# (ref_filing_change) -> persist wird wiederverwendet.
+
+_8K_SYSTEM = (
+    "Du bist ein nuechterner Analyst. Du fasst ein SEC-8-K (Ad-hoc-Meldung) "
+    "rein faktisch zusammen — keine Kauf-/Verkaufsempfehlung, keine "
+    "Kursprognose, keine erfundenen Zahlen. Nutze nur den gegebenen Text.")
+
+_8K_PROMPT = """{symbol} 8-K, eingereicht {filed_at}.
+Gemeldete Items: {items}
+
+Auszug aus dem Filing (gekuerzt):
+\"\"\"
+{text}
+\"\"\"
+
+Aufgabe:
+1. "summary": 2-3 nuechterne deutsche Saetze — welches Ereignis wird gemeldet
+   und ist es fuer die Qualitaets-These relevant (Earnings, Personalwechsel,
+   Uebernahme, Vertrag, Guidance o.ae.)?
+2. "impact": eines von "positiv" | "neutral" | "negativ" fuer die These.
+
+Antworte ausschliesslich als JSON: {{"summary": "...", "impact": "..."}}"""
+
+_8K_MAX_CHARS = 6000
+
+
+def _items_str(items) -> str:
+    if isinstance(items, (list, tuple)):
+        return "; ".join(str(i) for i in items) or "—"
+    return str(items or "—")
+
+
+def filing_8k_compute(job, *, model=None) -> dict:
+    from modules.sec_filings import client as sec
+    p = job["payload"]
+    base = {"symbol": p.get("symbol"), "form": "8-K",
+            "accession": p.get("accession"), "period": p.get("period"),
+            "prior_period": None,
+            "deltas": {"kind": "8k", "items": p.get("items") or [],
+                       "filed_at": p.get("filed_at")}}
+    text = ""
+    url = p.get("text_url")
+    if url:
+        try:
+            text = sec.fetch_exhibit_text(url)[:_8K_MAX_CHARS]
+        except Exception:  # noqa: BLE001
+            text = ""
+    if not text.strip():
+        return {**base, "summary": "Kein lesbarer 8-K-Text abrufbar.",
+                "impact": "n/a", "model": "—"}
+    prompt = _8K_PROMPT.format(symbol=p.get("symbol"),
+                               filed_at=p.get("filed_at") or "—",
+                               items=_items_str(p.get("items")), text=text)
+    with OllamaClient() as llm:
+        r = llm.generate(prompt, system=_8K_SYSTEM, json_mode=True, model=model)
+    m = re.search(r"\{.*\}", r.text, re.DOTALL)
+    summary, impact = (r.text.strip(), "n/a")
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            summary = str(d.get("summary", "")).strip() or r.text.strip()
+            impact = str(d.get("impact", "n/a")).strip() or "n/a"
+        except Exception:  # noqa: BLE001
+            pass
+    return {**base, "summary": summary, "impact": impact,
+            "model": getattr(r, "model", model or "?")}
+
+
 COMPUTE = {"quality_narrative": quality_compute,
-           "filing_change": filing_change_compute}
+           "filing_change": filing_change_compute,
+           "filing_8k": filing_8k_compute}
 PERSIST = {"quality_narrative": quality_persist,
-           "filing_change": filing_change_persist}
+           "filing_change": filing_change_persist,
+           "filing_8k": filing_change_persist}
