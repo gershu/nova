@@ -89,13 +89,32 @@ def _year_metrics(ticker: str, n: int = 5, period: str = "annual"):
     return cd.year_metrics(ticker, n_years=n, period=period)
 
 
+def _gf_balance_objs(ticker: str, n: int, period: str):
+    """GuruFocus-Bilanz -> Liste BalanceSheet-Objekte (oder None)."""
+    fin = _gf_financials(ticker)
+    if not fin:
+        return None
+    from modules.gurufocus import adapter as ga
+    from modules.sec_filings.client import BalanceSheet
+    rows = ga.balance_rows(fin, n, quarterly=(period == "quarterly"))
+    if not rows:
+        return None
+    return [BalanceSheet(**d) for d in rows]
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _balance(ticker: str):
+    objs = _gf_balance_objs(ticker, 1, "annual")
+    if objs:
+        return objs[-1]
     return cd.balance(ticker)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _balance_hist(ticker: str, n: int = 5, period: str = "annual"):
+    objs = _gf_balance_objs(ticker, n, period)
+    if objs is not None:
+        return objs
     return cd.balance_history(ticker, n_years=n, period=period)
 
 
@@ -161,6 +180,12 @@ def _sbc_hist(ticker: str, n: int = 5, period: str = "annual"):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _earnings_hist(ticker: str, n: int = 5, period: str = "annual"):
+    fin = _gf_financials(ticker)
+    if fin:
+        from modules.gurufocus import adapter as ga
+        rows = ga.earnings_rows(fin, n, quarterly=(period == "quarterly"))
+        if rows:
+            return rows
     return cd.earnings_history(ticker, n_years=n, period=period)
 
 

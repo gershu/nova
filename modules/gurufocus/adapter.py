@@ -247,6 +247,100 @@ _INCOME_MAP = {
 }
 
 
+def balance_rows(financials: dict, n_years: int | None = None,
+                 *, quarterly: bool = False) -> list[dict]:
+    """Bilanz-Historie als Dicts mit BalanceSheet-Feldnamen (sec_filings.
+    client.BalanceSheet) — der View baut daraus BalanceSheet-Objekte."""
+    ann = _section(financials, quarterly)
+    form = "10-Q" if quarterly else "10-K"
+    fy = ann.get("Fiscal Year", []) or []
+    bs = ann.get("balance_sheet", {}) or {}
+
+    def at(name, i):
+        arr = bs.get(name) or []
+        return _f(arr[i]) if i < len(arr) else None
+
+    rows = []
+    for i, period in enumerate(fy):
+        if str(period).upper() in ("TTM", "PRELIMINARY"):
+            continue
+        rows.append({
+            "period_end":          str(period),
+            "form_type":           form,
+            "accession_no":        None,
+            "filed_at":            None,
+            "currency":            "USD",
+            "cash":                _mn(at("Cash and Cash Equivalents", i)),
+            "short_term_invest":   _mn(at("Marketable Securities", i)),
+            "assets_current":      _mn(at("Total Current Assets", i)),
+            "liabilities_current": _mn(at("Total Current Liabilities", i)),
+            "total_assets":        _mn(at("Total Assets", i)),
+            "total_liabilities":   _mn(at("Total Liabilities", i)),
+            "equity":              _mn(at("Total Stockholders Equity", i)),
+            "long_term_debt": _mn(at("Long-Term Debt & Capital Lease "
+                                     "Obligation", i)),
+            "current_debt": _mn(at("Short-Term Debt & Capital Lease "
+                                   "Obligation", i)),
+            "inventory":           _mn(at("Total Inventories", i)),
+            "goodwill":            _mn(at("Goodwill", i)),
+            "intangibles":         _mn(at("Intangible Assets", i)),
+        })
+    if n_years:
+        rows = rows[-int(n_years):]
+    return rows
+
+
+def earnings_rows(financials: dict, n_years: int | None = None,
+                  *, quarterly: bool = False) -> list[dict]:
+    """RE/EPS/Equity/FCF/Net-Debt je Periode (company_data.earnings_history-
+    Shape) aus GuruFocus financials."""
+    ann = _section(financials, quarterly)
+    form = "10-Q" if quarterly else "10-K"
+    fy = ann.get("Fiscal Year", []) or []
+    inc = ann.get("income_statement", {}) or {}
+    bs = ann.get("balance_sheet", {}) or {}
+    ps = ann.get("per_share_data_array", {}) or {}
+    cf = ann.get("cashflow_statement", {}) or {}
+
+    def at(sec, name, i):
+        arr = sec.get(name) or []
+        return _f(arr[i]) if i < len(arr) else None
+
+    rows = []
+    for i, period in enumerate(fy):
+        if str(period).upper() in ("TTM", "PRELIMINARY"):
+            continue
+        sh = _mn(at(ps, "Shares Outstanding (Diluted Average)", i))
+        cfo = _mn(at(cf, "Cash Flow from Operations", i))
+        capex = _absmn(at(cf, "Purchase Of Property, Plant, Equipment", i))
+        fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
+        ltd = at(bs, "Long-Term Debt & Capital Lease Obligation", i)
+        std = at(bs, "Short-Term Debt & Capital Lease Obligation", i)
+        cash = at(bs, "Cash, Cash Equivalents, Marketable Securities", i)
+        if cash is None:
+            cash = at(bs, "Cash and Cash Equivalents", i)
+        debt = (ltd or 0.0) + (std or 0.0) if (ltd is not None
+                                               or std is not None) else None
+        net_debt = (_mn(debt) - (_mn(cash) or 0.0)) if debt is not None else None
+        rows.append({
+            "period_end":       str(period),
+            "form_type":        form,
+            "accession_no":     None,
+            "retained":         _mn(at(bs, "Retained Earnings", i)),
+            "eps_basic":        None,
+            "eps_diluted":      at(ps, "Earnings per Share (Diluted)", i),
+            "net_income":       _mn(at(inc, "Net Income", i)),
+            "operating_income": _mn(at(inc, "Operating Income", i)),
+            "equity":           _mn(at(bs, "Total Stockholders Equity", i)),
+            "fcf":              fcf,
+            "net_debt":         net_debt,
+            "diluted_shares":   sh,
+        })
+    if n_years:
+        rows = rows[-int(n_years):]
+    return rows
+
+
 def income_rows(financials: dict, n_years: int | None = None,
                 *, quarterly: bool = False) -> list[dict]:
     """GuV-Historie in income_history-Shape (company_data._row_from_*)."""
