@@ -1419,6 +1419,77 @@ def _13f_shares(h: dict):
         return None
 
 
+def _13f_holding(h: dict) -> dict:
+    """Eine 13F-Position normalisieren."""
+    try:
+        value = float(h.get("value")) if h.get("value") is not None else None
+    except (TypeError, ValueError):
+        value = None
+    return {
+        "ticker":   (h.get("ticker") or "").upper() or None,
+        "cusip":    h.get("cusip"),
+        "name":     (h.get("nameOfIssuer") or h.get("issuer")
+                     or h.get("name") or "—"),
+        "value":    value,
+        "shares":   _13f_shares(h),
+        "put_call": (h.get("putCall") or "").strip(),   # ''|'Put'|'Call'
+    }
+
+
+def fetch_manager_13f(*, cik: str | None = None, name: str | None = None,
+                      n_filings: int = 2) -> dict:
+    """Komplette(s) 13F-Portfolio(s) EINES Managers (neueste n_filings).
+
+    Form-13F-Holdings-Endpoint, gefiltert auf den Filer (CIK bevorzugt, sonst
+    companyName). Returns {filings: [{period, filed_at, manager, cik,
+    holdings:[_13f_holding,…]}], error}. holdings sind nach Wert absteigend
+    sortiert; put_call weist Optionen aus (''=Aktie). 13F zeigt nur US-Long-
+    Aktien + gelistete Optionen — keine Shorts/Cash/Non-US.
+    """
+    if not cik and not name:
+        return {"filings": [], "error": "cik oder name noetig"}
+    auth = {"Authorization": _api_key()}
+    queries = []
+    if cik:
+        queries.append(f"cik:{str(cik).lstrip('0') or '0'}")
+    if name:
+        queries.append(f'companyName:"{name}"')
+    last_err = None
+    for q in queries:
+        payload = {"query": q, "from": "0",
+                   "size": str(max(1, int(n_filings))),
+                   "sort": [{"filedAt": {"order": "desc"}}]}
+        try:
+            resp = requests.post(FORM13F_URL, json=payload, headers=auth,
+                                 timeout=40)
+        except requests.RequestException as e:
+            last_err = f"Request: {e}"; continue
+        if resp.status_code != 200:
+            last_err = f"HTTP {resp.status_code}: {resp.text[:120]}"; continue
+        body = resp.json() or {}
+        recs = body.get("data") or body.get("filings") or []
+        filings = []
+        for rec in recs:
+            hs = rec.get("holdings")
+            if not isinstance(hs, list):
+                continue
+            holdings = [_13f_holding(h) for h in hs if isinstance(h, dict)]
+            holdings.sort(key=lambda d: (d["value"] or 0.0), reverse=True)
+            filings.append({
+                "period":   rec.get("periodOfReport"),
+                "filed_at": rec.get("filedAt"),
+                "manager":  (rec.get("companyName")
+                             or (rec.get("filer") or {}).get("name")
+                             or name or "—"),
+                "cik":      rec.get("cik") or cik,
+                "holdings": holdings,
+            })
+        if filings:
+            return {"filings": filings, "error": None}
+        last_err = f"keine Filings (query={q})"
+    return {"filings": [], "error": last_err or "keine 13F-Filings"}
+
+
 def fetch_institutional_holdings(ticker: str, *, n: int = 50) -> dict:
     """Institutionelle 13F-Positionen im Wert (Best-effort, groesste Halter).
 

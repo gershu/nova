@@ -1,0 +1,26 @@
+# nova-lab: getrackte 13F-Filer ("Superinvestoren").
+#
+# Der Ingest (python -m modules.superinvestors ingest) holt je Eintrag das
+# neueste 13F-Portfolio + Quartalsveraenderungen. CIK bevorzugt (eindeutig);
+# alternativ name (companyName-Suche, weniger praezise).
+#
+# WICHTIG: 13F zeigt nur US-Long-Aktien + gelistete Optionen — keine Shorts,
+# kein Cash, kein Non-US, keine Netto-Exposure. Put/Call-Positionen werden
+# ausgewiesen (z.B. Aschenbrenner haelt grosse PUT-Bestaende = baerisch).
+# 45-Tage-Meldefrist -> Ideen-Quelle, kein Timing-Signal.
+#
+# CIK 10-stellig (mit fuehrenden Nullen ok) oder als Zahl.
+
+managers:
+  - name: "Situational Awareness LP (Leopold Aschenbrenner)"
+    cik:  "0002045724"
+  - name: "Berkshire Hathaway (Warren Buffett)"
+    cik:  "0001067983"
+
+  # Weitere per CIK ergaenzen, z.B.:
+  # - name: "Fundsmith LLP"
+  #   cik:  "0001569205"
+  # - name: "Akre Capital Management"
+  #   cik:  "0001112520"
+  # Oder per Name (best-effort companyName-Suche):
+  # - name: "BAILLIE GIFFORD & CO"
