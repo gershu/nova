@@ -39,6 +39,11 @@ def _mn(v):
     return v * _M if v is not None else None
 
 
+def _absmn(v):
+    """Mittelabfluss (in GuruFocus negativ) -> positiver Betrag, * Mio."""
+    return _mn(abs(v)) if v is not None else None
+
+
 # ---------- KPI-Snapshot (summary.ratio + keyratios + company_data) ----------
 
 # kpi_spalte -> (key in summary.ratio, transform)
@@ -124,6 +129,7 @@ def metric_rows(financials: dict, n_years: int | None = None,
     inc = ann.get("income_statement", {}) or {}
     bs = ann.get("balance_sheet", {}) or {}
     ps = ann.get("per_share_data_array", {}) or {}
+    cf = ann.get("cashflow_statement", {}) or {}
     vq = ann.get("valuation_and_quality", {}) or {}
 
     def at(sec, name, i):
@@ -134,36 +140,103 @@ def metric_rows(financials: dict, n_years: int | None = None,
     for i, period in enumerate(fy):
         if str(period).upper() in ("TTM", "PRELIMINARY"):
             continue  # nur abgeschlossene Geschaeftsjahre
-        rev = at(inc, "Revenue", i)
         sh = at(ps, "Shares Outstanding (Diluted Average)", i)
         shares_abs = _mn(sh)
-        fcfps = at(ps, "Free Cash Flow per Share", i)
-        fcf = (fcfps * shares_abs) if (fcfps is not None
-                                       and shares_abs is not None) else None
+        cfo = _mn(at(cf, "Cash Flow from Operations", i))
+        capex = _absmn(at(cf, "Purchase Of Property, Plant, Equipment", i))
+        fcf = (cfo - capex) if (cfo is not None and capex is not None) else None
+        if fcf is None:                       # Fallback: FCF/Aktie * Aktien
+            fcfps = at(ps, "Free Cash Flow per Share", i)
+            fcf = (fcfps * shares_abs) if (fcfps is not None
+                                           and shares_abs is not None) else None
         ltd = at(bs, "Long-Term Debt & Capital Lease Obligation", i)
         std = at(bs, "Short-Term Debt & Capital Lease Obligation", i)
         cash = at(bs, "Cash, Cash Equivalents, Marketable Securities", i)
         if cash is None:
             cash = at(bs, "Cash and Cash Equivalents", i)
-        debt = None
-        if ltd is not None or std is not None:
-            debt = (ltd or 0.0) + (std or 0.0)
+        debt = (ltd or 0.0) + (std or 0.0) if (ltd is not None
+                                               or std is not None) else None
         net_debt = (_mn(debt) - (_mn(cash) or 0.0)) if debt is not None else None
+        ppe_gross = at(bs, "Gross Property, Plant and Equipment", i)
+        ppe_is_net = False
+        if ppe_gross is None:
+            ppe_gross = at(bs, "Property, Plant and Equipment", i)
+            ppe_is_net = ppe_gross is not None
+        sh_eop = at(ps, "Shares Outstanding (EOP)", i)
+        if sh_eop is None:
+            sh_eop = at(ps, "Shares Outstanding (Basic Average)", i)
         rows.append({
             "period_end":       str(period),
             "form_type":        form,
             "accession_no":     None,
-            "revenue":          _mn(rev),
+            "revenue":          _mn(at(inc, "Revenue", i)),
             "gross_profit":     _mn(at(inc, "Gross Profit", i)),
-            "operating_income": _mn(at(inc, "Operating Income", i)),
-            "net_income":       _mn(at(inc, "Net Income", i)),
             "rd_expense":       _mn(at(inc, "Research & Development", i)),
+            "operating_income": _mn(at(inc, "Operating Income", i)),
+            "pretax_income":    _mn(at(inc, "Pretax Income", i)),
+            "tax_expense":      _absmn(at(inc, "Tax Provision", i)),
+            "net_income":       _mn(at(inc, "Net Income", i)),
             "equity":           _mn(at(bs, "Total Stockholders Equity", i)),
+            "total_debt":       _mn(debt),
+            "cash_and_sti":     _mn(cash),
             "net_debt":         net_debt,
-            "diluted_shares":   shares_abs,
+            "cfo":              cfo,
+            "capex":            capex,
             "fcf":              fcf,
+            "dep_amort": _mn(at(cf, "Cash Flow Depreciation, Depletion "
+                                "and Amortization", i)),
+            "buybacks":         _absmn(at(cf, "Repurchase of Stock", i)),
+            "dividends":        _absmn(at(cf, "Cash Flow for Dividends", i)),
+            "acquisitions":     _absmn(at(cf, "Purchase Of Business", i)),
+            "ppe_gross":        _mn(ppe_gross),
+            "ppe_is_net":       ppe_is_net,
+            "diluted_shares":   shares_abs,
+            "shares_outstanding": _mn(sh_eop),
             "employees":        at(vq, "Number of Employees", i),
         })
+    if n_years:
+        rows = rows[-int(n_years):]
+    return rows
+
+
+# _INCOME_COLS (company_data) -> GuruFocus income_statement-Zeilen
+_INCOME_MAP = {
+    "revenue":           "Revenue",
+    "cost_of_revenue":   "Cost of Goods Sold",
+    "gross_profit":      "Gross Profit",
+    "rd_expense":        "Research & Development",
+    "sga_expense":       "Selling, General, & Admin. Expense",
+    "operating_expense": "Total Operating Expense",
+    "operating_income":  "Operating Income",
+    "other_income":      "Other Income (Expense)",
+    "pretax_income":     "Pretax Income",
+    "tax_expense":       "Tax Provision",
+    "net_income":        "Net Income",
+}
+
+
+def income_rows(financials: dict, n_years: int | None = None,
+                *, quarterly: bool = False) -> list[dict]:
+    """GuV-Historie in income_history-Shape (company_data._row_from_*)."""
+    ann = _section(financials, quarterly)
+    form = "10-Q" if quarterly else "10-K"
+    fy = ann.get("Fiscal Year", []) or []
+    inc = ann.get("income_statement", {}) or {}
+
+    def at(name, i):
+        arr = inc.get(name) or []
+        return _f(arr[i]) if i < len(arr) else None
+
+    rows = []
+    for i, period in enumerate(fy):
+        if str(period).upper() in ("TTM", "PRELIMINARY"):
+            continue
+        d = {"period_end": str(period), "form_type": form, "currency": "USD",
+             "accession_no": None, "filed_at": None}
+        for col, key in _INCOME_MAP.items():
+            v = at(key, i)
+            d[col] = _absmn(v) if col == "tax_expense" else _mn(v)
+        rows.append(d)
     if n_years:
         rows = rows[-int(n_years):]
     return rows

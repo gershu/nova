@@ -49,13 +49,43 @@ def _resolve(ticker: str):
     return cd.resolve(ticker)
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _gf_financials(ticker: str):
+    """GuruFocus-financials EINMAL holen (cached) — Quelle fuer _income/
+    _year_metrics/Deep-Dive (Pfad A). None, wenn kein Token/Fehler."""
+    try:
+        from modules.gurufocus import provider as gfp
+        from modules.gurufocus.client import GuruFocusClient
+        if not gfp.available():
+            return None
+        c = GuruFocusClient()
+        try:
+            return c.financials(ticker)
+        finally:
+            c.close()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _income(ticker: str, n: int = 5, period: str = "annual"):
+    fin = _gf_financials(ticker)
+    if fin:
+        from modules.gurufocus import adapter as ga
+        rows = ga.income_rows(fin, n, quarterly=(period == "quarterly"))
+        if rows:
+            return {"source": "GuruFocus", "rows": rows}
     return cd.income_history(ticker, n_years=n, period=period)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _year_metrics(ticker: str, n: int = 5, period: str = "annual"):
+    fin = _gf_financials(ticker)
+    if fin:
+        from modules.gurufocus import adapter as ga
+        rows = ga.metric_rows(fin, n, quarterly=(period == "quarterly"))
+        if rows:
+            return {"source": "GuruFocus", "rows": rows}
     return cd.year_metrics(ticker, n_years=n, period=period)
 
 
@@ -2524,19 +2554,9 @@ def _render_gesamt_score(ticker: str, src) -> None:
                "Thema. Heuristik, kein Anlageurteil.")
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
 def _dd_metric_rows(ticker: str, n: int, period: str) -> dict:
-    """Metrik-Rohzeilen fuer den Deep Dive: GuruFocus bevorzugt (lange
-    Historie, kein XBRL-404), Fallback sec-api year_metrics."""
-    try:
-        from modules.gurufocus import provider as gfp
-        if gfp.available():
-            rows = gfp.metric_rows(ticker, n_years=n,
-                                   quarterly=(period == "quarterly"))
-            if rows:
-                return {"rows": rows, "source": "GuruFocus"}
-    except Exception:  # noqa: BLE001
-        pass
+    """Metrik-Rohzeilen fuer den Deep Dive — nutzt _year_metrics (GuruFocus-
+    first via _gf_financials, Fallback sec-api), ein gemeinsamer Fetch."""
     ym = _year_metrics(ticker, n, period)
     return {"rows": ym.get("rows", []) if isinstance(ym, dict) else [],
             "source": ym.get("source", "—") if isinstance(ym, dict) else "—"}
