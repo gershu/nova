@@ -112,6 +112,38 @@ def kpi_snapshot(summary: dict, keyratios: dict) -> tuple[dict, dict]:
     return f, med
 
 
+# ---------- Qualitaets-/Score-Snapshot (summary.company_data) ----------
+
+def quality_snapshot(summary: dict) -> dict:
+    """GuruFocus-Qualitaets-Kennzahlen je Wert (ersetzt den hauseigenen
+    Shearn-Score). Quelle: summary.company_data."""
+    s = (summary or {}).get("summary", summary) or {}
+    cd = s.get("company_data", {}) or {}
+    gen = s.get("general", {}) or {}
+
+    def n(k):
+        return _f(cd.get(k))
+    return {
+        "name":         gen.get("company") or gen.get("company_name"),
+        "sector":       gen.get("sector") or gen.get("group"),
+        "gf_score":     n("gf_score"),               # 0..100 (Gesamt)
+        "gf_value":     n("gf_value"),               # intrinsischer Wert
+        "price_to_gf_value": n("p2gf_value"),        # Kurs / GF-Value
+        "gf_valuation": cd.get("gf_valuation"),      # Text (Over/Undervalued)
+        "rank_financial_strength": n("rank_financial_strength"),
+        "rank_profitability":      n("rank_profitability"),
+        "rank_growth":             n("rank_growth"),
+        "rank_balancesheet":       n("rank_balancesheet"),
+        "predictability": n("predictability"),       # 0..5
+        "fscore":       n("fscore"),                 # Piotroski 0..9
+        "zscore":       n("zscore"),                 # Altman
+        "mscore":       n("mscore"),                 # Beneish
+        "moat_score":   n("moat_score"),
+        "roic":         n("roic"),                   # %
+        "wacc":         n("wacc"),                   # %
+    }
+
+
 # ---------- Mehrjahres-Metriken (financials.annuals) ----------
 
 def _section(financials: dict, quarterly: bool) -> dict:

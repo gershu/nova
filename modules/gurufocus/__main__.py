@@ -18,8 +18,16 @@ import argparse
 import json
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 from .client import GuruFocusClient, GuruFocusError
+
+SQL_DIR = pathlib.Path(__file__).parent / "sql"
+
+_GF_COLS = ["gf_score", "gf_value", "price_to_gf_value", "gf_valuation",
+            "rank_financial_strength", "rank_profitability", "rank_growth",
+            "rank_balancesheet", "predictability", "fscore", "zscore",
+            "mscore", "moat_score", "roic", "wacc"]
 
 # Datenpunkte, die nova heute nutzt -> als Suchbegriffe (Teil-String, case-insensitive)
 # gegen die GuruFocus-Antworten gematcht. Mehrere Synonyme je Punkt.
@@ -119,6 +127,72 @@ def cmd_probe(args) -> int:
     return 0
 
 
+def _gf_symbol(sym: str) -> str:
+    return (sym or "").strip().upper().replace("_", ".")
+
+
+def cmd_ingest_scores(args) -> int:
+    """GuruFocus GF-Score/Raenge je Universums-Wert -> ref_gf_score.
+    sec-/GuruFocus-Calls lock-frei; Upserts kurz unter dem Schreib-Lock."""
+    import duckdb  # noqa: F401
+    from modules.common import dblock
+    from . import adapter, provider
+    from .client import GuruFocusClient, GuruFocusError
+
+    if not provider.available():
+        print("Kein GURUFOCUS_TOKEN gesetzt.", file=sys.stderr)
+        return 2
+    with dblock.rw_connection() as con:
+        for f in sorted(SQL_DIR.glob("0*.sql")):
+            con.execute(f.read_text())
+        uni = con.execute(
+            "SELECT DISTINCT i.ref_instrument_id, i.symbol, i.name "
+            "FROM ref_fundamentals_latest f JOIN ref_instruments i "
+            "USING (ref_instrument_id) WHERE i.symbol IS NOT NULL "
+            "ORDER BY i.symbol").fetchall()
+    if args.limit:
+        uni = uni[:args.limit]
+
+    seen, n_ok, n_err = set(), 0, 0
+    gf = GuruFocusClient()
+    try:
+        for rid, sym, name in uni:
+            norm = _gf_symbol(sym)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            now = datetime.now(timezone.utc)
+            try:
+                q = adapter.quality_snapshot(gf.summary(norm))  # lock-frei
+                err = None
+            except GuruFocusError as e:
+                q, err = {}, str(e)[:200]
+            with dblock.rw_connection() as con:
+                con.execute("DELETE FROM ref_gf_score WHERE "
+                            "ref_instrument_id=?", [rid])
+                con.execute(
+                    "INSERT INTO ref_gf_score (ref_instrument_id, symbol, "
+                    "name, sector, " + ", ".join(_GF_COLS) + ", error, "
+                    "computed_at) VALUES (" + ",".join("?" * (4 + len(_GF_COLS)
+                                                              + 2)) + ")",
+                    [rid, sym, q.get("name") or name, q.get("sector")]
+                    + [q.get(c) for c in _GF_COLS] + [err, now])
+            if err:
+                n_err += 1
+                print(f"  ✗ {sym}: {err}", file=sys.stderr)
+            else:
+                n_ok += 1
+                print(f"  ✓ {sym}: GF {q.get('gf_score')} · "
+                      f"{q.get('gf_valuation') or '—'}")
+            if args.sleep:
+                import time
+                time.sleep(args.sleep)
+    finally:
+        gf.close()
+    print(f"ref_gf_score: {n_ok} ok, {n_err} Fehler.")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m modules.gurufocus")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -126,6 +200,11 @@ def main(argv=None) -> int:
     pr.add_argument("tickers", nargs="+")
     pr.add_argument("--out", default="~/nova_output/gurufocus")
     pr.set_defaults(func=cmd_probe)
+    pi = sub.add_parser("ingest-scores",
+                        help="GF-Score/Raenge je Universums-Wert -> ref_gf_score")
+    pi.add_argument("--limit", type=int, default=0)
+    pi.add_argument("--sleep", type=float, default=0.0)
+    pi.set_defaults(func=cmd_ingest_scores)
     args = p.parse_args(argv)
     return args.func(args)
 

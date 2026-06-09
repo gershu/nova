@@ -27,6 +27,15 @@ def fundamentals(ticker: str) -> tuple[dict, dict]:
         c.close()
 
 
+def quality(ticker: str) -> dict:
+    """GuruFocus-Qualitaets-Snapshot (GF-Score/Value/Raenge) je Wert."""
+    c = GuruFocusClient()
+    try:
+        return adapter.quality_snapshot(c.summary(ticker))
+    finally:
+        c.close()
+
+
 def metric_rows(ticker: str, n_years: int | None = None,
                 *, quarterly: bool = False) -> list[dict]:
     """Mehrjahres-Metriken (year_metrics-Shape) aus financials (annual/quarterly)."""
