@@ -183,7 +183,14 @@ def find_latest_filing(
 
 
 def fetch_xbrl(accession_no: str) -> dict:
-    """XBRL-to-JSON fuer ein Filing — komplette Finanzberichte als dict."""
+    """XBRL-to-JSON fuer ein Filing — komplette Finanzberichte als dict.
+
+    HTTP 404 (Filer hat kein XBRL angehaengt / Konversion nicht moeglich) wird
+    als 'kein Datum' behandelt -> {} statt Fehler. So bricht ein einzelnes
+    XBRL-loses Filing (z.B. aelteres 10-K) nicht die ganze Mehrjahres-Historie
+    ab; die aufrufenden Schleifen ueberspringen leere Filings. Andere
+    HTTP-Fehler (5xx/429/Auth) werfen weiterhin.
+    """
     try:
         resp = requests.get(
             XBRL_URL,
@@ -191,6 +198,8 @@ def fetch_xbrl(accession_no: str) -> dict:
             timeout=40)
     except requests.RequestException as e:
         raise SecApiError(f"XBRL-to-JSON-Request fehlgeschlagen: {e}") from e
+    if resp.status_code == 404:
+        return {}
     if resp.status_code != 200:
         raise SecApiError(
             f"XBRL-to-JSON HTTP {resp.status_code}: {resp.text[:200]}")
