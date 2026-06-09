@@ -46,6 +46,80 @@ def splits(ticker: str) -> dict:
         return {}
 
 
+def _num(v):
+    try:
+        f = float(v)
+        return None if (f != f) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def fundamentals_snapshot(ticker: str) -> dict:
+    """Kennzahlen-Snapshot via yfinance Ticker.info, gemappt auf die
+    ref_fundamentals_latest-Spaltennamen (fuer den On-Demand-Kennzahlen-
+    Vergleich bei Nicht-Universums-Werten). Defensiv -> {} bei Fehler.
+
+    Nicht alle Felder sind bei yfinance vorhanden (z.B. ROIC, FCF-Marge,
+    Net-Debt/EBITDA) -> bleiben None. Einheiten an die View angeglichen:
+    Margen/ROE/ROA als Anteil (0..1, View *100), debtToEquity /100 -> Ratio,
+    dividendYield robust auf %-Wert (pct_raw) normiert.
+    """
+    try:
+        import yfinance as yf
+        t = yf.Ticker(ticker)
+        try:
+            info = t.get_info() or {}
+        except Exception:  # noqa: BLE001
+            info = getattr(t, "info", {}) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if not info:
+        return {}
+
+    g = info.get
+    mcap = _num(g("marketCap"))
+    fcf = _num(g("freeCashflow"))
+    d2e = _num(g("debtToEquity"))            # yfinance: Prozent (z.B. 150)
+    dy = _num(g("dividendYield"))            # mal Anteil, mal Prozent
+    if dy is not None and dy < 1:            # Anteil -> Prozent
+        dy *= 100.0
+    return {
+        "name":      g("longName") or g("shortName"),
+        "sector":    g("sector"),
+        "industry":  g("industry"),
+        "market_cap": mcap,
+        "currency":  g("currency"),
+        # Bewertung
+        "pe_ttm":     _num(g("trailingPE")),
+        "pe_forward": _num(g("forwardPE")),
+        "peg_ratio":  _num(g("trailingPegRatio") or g("pegRatio")),
+        "pb":         _num(g("priceToBook")),
+        "ps_ttm":     _num(g("priceToSalesTrailing12Months")),
+        "p_fcf":      (mcap / fcf if (mcap and fcf and fcf > 0) else None),
+        "ev_ebitda":  _num(g("enterpriseToEbitda")),
+        "ev_sales":   _num(g("enterpriseToRevenue")),
+        # Profitabilitaet (Anteile)
+        "gross_margin":     _num(g("grossMargins")),
+        "operating_margin": _num(g("operatingMargins")),
+        "net_margin":       _num(g("profitMargins")),
+        "fcf_margin":       None,
+        "roe":              _num(g("returnOnEquity")),
+        "roa":              _num(g("returnOnAssets")),
+        "roic":             None,
+        # Verschuldung & Liquiditaet
+        "debt_to_equity":     (d2e / 100.0 if d2e is not None else None),
+        "net_debt_to_ebitda": None,
+        "current_ratio":      _num(g("currentRatio")),
+        "quick_ratio":        _num(g("quickRatio")),
+        "interest_coverage":  None,
+        # Cash & Dividende
+        "fcf_yield":   (fcf / mcap if (mcap and fcf) else None),
+        "dividend_yield":     dy,
+        "payout_ratio":       _num(g("payoutRatio")),
+        "dividend_per_share": _num(g("dividendRate")),
+    }
+
+
 def company_info(ticker: str) -> dict:
     """Stammdaten (Name, Sektor, Branche, Kurzbeschreibung, Market Cap) via
     yfinance Ticker.info. Defensiv -> {} bei Fehler/fehlenden Feldern."""

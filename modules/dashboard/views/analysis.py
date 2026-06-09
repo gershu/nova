@@ -2096,11 +2096,49 @@ def _kpi_table(group, f, sec) -> None:
                      help="▲ ueber / ▼ unter / = auf Sektor-Median")})
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fund_snapshot(ticker: str) -> dict:
+    """On-Demand-Kennzahlen (yfinance) fuer Nicht-Universums-Werte."""
+    return mkt.fundamentals_snapshot(ticker)
+
+
+def _render_kpi_grid(f, sec) -> None:
+    """Die vier KPI-Bloecke (f = Series/dict, sec = DataFrame fuer Median)."""
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Bewertung**")
+        _kpi_table(_KPI_VALUATION, f, sec)
+        st.markdown("**Verschuldung & Liquiditaet**")
+        _kpi_table(_KPI_LEVERAGE, f, sec)
+    with c2:
+        st.markdown("**Profitabilitaet**")
+        _kpi_table(_KPI_PROFIT, f, sec)
+        st.markdown("**Cash & Dividende**")
+        _kpi_table(_KPI_CASHDIV, f, sec)
+
+
 def _render_ov_kennzahlen(ticker: str, src) -> None:
-    """Ueberblick-Report: Kennzahlen vs. Sektor-Median (Universum, DB)."""
+    """Ueberblick-Report: Kennzahlen vs. Sektor-Median (Universum, DB).
+    Nicht-Universum: optional on-demand via yfinance (ohne Sektor-Median)."""
     if not (src.in_universe and src.ref_instrument_id):
-        st.caption("Kennzahlen-Vergleich nur fuer Universums-Werte "
-                   "(ref_fundamentals_latest).")
+        st.caption("Kennzahlen-Vergleich aus dem Universum (ref_fundamentals_"
+                   "latest) nur fuer Universums-Werte. Fuer diesen Wert "
+                   "koennen die Kennzahlen on-demand geladen werden.")
+        state_key = f"kpi_od_{src.ticker}"
+        if st.button("📥 Kennzahlen on-demand laden (yfinance)",
+                     key=f"kpi_od_btn_{src.ticker}"):
+            with st.spinner("Lade Kennzahlen (yfinance) …"):
+                st.session_state[state_key] = _fund_snapshot(src.ticker)
+        snap = st.session_state.get(state_key)
+        if snap is None:
+            return
+        if not snap:
+            st.warning("Keine Kennzahlen abrufbar (Ticker/yfinance pruefen).")
+            return
+        st.caption(f"On-demand via yfinance · Sektor: {snap.get('sector') or '—'}"
+                   " · ohne Sektor-Median (Universums-Vergleich nur fuer "
+                   "DB-Werte). Quelle weicht methodisch von der DB ab.")
+        _render_kpi_grid(snap, pd.DataFrame())
         return
     fa = _fundamentals_all()
     if fa is None or fa.empty:
@@ -2115,17 +2153,7 @@ def _render_ov_kennzahlen(ticker: str, src) -> None:
     sec = fa[fa["sector"] == sector] if not _missing(sector) else fa.iloc[0:0]
     st.caption(f"Sektor-Median aus {len(sec)} Unternehmen im Sektor "
                f"„{sector or '—'}“.")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown("**Bewertung**")
-        _kpi_table(_KPI_VALUATION, f, sec)
-        st.markdown("**Verschuldung & Liquiditaet**")
-        _kpi_table(_KPI_LEVERAGE, f, sec)
-    with c2:
-        st.markdown("**Profitabilitaet**")
-        _kpi_table(_KPI_PROFIT, f, sec)
-        st.markdown("**Cash & Dividende**")
-        _kpi_table(_KPI_CASHDIV, f, sec)
+    _render_kpi_grid(f, sec)
 
 
 def _fmt_cap(v) -> str:
