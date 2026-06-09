@@ -27,10 +27,12 @@ def fundamentals(ticker: str) -> tuple[dict, dict]:
         c.close()
 
 
-def metric_rows(ticker: str, n_years: int | None = None) -> list[dict]:
-    """Mehrjahres-Metriken (year_metrics-Shape) aus financials."""
+def metric_rows(ticker: str, n_years: int | None = None,
+                *, quarterly: bool = False) -> list[dict]:
+    """Mehrjahres-Metriken (year_metrics-Shape) aus financials (annual/quarterly)."""
     c = GuruFocusClient()
     try:
-        return adapter.metric_rows(c.financials(ticker), n_years)
+        return adapter.metric_rows(c.financials(ticker), n_years,
+                                   quarterly=quarterly)
     finally:
         c.close()

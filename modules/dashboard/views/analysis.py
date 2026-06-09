@@ -2525,6 +2525,24 @@ def _render_gesamt_score(ticker: str, src) -> None:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
+def _dd_metric_rows(ticker: str, n: int, period: str) -> dict:
+    """Metrik-Rohzeilen fuer den Deep Dive: GuruFocus bevorzugt (lange
+    Historie, kein XBRL-404), Fallback sec-api year_metrics."""
+    try:
+        from modules.gurufocus import provider as gfp
+        if gfp.available():
+            rows = gfp.metric_rows(ticker, n_years=n,
+                                   quarterly=(period == "quarterly"))
+            if rows:
+                return {"rows": rows, "source": "GuruFocus"}
+    except Exception:  # noqa: BLE001
+        pass
+    ym = _year_metrics(ticker, n, period)
+    return {"rows": ym.get("rows", []) if isinstance(ym, dict) else [],
+            "source": ym.get("source", "—") if isinstance(ym, dict) else "—"}
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
 def _dd_assess(symbol: str, name, key: str, period: str, points: tuple,
                use_mdna: bool, accession, form_type):
     """Gecachte, optionale LLM-Einordnung (separat von der Datenaufbereitung)."""
@@ -2541,8 +2559,8 @@ def _render_deep_dive(ticker: str, src) -> None:
     key = next(m["key"] for m in dd.METRICS if m["label"] == sel)
     unit = dd._UNIT.get(key, "cur")
 
-    ym = _year_metrics(src.ticker, N_YEARS, PERIOD)
-    rows = ym.get("rows", []) if isinstance(ym, dict) else []
+    mr = _dd_metric_rows(src.ticker, N_YEARS, PERIOD)
+    rows = mr["rows"]
     points = dd.series(rows, key)
     if len(points) < 2:
         st.info("Zu wenige Datenpunkte fuer diese Kennzahl — Universum/"
@@ -2582,7 +2600,7 @@ def _render_deep_dive(ticker: str, src) -> None:
         "—" if pd.isna(x) else f"{x * 100:+.1f}%" for x in yoy]
     st.dataframe(tbl[["Periode", "Wert", "Veraenderung"]],
                  use_container_width=True, hide_index=True)
-    st.caption(f"Quelle: {ym.get('source', '—')} · {len(points)} Perioden "
+    st.caption(f"Quelle: {mr['source']} · {len(points)} Perioden "
                f"({'Jahre' if PERIOD == 'annual' else 'Quartale'}).")
 
     # --- Optional: fokussierte LLM-Einordnung ---

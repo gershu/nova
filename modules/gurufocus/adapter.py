@@ -109,15 +109,17 @@ def kpi_snapshot(summary: dict, keyratios: dict) -> tuple[dict, dict]:
 
 # ---------- Mehrjahres-Metriken (financials.annuals) ----------
 
-def _annuals(financials: dict) -> dict:
+def _section(financials: dict, quarterly: bool) -> dict:
     d = financials or {}
     if "financials" in d:
         d = d["financials"]
-    return d.get("annuals", {}) or {}
+    return d.get("quarterly" if quarterly else "annuals", {}) or {}
 
 
-def metric_rows(financials: dict, n_years: int | None = None) -> list[dict]:
-    ann = _annuals(financials)
+def metric_rows(financials: dict, n_years: int | None = None,
+                *, quarterly: bool = False) -> list[dict]:
+    ann = _section(financials, quarterly)
+    form = "10-Q" if quarterly else "10-K"
     fy = ann.get("Fiscal Year", []) or []
     inc = ann.get("income_statement", {}) or {}
     bs = ann.get("balance_sheet", {}) or {}
@@ -149,7 +151,7 @@ def metric_rows(financials: dict, n_years: int | None = None) -> list[dict]:
         net_debt = (_mn(debt) - (_mn(cash) or 0.0)) if debt is not None else None
         rows.append({
             "period_end":       str(period),
-            "form_type":        "10-K",
+            "form_type":        form,
             "accession_no":     None,
             "revenue":          _mn(rev),
             "gross_profit":     _mn(at(inc, "Gross Profit", i)),
