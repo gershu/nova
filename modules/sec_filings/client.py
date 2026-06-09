@@ -1436,6 +1436,28 @@ def _13f_holding(h: dict) -> dict:
     }
 
 
+def _aggregate_13f(holdings: list[dict]) -> list[dict]:
+    """Gleiche Position (cusip|ticker + put_call) zusammenfassen.
+
+    13F-Filings listen denselben Wert oft in mehreren Zeilen (z.B. nach
+    Investment-Discretion/Stimmrecht). Fuer eine Portfolio-Sicht (und einen
+    eindeutigen PK) werden value/shares summiert.
+    """
+    agg: dict = {}
+    for h in holdings:
+        k = (h.get("cusip") or h.get("ticker") or "", h.get("put_call") or "")
+        if k not in agg:
+            agg[k] = {**h, "value": h.get("value") or 0.0,
+                      "shares": h.get("shares") or 0.0}
+        else:
+            a = agg[k]
+            a["value"] = (a["value"] or 0.0) + (h.get("value") or 0.0)
+            a["shares"] = (a["shares"] or 0.0) + (h.get("shares") or 0.0)
+            a["ticker"] = a.get("ticker") or h.get("ticker")
+            a["name"] = a.get("name") or h.get("name")
+    return list(agg.values())
+
+
 def fetch_manager_13f(*, cik: str | None = None, name: str | None = None,
                       n_filings: int = 2) -> dict:
     """Komplette(s) 13F-Portfolio(s) EINES Managers (neueste n_filings).
@@ -1473,7 +1495,8 @@ def fetch_manager_13f(*, cik: str | None = None, name: str | None = None,
             hs = rec.get("holdings")
             if not isinstance(hs, list):
                 continue
-            holdings = [_13f_holding(h) for h in hs if isinstance(h, dict)]
+            holdings = _aggregate_13f(
+                [_13f_holding(h) for h in hs if isinstance(h, dict)])
             holdings.sort(key=lambda d: (d["value"] or 0.0), reverse=True)
             filings.append({
                 "period":   rec.get("periodOfReport"),
