@@ -2102,6 +2102,23 @@ def _fund_snapshot(ticker: str) -> dict:
     return mkt.fundamentals_snapshot(ticker)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _ondemand_kpis(ticker: str) -> dict:
+    """On-Demand-KPIs: GuruFocus bevorzugt (inkl. Industrie-Median), sonst
+    yfinance. Returns {source, f, med}."""
+    try:
+        from modules.gurufocus import provider as gfp
+        if gfp.available():
+            f, med = gfp.fundamentals(ticker)
+            if f:
+                return {"source": "GuruFocus", "f": f, "med": med}
+    except Exception:  # noqa: BLE001
+        pass
+    snap = mkt.fundamentals_snapshot(ticker)
+    return ({"source": "yfinance", "f": snap, "med": {}} if snap
+            else {"source": None, "f": {}, "med": {}})
+
+
 def _render_kpi_grid(f, sec) -> None:
     """Die vier KPI-Bloecke (f = Series/dict, sec = DataFrame fuer Median)."""
     c1, c2 = st.columns(2)
@@ -2125,20 +2142,27 @@ def _render_ov_kennzahlen(ticker: str, src) -> None:
                    "latest) nur fuer Universums-Werte. Fuer diesen Wert "
                    "koennen die Kennzahlen on-demand geladen werden.")
         state_key = f"kpi_od_{src.ticker}"
-        if st.button("📥 Kennzahlen on-demand laden (yfinance)",
-                     key=f"kpi_od_btn_{src.ticker}"):
-            with st.spinner("Lade Kennzahlen (yfinance) …"):
-                st.session_state[state_key] = _fund_snapshot(src.ticker)
-        snap = st.session_state.get(state_key)
-        if snap is None:
+        if st.button("📥 Kennzahlen on-demand laden", key=f"kpi_od_btn_"
+                     f"{src.ticker}"):
+            with st.spinner("Lade Kennzahlen …"):
+                st.session_state[state_key] = _ondemand_kpis(src.ticker)
+        res = st.session_state.get(state_key)
+        if res is None:
             return
-        if not snap:
-            st.warning("Keine Kennzahlen abrufbar (Ticker/yfinance pruefen).")
+        f = res.get("f") or {}
+        if not f:
+            st.warning("Keine Kennzahlen abrufbar (Ticker / Datenquelle "
+                       "pruefen).")
             return
-        st.caption(f"On-demand via yfinance · Sektor: {snap.get('sector') or '—'}"
-                   " · ohne Sektor-Median (Universums-Vergleich nur fuer "
-                   "DB-Werte). Quelle weicht methodisch von der DB ab.")
-        _render_kpi_grid(snap, pd.DataFrame())
+        med = res.get("med") or {}
+        if res["source"] == "GuruFocus":
+            st.caption(f"On-demand via GuruFocus · {f.get('sector') or '—'} · "
+                       "inkl. Industrie-Median.")
+            _render_kpi_grid(f, pd.DataFrame([med]) if med else pd.DataFrame())
+        else:
+            st.caption(f"On-demand via yfinance · {f.get('sector') or '—'} · "
+                       "ohne Sektor-Median. Methodisch von der DB abweichend.")
+            _render_kpi_grid(f, pd.DataFrame())
         return
     fa = _fundamentals_all()
     if fa is None or fa.empty:
