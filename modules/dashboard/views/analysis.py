@@ -2581,70 +2581,69 @@ def _render_pf_overview(ticker: str, src) -> None:
                    "Portfolio-Kontext.")
 
 
-# ---- Gesamt-Qualitaets-Score: Orchestrierung in modules.dashboard.quality
-#      (Single Source — auch vom Screener genutzt). Hier nur Cache + Render. ----
+# ---- Gesamt-Score: GuruFocus GF-Score (Pfad A; ersetzt den sec-api-Shearn-
+#      Score). Pro Wert: GF-Score + Bewertung + Raenge + Solvenz-/Moat-Checks.
 @st.cache_data(ttl=3600, show_spinner=False)
-def _overall_score(ticker: str, n: int, period: str):
-    return ql.overall_score(ticker, n_years=n, period=period)
+def _gf_quality(ticker: str):
+    try:
+        from modules.gurufocus import provider as gfp
+        if gfp.available():
+            q = gfp.quality(ticker)
+            return q if q.get("gf_score") is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
 
 
 def _render_gesamt_score(ticker: str, src) -> None:
-    """Gesamt-Qualitaets-Score: gewichteter Mittelwert ueber fuenf Themen
-    (fehlende ausgeklammert, Gewichte renormiert)."""
-    res = _overall_score(ticker, N_YEARS, PERIOD)
-    score, bands, rows = res["score"], res["bands"], res["rows"]
-    if score is None:
-        st.info("Keine Themen lieferten Daten — Ticker pruefen.")
+    """Gesamt-Qualitaets-Score = GuruFocus GF-Score (0..100) + Raenge,
+    Solvenz-/Qualitaets-Checks (F/Z-Score, Moat, Predictability) und der
+    ROIC-WACC-Spread (Wertschoepfung)."""
+    q = _gf_quality(src.ticker)
+    if not q:
+        st.info("Kein GuruFocus GF-Score verfuegbar (Token/Ticker pruefen).")
         return
-    box = (st.success if score >= bands["strong"]
-           else st.info if score >= bands["mixed"] else st.warning)
-    verdict = ("hohe Qualitaet" if score >= bands["strong"]
-               else "gemischt" if score >= bands["mixed"] else "schwach")
-    box(f"## {score}/100 — {verdict}")
-    st.caption(f"Gewichteter Mittelwert ueber {res['n_ok']}/5 auswertbare "
-               "Themen (fehlende ausgeklammert, Gewichte renormiert).")
+    score = q["gf_score"]
+    _S, _W = 80, 50
+    box = st.success if score >= _S else st.info if score >= _W else st.warning
+    verdict = ("hohe Qualitaet" if score >= _S
+               else "solide" if score >= _W else "schwach")
+    box(f"## {int(score)}/100 — {verdict}")
+    p2 = q.get("price_to_gf_value")
+    st.caption(f"GuruFocus GF-Score · Bewertung: {q.get('gf_valuation') or '—'}"
+               + (f" (Kurs/GF-Value {p2:.2f})" if p2 else "") + ".")
 
-    # LLM-Einordnung (vorberechnet vom llm.jobs-Worker), nur Universumswerte.
-    nar = _quality_narrative(src.ref_instrument_id) if src.in_universe else None
-    if nar and nar.get("narrative"):
-        st.markdown(f"🧠 **LLM-Einordnung:** {nar['narrative']}")
-        if nar.get("red_flag"):
-            st.markdown(f"⚠ **Red Flag:** {nar['red_flag']}")
-        ns = nar.get("score")
-        stale = (f" · zu Score {int(ns)} berechnet"
-                 if ns is not None and ns != score else "")
-        st.caption(f"Vorberechnet ({nar.get('model') or 'LLM'}, Stand "
-                   f"{str(nar.get('generated_at'))[:16]}{stale}). Heuristische "
-                   "Synthese der Score-Themen, kein Anlageurteil.")
+    roic, wacc = q.get("roic"), q.get("wacc")
+    m = st.columns(5)
+    m[0].metric("ROIC−WACC", f"{roic - wacc:+.1f} pp"
+                if (roic is not None and wacc is not None) else "—",
+                help="Spread in %-Punkten (>0 = Wertschoepfung)")
+    m[1].metric("F-Score", f"{int(q['fscore'])}/9"
+                if q.get("fscore") is not None else "—", help="Piotroski")
+    m[2].metric("Z-Score", f"{q['zscore']:.1f}"
+                if q.get("zscore") is not None else "—",
+                help="Altman (>3 sicher, <1.8 kritisch)")
+    m[3].metric("Moat", f"{int(q['moat_score'])}"
+                if q.get("moat_score") is not None else "—")
+    m[4].metric("Predictability", f"{q['predictability']:.1f}/5"
+                if q.get("predictability") is not None else "—")
 
-    bar = pd.DataFrame([{
-        "Thema": r["theme"],
-        "Score": round(100 * r["sub"]) if r["sub"] is not None else None,
-        "Gewicht": r["w"]} for r in rows])
-    fig = go.Figure(go.Bar(
-        x=bar["Score"], y=bar["Thema"], orientation="h",
-        marker_color=["#1D9E75" if (s is not None and s >= bands["strong"])
-                      else "#B4862B" if (s is not None and s >= bands["mixed"])
-                      else "#A32D2D" if s is not None else "#CFCDC6"
-                      for s in bar["Score"]],
-        text=[f"{s}" if s is not None else "n/a" for s in bar["Score"]],
-        textposition="auto", hovertemplate="%{y}: %{x}/100<extra></extra>"))
-    fig.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10),
-                      xaxis=dict(range=[0, 100], title="Teil-Score"))
-    st.plotly_chart(fig, use_container_width=True)
-
-    for r in rows:
-        w_pct = f"{int(r['w'] * 100)} %"
-        if r["sub"] is None:
-            st.markdown(f"**{r['theme']}** · Gewicht {w_pct} — _keine Daten / "
-                        "nicht auswertbar_")
-            continue
-        with st.expander(f"{r['theme']} · {round(100 * r['sub'])}/100 · "
-                         f"Gewicht {w_pct}"):
-            for name, ok in r["checks"]:
-                st.markdown(f"{'✅' if ok else '❌'} {name}")
-    st.caption("Score = gewichteter Anteil erfuellter Qualitaets-Kriterien je "
-               "Thema. Heuristik, kein Anlageurteil.")
+    ranks = [("Financial Strength", q.get("rank_financial_strength")),
+             ("Profitability", q.get("rank_profitability")),
+             ("Growth", q.get("rank_growth"))]
+    rk = [(lbl, v) for lbl, v in ranks if v is not None]
+    if rk:
+        fig = go.Figure(go.Bar(
+            x=[v for _, v in rk], y=[lbl for lbl, _ in rk], orientation="h",
+            marker_color=["#1D9E75" if v >= 7 else "#B4862B" if v >= 4
+                          else "#A32D2D" for _, v in rk],
+            text=[f"{int(v)}/10" for _, v in rk], textposition="auto",
+            hovertemplate="%{y}: %{x}/10<extra></extra>"))
+        fig.update_layout(height=200, margin=dict(l=10, r=10, t=10, b=10),
+                          xaxis=dict(range=[0, 10], title="Rang (GuruFocus)"))
+        st.plotly_chart(fig, use_container_width=True)
+    st.caption("GF-Score = GuruFocus-Gesamtrang (0..100); Raenge 1..10. "
+               "Heuristik, kein Anlageurteil.")
 
 
 def _dd_metric_rows(ticker: str, n: int, period: str) -> dict:

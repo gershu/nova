@@ -25,19 +25,8 @@ import tempfile
 import pandas as pd
 import streamlit as st
 
-from modules.dashboard import quality as ql
 from modules.dashboard.components.format import de_dec, de_int
 from modules.dashboard.db import run_query, table_exists
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def _quality_score(symbol: str):
-    """On-Demand Gesamt-Qualitaets-Score (Shearn, 0-100) — pro Ticker
-    gecached. None bei Fehler/fehlenden Daten."""
-    try:
-        return ql.overall_score(symbol).get("score")
-    except Exception:  # noqa: BLE001
-        return None
 
 
 st.title("🎯 Screener — Quality-GARP")
@@ -135,25 +124,19 @@ else:
 # ---------- 2. Picks-Tabelle + Detail-Panel ----------
 
 if selected_run:
-    # Vorberechnete Gesamt-Qualitaets-Scores (Batch) joinen, falls vorhanden.
-    _has_qs = table_exists("ref_quality_score")
-    _has_qn = table_exists("ref_quality_narrative")
-    _qs_sel = (", q.score AS qscore_db, q.computed_at AS qscore_at"
-               if _has_qs else "")
-    _qs_join = ("LEFT JOIN ref_quality_score q USING (ref_instrument_id)"
-                if _has_qs else "")
-    _qn_sel = (", qn.red_flag AS red_flag, qn.narrative AS narrative"
-               if _has_qn else "")
-    _qn_join = ("LEFT JOIN ref_quality_narrative qn USING (ref_instrument_id)"
-                if _has_qn else "")
+    # Vorberechneter GuruFocus GF-Score (Batch) joinen, falls vorhanden.
+    _has_gf = table_exists("ref_gf_score")
+    _gf_sel = (", g.gf_score AS gfscore_db, g.computed_at AS gf_at"
+               if _has_gf else "")
+    _gf_join = ("LEFT JOIN ref_gf_score g USING (ref_instrument_id)"
+                if _has_gf else "")
     picks = run_query(f"""
         SELECT p.rank, p.symbol, p.name, p.sector, p.market_cap,
                p.quality_score, p.growth_score, p.value_score,
                p.composite_score, p.trend_flags_json, p.criteria_detail_json,
-               p.metrics_json, p.ref_instrument_id{_qs_sel}{_qn_sel}
+               p.metrics_json, p.ref_instrument_id{_gf_sel}
         FROM sig_screen_picks p
-        {_qs_join}
-        {_qn_join}
+        {_gf_join}
         WHERE p.run_id = ?
         ORDER BY p.rank
     """, (selected_run,))
@@ -171,56 +154,28 @@ if selected_run:
         display["MV (Mrd)"] = display["market_cap"].apply(
             lambda v: de_dec(v / 1e9, 1) if pd.notna(v) else "—")
 
-        # --- Gesamt-Qualitaets-Score (Shearn): vorberechnet (Batch) per
-        #     Default, optional live on-Demand neu rechnen. ---
-        _q1, _q2 = st.columns([2, 1])
-        _live = _q1.toggle(
-            "Gesamt-Qualitaets-Score live neu berechnen (SEC-Filings)",
-            key="sk_qscore_on",
-            help="Standard: vorberechnete Werte aus ref_quality_score "
-                 "(Batch `python -m modules.quality_score run`). Aktiviert: "
-                 "je Pick on-Demand aus SEC-Filings neu rechnen (langsam, "
-                 "24 h gecached).")
-        _have_qcol = _has_qs or _live
-        _min_q = _q2.slider("Min Q-Score", 0, 100, 0, 5, key="sk_minq",
-                            disabled=not _have_qcol)
+        # --- GuruFocus GF-Score (vorberechnet, Batch ingest-scores) ---
         cols = ["rank", "symbol", "name", "sector", "MV (Mrd)",
                 "quality_score", "growth_score", "value_score",
                 "composite_score", "trends"]
-        if _have_qcol:
-            if _live:
-                with st.spinner(f"Berechne Gesamt-Qualitaets-Score fuer "
-                                f"{len(display)} Picks …"):
-                    display["qscore"] = [
-                        (_quality_score(s) if s else None)
-                        for s in display["symbol"]]
-            else:
-                display["qscore"] = pd.to_numeric(
-                    display.get("qscore_db"), errors="coerce")
+        _min_q = st.slider("Min GF-Score", 0, 100, 0, 5, key="sk_minq",
+                           disabled=not _has_gf)
+        if _has_gf:
+            display["gfscore"] = pd.to_numeric(
+                display.get("gfscore_db"), errors="coerce")
             if _min_q > 0:
-                keep = display["qscore"].fillna(-1) >= _min_q
+                keep = display["gfscore"].fillna(-1) >= _min_q
                 display, picks = display[keep], picks[keep]
             display = display.reset_index(drop=True)
             picks = picks.reset_index(drop=True)
-            cols.insert(9, "qscore")  # vor "trends"
-            if _has_qs and not _live:
-                _stand = pd.to_datetime(display.get("qscore_at"),
-                                        errors="coerce").max() \
-                    if "qscore_at" in display.columns else None
-                _suffix = (f" · Stand {str(_stand)[:16]}"
-                           if pd.notna(_stand) else
-                           " · noch nicht vorberechnet (Batch laufen lassen)")
-                st.caption(f"Q-Score vorberechnet{_suffix}. "
-                           f"{len(display)} mit Q-Score ≥ {_min_q}.")
-            else:
-                st.caption(f"{len(display)} Picks mit Q-Score ≥ {_min_q} "
-                           "(live berechnet).")
-
-        # LLM-Red-Flag (aus ref_quality_narrative) als kompakte Spalte, wenn da.
-        if (_has_qn and "red_flag" in display.columns
-                and display["red_flag"].fillna("").astype(str).str.strip()
-                .ne("").any()):
-            cols.append("red_flag")
+            cols.insert(9, "gfscore")  # vor "trends"
+            _stand = pd.to_datetime(display.get("gf_at"),
+                                    errors="coerce").max() \
+                if "gf_at" in display.columns else None
+            _suffix = (f" · Stand {str(_stand)[:16]}" if pd.notna(_stand)
+                       else " · noch nicht vorberechnet (Batch laufen lassen)")
+            st.caption(f"GF-Score (GuruFocus) vorberechnet{_suffix}. "
+                       f"{len(display)} mit GF-Score ≥ {_min_q}.")
 
         _colcfg = {
             "rank": st.column_config.NumberColumn("#", width="small"),
@@ -230,10 +185,8 @@ if selected_run:
             "MV (Mrd)": st.column_config.TextColumn("MV (Mrd)", width="small"),
             "quality_score": "Quality", "growth_score": "Growth",
             "value_score": "Value", "composite_score": "Composite",
-            "qscore": st.column_config.NumberColumn("Q-Score", width="small"),
+            "gfscore": st.column_config.NumberColumn("GF-Score", width="small"),
             "trends": st.column_config.TextColumn("Trends", width="small"),
-            "red_flag": st.column_config.TextColumn(
-                "Red Flag (LLM)", width="large"),
         }
         _evt = st.dataframe(
             display[cols].style.format({
