@@ -1832,6 +1832,74 @@ def _render_mgmt_detail(ticker: str, src) -> None:
                "Tenure-/Ownership-Detail siehe Reports oben.")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _gf_insider(ticker: str):
+    """Insider-Transaktionen via GuruFocus (None, wenn kein Token/Fehler)."""
+    try:
+        from modules.gurufocus import provider as gfp
+        if gfp.available():
+            return gfp.insider(ticker)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def _render_mgmt_insider_gf(ticker: str, src) -> None:
+    """Management-Report: Insider-Aktivitaet (GuruFocus). Netto-Flow 3/6/12M
+    + juengste Transaktionen. Ersetzt die fruehere Form-3/4/5-/Tenure-/
+    Beneficial-Logik (sec-api) im Zuge der GuruFocus-Umstellung."""
+    tx = _gf_insider(src.ticker)
+    if tx is None:
+        st.caption("Insider-Daten via GuruFocus (GURUFOCUS_TOKEN noetig).")
+        return
+    if not tx:
+        st.info("Keine Insider-Transaktionen verfuegbar.")
+        return
+
+    def _flow(days: int):
+        cut = date.today().toordinal() - days
+        net, buyers, sellers = 0.0, set(), set()
+        for r in tx:
+            try:
+                d = date.fromisoformat(str(r["date"])[:10]).toordinal()
+            except (ValueError, TypeError):
+                continue
+            if d < cut or r["value"] is None:
+                continue
+            if r["side"] == "Buy":
+                net += r["value"]; buyers.add(r["insider"])
+            elif r["side"] == "Sell":
+                net -= r["value"]; sellers.add(r["insider"])
+        return net, len(buyers), len(sellers)
+
+    cols = st.columns(3)
+    for i, (lbl, days) in enumerate([("3M", 90), ("6M", 180), ("12M", 365)]):
+        net, b, s = _flow(days)
+        cols[i].metric(f"Netto-Insider {lbl}", f"{net / 1e6:+.1f} Mio $",
+                       delta=f"{b} Käufer / {s} Verkäufer", delta_color="off")
+    st.caption("Netto = Käufe − Verkäufe (Wert). Insider verkaufen oft "
+               "routinemäßig (Vergütung) — Käufe sind das stärkere Signal.")
+
+    df = pd.DataFrame(tx[:40])
+    if not df.empty:
+        df["Wert"] = df["value"].map(
+            lambda v: "—" if v is None else f"{v / 1e6:.2f} Mio")
+        st.dataframe(
+            df[["date", "insider", "position", "side", "shares", "price",
+                "Wert"]],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "date": st.column_config.TextColumn("Datum", width="small"),
+                "insider": st.column_config.TextColumn("Insider"),
+                "position": st.column_config.TextColumn("Rolle"),
+                "side": st.column_config.TextColumn("Art", width="small"),
+                "shares": st.column_config.NumberColumn("Stück", format="%.0f"),
+                "price": st.column_config.NumberColumn("Kurs", format="%.2f"),
+            })
+    st.caption("Quelle: GuruFocus. Tenure (8-K 5.02) & Beneficial Ownership "
+               "(DEF-14A) entfallen mit der Datenquellen-Umstellung.")
+
+
 def _render_mgmt_capital(ticker: str, src) -> None:
     """Management-Report: Kapitalallokation + SBC/Verwaesserung (letztes
     Jahr)."""
@@ -2773,19 +2841,12 @@ CATEGORIES: list[Category] = [
              ]),
     Category("management", "4 Management",
              question="Ist das Management gut?",
-             desc="Tenure, Ownership-Struktur, Turnover, Insider-Conviction, "
-                  "Kapitalallokation, SBC/Verwaesserung.",
+             desc="Insider-Aktivitaet (GuruFocus): Netto-Flow + juengste "
+                  "Transaktionen.",
              err_label="Management", is_question=True,
              reports=[
-                 Report("mgmt_conviction", "Insider-Signal & Tenure",
-                        _render_mgmt_conviction),
-                 Report("mgmt_insider_tx", "Insider Sales / Buys (Form 3/4/5)",
-                        _render_mgmt_insider_tx),
-                 Report("mgmt_ownership", "Ownership-Struktur",
-                        _render_mgmt_ownership),
-                 Report("mgmt_detail",
-                        "Management — Stabilitaet & Insider-Bestaende",
-                        _render_mgmt_detail),
+                 Report("mgmt_insider_gf", "Insider-Aktivitaet (GuruFocus)",
+                        _render_mgmt_insider_gf),
              ]),
     Category("earnings_real", "5 Gewinne echt",
              question="Sind die Gewinne echt?",

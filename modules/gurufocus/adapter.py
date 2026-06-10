@@ -144,6 +144,48 @@ def quality_snapshot(summary: dict) -> dict:
     }
 
 
+# ---------- Insider-Transaktionen (insider-Endpoint) ----------
+
+_INSIDER_SIDE = {"P": "Buy", "S": "Sell"}
+
+
+def insider_rows(insider_resp, symbol: str | None = None) -> list[dict]:
+    """GuruFocus-Insider-Endpoint -> normalisierte Transaktionen.
+
+    Returns [{date, insider, position, side, shares, price, value}], neueste
+    zuerst. type 'P'=Buy, 'S'=Sell, sonst 'Andere'. value = shares*price.
+    """
+    data = insider_resp
+    if isinstance(data, dict):
+        if symbol and symbol in data:
+            data = data[symbol]
+        else:
+            vals = [v for v in data.values() if isinstance(v, list)]
+            data = vals[0] if vals else []
+    if not isinstance(data, list):
+        return []
+    out = []
+    for r in data:
+        if not isinstance(r, dict):
+            continue
+        shares = _f(r.get("trans_share"))
+        price = _f(r.get("price"))
+        value = (shares * price) if (shares is not None
+                                     and price is not None) else None
+        out.append({
+            "date":     r.get("date"),
+            "insider":  r.get("insider"),
+            "position": r.get("position"),
+            "side":     _INSIDER_SIDE.get((r.get("type") or "").upper(),
+                                          "Andere"),
+            "shares":   shares,
+            "price":    price,
+            "value":    value,
+        })
+    out.sort(key=lambda d: d.get("date") or "", reverse=True)
+    return out
+
+
 # ---------- Mehrjahres-Metriken (financials.annuals) ----------
 
 def _section(financials: dict, quarterly: bool) -> dict:

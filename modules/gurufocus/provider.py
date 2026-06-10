@@ -27,6 +27,15 @@ def fundamentals(ticker: str) -> tuple[dict, dict]:
         c.close()
 
 
+def insider(ticker: str) -> list[dict]:
+    """Normalisierte Insider-Transaktionen je Wert."""
+    c = GuruFocusClient()
+    try:
+        return adapter.insider_rows(c.insider(ticker), ticker)
+    finally:
+        c.close()
+
+
 def quality(ticker: str) -> dict:
     """GuruFocus-Qualitaets-Snapshot (GF-Score/Value/Raenge) je Wert."""
     c = GuruFocusClient()
