@@ -397,11 +397,8 @@ def _recent_news(con: duckdb.DuckDBPyConnection,
 
 def cmd_analyze(args) -> int:
     """Stufe-3-LLM-Bewertung fuer ein Symbol (on-demand)."""
-    # Lazy-Import: extractor + analyzer haben requests/llm-Dependencies.
-    from modules.sec_filings.extractor import (
-        find_filing_url, fetch_section,
-    )
-    from modules.sec_filings.client import SecApiError
+    # Lazy-Import: analyzer hat llm-Dependencies. (Filing-Volltext via sec-api
+    # entfaellt seit Pfad A — Stufe 3 nutzt News + Kennzahlen.)
     from .analyzer import (
         AnalyzerInput, build_prompt, call_llm, parse_response,
         SYSTEM_PROMPT,
@@ -435,38 +432,19 @@ def cmd_analyze(args) -> int:
         run_id, pick = loaded
         print(f"==> analyze {symbol} (ref={ref_id})  run={run_id}")
 
-        # 2. Texte aus dem juengsten 10-K (Fallback 10-Q).
+        # 2. Filing-Volltext (Item 1/1A/7) entfaellt mit der sec-api-
+        #    Stilllegung (Pfad A). Stufe 3 bewertet News + Kennzahlen.
         business = risk = mda = ""
         filing_form, filing_period = None, None
         acc = _latest_10k_acc(con, ref_id)
         if acc:
             acc_no, filing_period = acc
-            filing_form = "10-K" if con.execute(
+            row_ft = con.execute(
                 "SELECT form_type FROM ref_income_statement "
-                "WHERE accession_no=?", [acc_no]).fetchone()[0] == "10-K" \
-                else "10-Q"
+                "WHERE accession_no=?", [acc_no]).fetchone()
+            filing_form = "10-K" if (row_ft and row_ft[0] == "10-K") else "10-Q"
             print(f"    Filing: {filing_form} per {filing_period} "
-                  f"(acc={acc_no})")
-            try:
-                filing_url = find_filing_url(acc_no)
-                if filing_url:
-                    print(f"    Extractor-URL: {filing_url}")
-                    # 10-K: Item 1/1A/7 ; 10-Q: part1item2 fuer MD&A.
-                    if filing_form == "10-K":
-                        business = fetch_section(filing_url, "1")
-                        risk     = fetch_section(filing_url, "1A")
-                        mda      = fetch_section(filing_url, "7")
-                    else:
-                        mda      = fetch_section(filing_url, "part1item2")
-                    print(f"    Texte:  Item1={len(business)}c  "
-                          f"Item1A={len(risk)}c  MD&A={len(mda)}c")
-                else:
-                    print("    WARN: keine Filing-URL gefunden.")
-            except SecApiError as e:
-                print(f"    WARN: Extractor-Fehler: {e}", file=sys.stderr)
-        else:
-            print("    WARN: kein 10-K/10-Q hinterlegt — Texte werden "
-                  "uebersprungen.")
+                  f"(acc={acc_no}) — Volltext entfaellt (sec-api stillgelegt)")
 
         # 3. News.
         news = [] if args.no_news else _recent_news(con, ref_id)

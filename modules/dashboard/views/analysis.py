@@ -74,7 +74,7 @@ def _income(ticker: str, n: int = 5, period: str = "annual"):
         rows = ga.income_rows(fin, n, quarterly=(period == "quarterly"))
         if rows:
             return {"source": "GuruFocus", "rows": rows}
-    return cd.income_history(ticker, n_years=n, period=period)
+    return {"source": "—", "rows": []}        # GuruFocus-only (Pfad A)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -85,7 +85,7 @@ def _year_metrics(ticker: str, n: int = 5, period: str = "annual"):
         rows = ga.metric_rows(fin, n, quarterly=(period == "quarterly"))
         if rows:
             return {"source": "GuruFocus", "rows": rows}
-    return cd.year_metrics(ticker, n_years=n, period=period)
+    return {"source": "—", "rows": []}        # GuruFocus-only (Pfad A)
 
 
 def _gf_balance_objs(ticker: str, n: int, period: str):
@@ -103,18 +103,13 @@ def _gf_balance_objs(ticker: str, n: int, period: str):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _balance(ticker: str):
-    objs = _gf_balance_objs(ticker, 1, "annual")
-    if objs:
-        return objs[-1]
-    return cd.balance(ticker)
+    objs = _gf_balance_objs(ticker, 1, "annual")  # GuruFocus-only (Pfad A)
+    return objs[-1] if objs else None
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _balance_hist(ticker: str, n: int = 5, period: str = "annual"):
-    objs = _gf_balance_objs(ticker, n, period)
-    if objs is not None:
-        return objs
-    return cd.balance_history(ticker, n_years=n, period=period)
+    return _gf_balance_objs(ticker, n, period) or []  # GuruFocus-only
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -185,7 +180,7 @@ def _earnings_hist(ticker: str, n: int = 5, period: str = "annual"):
         rows = ga.earnings_rows(fin, n, quarterly=(period == "quarterly"))
         if rows:
             return rows
-    return cd.earnings_history(ticker, n_years=n, period=period)
+    return []                                  # GuruFocus-only (Pfad A)
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -196,11 +191,6 @@ def _ppe_series(ticker: str):
 @st.cache_data(ttl=86400, show_spinner=False)
 def _emp_map(ticker: str):
     return cd.employee_map(ticker)
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def _emp_text(accession_no: str):
-    return cd.employee_from_text(accession_no)
 
 
 def _render_physical(ticker: str, cur: str) -> None:
@@ -216,9 +206,6 @@ def _render_physical(ticker: str, cur: str) -> None:
     if emp_m:
         rows = [dict(d, employees=(_series_at(emp_m, str(d["period_end"])[:10])
                                    or d.get("employees"))) for d in rows]
-    if not any(d.get("employees") for d in rows):
-        rows = [dict(d, employees=(d.get("employees")
-                     or _emp_text(d.get("accession_no")))) for d in rows]
 
     def _sg(key, valfn=None):
         pts = []
@@ -717,11 +704,6 @@ def _report_physical(ticker: str, src) -> None:
     _render_physical(ticker, src.currency or "USD")
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _segments(ticker: str):
-    return cd.revenue_segments(ticker)
-
-
 _GUV_PAL = ["#0F6E56", "#1D9E75", "#5DCAA5", "#9FE1CB",
             "#3B6D11", "#639922", "#97C459", "#C0DD97"]
 
@@ -738,9 +720,6 @@ def _render_guv_umsatz(ticker: str, src) -> None:
     hist = hist.sort_values("period_end")
     is_q = PERIOD == "quarterly"
     lag = 4 if is_q else 1
-
-    seg_hist = _guv_segments(ticker, set(hist["period_end"]))
-    seg_axis = _guv_axis_picker(seg_hist, ticker)
 
     # --- Wachstums-Kennzahlen ---
     rser = hist[hist["revenue"].notna()].sort_values("period_end")
@@ -767,49 +746,13 @@ def _render_guv_umsatz(ticker: str, src) -> None:
     mc[1].metric("Wachstum YoY", _pct(yoy) if yoy is not None else "—")
     mc[2].metric("CAGR p.a.", _pct(cagr) if cagr is not None else "—")
 
-    # --- Umsatz-Verlauf (Segment-Stacked-Bar oder einfacher Balken) ---
-    if seg_axis is not None:
-        seg_sel = seg_hist[seg_hist["axis"] == seg_axis].copy()
-        periods = sorted(seg_sel["period_end"].unique())
-        if periods:
-            mem_tot = (seg_sel.groupby("member_label")["value"].sum()
-                       .sort_values(ascending=False))
-            members = mem_tot.index.tolist()
-            pivot = (seg_sel.pivot_table(index="period_end",
-                                         columns="member_label",
-                                         values="value", aggfunc="first")
-                     .reindex(periods)[members])
-            rev_by_p = hist.set_index("period_end")["revenue"].reindex(periods)
-            other = rev_by_p - pivot.sum(axis=1)
-            fig = go.Figure()
-            for i, m in enumerate(members):
-                fig.add_trace(go.Bar(
-                    name=m, x=pivot.index, y=pivot[m],
-                    marker_color=_GUV_PAL[i % len(_GUV_PAL)],
-                    hovertemplate=f"%{{x|%Y-%m-%d}}<br>{m}: "
-                                  "%{y:,.0f}<extra></extra>"))
-            if other.notna().any() and (other.fillna(0) > 1).any():
-                fig.add_trace(go.Bar(
-                    name="Sonstige", x=other.index, y=other.values,
-                    marker_color="#B4B2A9",
-                    hovertemplate="%{x|%Y-%m-%d}<br>Sonstige: "
-                                  "%{y:,.0f}<extra></extra>"))
-            fig.update_layout(barmode="stack", height=380,
-                              margin=dict(l=10, r=10, t=10, b=10),
-                              legend=dict(orientation="h", y=-0.18),
-                              yaxis_title=f"Umsatz ({cur})",
-                              hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Keine Segment-Daten in dieser Achse.")
-    else:
-        fig = go.Figure(go.Bar(
-            x=hist["period_end"], y=hist["revenue"], marker_color=_GUV_PAL[0],
-            hovertemplate="%{x|%Y-%m-%d}<br>Umsatz: %{y:,.0f}<extra></extra>"))
-        fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10),
-                          yaxis_title=f"Umsatz ({cur})")
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption("Noch keine Segment-Aufschluesselung verfuegbar.")
+    # --- Umsatz-Verlauf (Balken) ---
+    fig = go.Figure(go.Bar(
+        x=hist["period_end"], y=hist["revenue"], marker_color=_GUV_PAL[0],
+        hovertemplate="%{x|%Y-%m-%d}<br>Umsatz: %{y:,.0f}<extra></extra>"))
+    fig.update_layout(height=380, margin=dict(l=10, r=10, t=10, b=10),
+                      yaxis_title=f"Umsatz ({cur})")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_guv_margen(ticker: str, src) -> None:
@@ -904,8 +847,6 @@ def _render_guv_sankey(ticker: str, src) -> None:
     hist = pd.DataFrame(rows)
     hist["period_end"] = pd.to_datetime(hist["period_end"])
     hist = hist.sort_values("period_end")
-    seg_hist = _guv_segments(ticker, set(hist["period_end"]))
-    seg_axis = _guv_axis_picker(seg_hist, ticker, key_suffix="_sankey")
 
     per_opts = list(hist["period_end"])
 
@@ -917,15 +858,7 @@ def _render_guv_sankey(ticker: str, src) -> None:
                            index=len(per_opts) - 1, format_func=_per_lbl,
                            key=f"guv_sankey_per_{ticker}")
     r = hist[hist["period_end"] == sel_per].iloc[0]
-    seg_curr = (seg_hist[seg_hist["period_end"] == sel_per]
-                if not seg_hist.empty else pd.DataFrame())
     st.markdown(f"##### GuV-Struktur — {str(sel_per)[:10]}")
-
-    seg_rows = []
-    if seg_axis is not None and not seg_curr.empty:
-        cur_ax = seg_curr[seg_curr["axis"] == seg_axis]
-        seg_rows = [(rr["member_label"] or rr["member"], float(rr["value"]))
-                    for _, rr in cur_ax.iterrows()]
 
     def _g(col):
         v = r[col]
@@ -949,8 +882,6 @@ def _render_guv_sankey(ticker: str, src) -> None:
         colors.append(color)
 
     _node("rev", "Umsatz", rev, GRAY, force=True)
-    for i, (lbl, val) in enumerate(seg_rows):
-        _node(f"s{i}", lbl, val, "#0F6E56")
     _node("cogs", "Herstellkosten", cogs, RED)
     _node("gross", "Bruttogewinn", gross, GREEN)
     _node("opex", "Betriebsaufwand", opex, RED)
@@ -973,8 +904,6 @@ def _render_guv_sankey(ticker: str, src) -> None:
             return
         S.append(idx[a]); T.append(idx[b]); V.append(val); LC.append(color)
 
-    for i, (_, val) in enumerate(seg_rows):
-        _link(f"s{i}", "rev", val, SL)
     _link("rev", "cogs", cogs, RL)
     _link("rev", "gross", gross, GL)
     _link("gross", "opex", opex, RL)
@@ -1022,40 +951,6 @@ def _render_guv_sankey(ticker: str, src) -> None:
     st.caption(f"{r.get('form_type') or 'Filing'} · Periode "
                f"{str(sel_per)[:10]} · Betraege wie berichtet ({cur}); "
                "Bandbreite proportional zum Betrag.")
-
-
-def _guv_segments(ticker: str, valid_periods: set) -> pd.DataFrame:
-    """Segment-Historie (source-agnostisch), gefiltert auf die Perioden der
-    aktuellen Darstellung (PERIOD)."""
-    seg = _segments(ticker)
-    df = pd.DataFrame(seg.get("rows") or [])
-    if df.empty:
-        return df
-    df["period_end"] = pd.to_datetime(df["period_end"])
-    return df[df["period_end"].isin(valid_periods)]
-
-
-def _guv_axis_picker(seg_hist: pd.DataFrame, ticker: str, key_suffix=""):
-    """Achsen-Auswahl (radio) fuer die Umsatz-Aufschluesselung; None ohne
-    Segmente."""
-    if seg_hist.empty:
-        return None
-    try:
-        from modules.sec_filings.client import (AXIS_LABELS as _AX_LBL,
-                                                _humanize as _hum)
-    except Exception:  # noqa: BLE001
-        _AX_LBL, _hum = {}, (lambda s: s)
-    axes = list(dict.fromkeys(seg_hist["axis"].tolist()))
-    known = list(_AX_LBL.keys())
-    axes.sort(key=lambda a: (known.index(a) if a in known else 99, a))
-    opts = {_AX_LBL.get(a, _hum(a)): a for a in axes}
-    if len(opts) > 1:
-        chosen = st.radio("Umsatz-Aufschluesselung", list(opts.keys()),
-                          horizontal=True,
-                          key=f"guv_axis{key_suffix}_{ticker}")
-    else:
-        chosen = list(opts.keys())[0]
-    return opts[chosen]
 
 
 def _render_bal_snapshot(ticker: str, src) -> None:
