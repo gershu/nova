@@ -430,11 +430,9 @@ def digest_persist(con, job, result: dict) -> str:
     return f"{result['symbol']}: {result['digest'][:70]}"
 
 
-COMPUTE = {"quality_narrative": quality_compute,
-           "filing_change": filing_change_compute,
-           "filing_8k": filing_8k_compute,
-           "portfolio_digest": digest_compute}
-PERSIST = {"quality_narrative": quality_persist,
-           "filing_change": filing_change_persist,
-           "filing_8k": filing_change_persist,
-           "portfolio_digest": digest_persist}
+# Pfad A: filing_change/filing_8k/quality_narrative stillgelegt (sec-api).
+# Aktiv bleibt nur portfolio_digest (GuruFocus-/DB-basiert). Die alten
+# *_compute/*_persist-Funktionen bleiben als toter Code, sind aber nicht mehr
+# registriert -> der Worker verarbeitet sie nicht mehr.
+COMPUTE = {"portfolio_digest": digest_compute}
+PERSIST = {"portfolio_digest": digest_persist}

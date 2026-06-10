@@ -17,9 +17,6 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 source "${HOME}/nova/.venv/bin/activate"
 cd "${HOME}/nova"
 
-# Producer ist guenstig; Fehler (z.B. ref_quality_score noch leer) sollen den
-# Worker-Lauf nicht abbrechen.
-python -m modules.llm.jobs enqueue-quality || true
-
-# Einen Drain-Durchlauf; --max begrenzt die Arbeit pro Intervall.
+# Drainiert die Queue (aktiver Job-Typ: portfolio_digest; Producer ist der
+# woechentliche lab.portfolio_digest-Daemon). --max begrenzt die Arbeit/Lauf.
 exec python -m modules.llm.jobs worker --once --max 50

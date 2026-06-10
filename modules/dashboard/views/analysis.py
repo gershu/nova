@@ -24,7 +24,6 @@ from modules.dashboard import company_data as cd
 from modules.dashboard import finmetrics as fm
 from modules.dashboard import market as mkt
 from modules.dashboard import scoring as sc
-from modules.dashboard import quality as ql
 from modules.dashboard import deepdive as dd
 from modules.dashboard.score_config import CFG as _SCORE
 from modules.dashboard.components.format import _missing, de_dec
@@ -2755,8 +2754,6 @@ CATEGORIES: list[Category] = [
                         _render_ov_performance),
                  Report("ov_termine_news", "Termine & News",
                         _render_ov_termine_news),
-                 Report("ov_filings", "Filing-Aenderungen (LLM)",
-                        _render_ov_filings),
                  Report("ov_verdict", "Gesamturteil", _render_ov_verdict),
                  Report("ov_datenbasis", "Datenbasis", _render_ov_datenbasis,
                         status="beta", expanded=False),

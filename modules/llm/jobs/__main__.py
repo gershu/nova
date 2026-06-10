@@ -1,14 +1,12 @@
 """nova-lab LLM-Job-Queue CLI.
 
+Aktiver Job-Typ: portfolio_digest. (filing_change/filing_8k/quality_narrative
+sind im Zuge der GuruFocus-Umstellung stillgelegt — sec-api.)
+
 Subcommands:
-    enqueue-quality [--limit N]
-        Scannt ref_quality_score und legt fuer jeden Wert mit (geaendertem)
-        Score einen 'quality_narrative'-Job an (Idempotent ueber input_hash +
-        Dedupe offener Jobs). Producer — schnell, keine LLM-Calls.
     enqueue-digest [--limit N]
         Je offener Portfolio-Position (pos_holdings) einen portfolio_digest-
-        Job — kurzer Wochenueberblick aus Q-Score + juengster Filing-
-        Aenderung + Red-Flag. Producer — schnell, keine LLM-Calls.
+        Job — kurzer Wochenueberblick. Producer — schnell, keine LLM-Calls.
     worker [--once] [--max N] [--idle-seconds S] [--throttle S]
            [--lock-timeout S] [--model M]
         Konsument: drainiert llm_jobs ueber die lokale LLM. Haelt die
@@ -28,7 +26,7 @@ Environment:
                        auf nova-w5, wird per HTTP angesprochen)
 
 Beispiele:
-    python -m modules.llm.jobs enqueue-quality
+    python -m modules.llm.jobs enqueue-digest
     python -m modules.llm.jobs worker --once
     python -m modules.llm.jobs show
 """
@@ -44,160 +42,6 @@ import duckdb
 from modules.common import dblock
 from modules.llm.client import LLMError, OllamaClient
 from . import handlers, queue as q
-
-
-_SUB_COLS = [
-    ("sub_return_on_capital", "return_on_capital"),
-    ("sub_balance_sheet",     "balance_sheet"),
-    ("sub_stock_based_comp",  "stock_based_comp"),
-    ("sub_gaap_vs_non_gaap",  "gaap_vs_non_gaap"),
-    ("sub_insider",           "insider"),
-]
-
-
-def cmd_enqueue_quality(args) -> int:
-    # Producer ist schnell (keine LLM-Calls) -> kurzer Lock-Block.
-    with dblock.rw_connection() as con:
-        q.apply_schema(con)
-        if not con.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = 'ref_quality_score'").fetchone():
-            print("ref_quality_score fehlt — erst `python -m "
-                  "modules.quality_score run` laufen lassen.", file=sys.stderr)
-            return 2
-        cols = ", ".join(c for c, _ in _SUB_COLS)
-        rows = con.execute(
-            f"SELECT ref_instrument_id, symbol, score, {cols} "
-            "FROM ref_quality_score WHERE score IS NOT NULL "
-            "ORDER BY score DESC").fetchall()
-        if args.limit:
-            rows = rows[:args.limit]
-        have = dict(con.execute(
-            "SELECT ref_instrument_id, input_hash "
-            "FROM ref_quality_narrative").fetchall())
-        n_new = n_skip = 0
-        for r in rows:
-            rid, sym, score = r[0], r[1], r[2]
-            subs = {key: r[3 + i] for i, (_, key) in enumerate(_SUB_COLS)}
-            h = handlers.quality_input_hash(score, subs)
-            if have.get(rid) == h:
-                n_skip += 1
-                continue
-            jid = q.enqueue(con, "quality_narrative", ref_instrument_id=rid,
-                            payload={"symbol": sym, "score": score,
-                                     "subs": subs}, priority=100, input_hash=h)
-            n_new += 1 if jid else 0
-            n_skip += 0 if jid else 1
-        print(f"quality_narrative: {n_new} Jobs angelegt, {n_skip} "
-              "uebersprungen (aktuell/offen).")
-    return 0
-
-
-def _universe(con, all_instruments: bool):
-    if all_instruments:
-        rows = con.execute(
-            "SELECT ref_instrument_id, symbol FROM ref_instruments "
-            "WHERE active AND symbol IS NOT NULL ORDER BY symbol").fetchall()
-    else:
-        rows = con.execute(
-            "SELECT i.ref_instrument_id, i.symbol FROM ref_fundamentals_latest "
-            "f JOIN ref_instruments i USING (ref_instrument_id) "
-            "WHERE i.symbol IS NOT NULL ORDER BY i.symbol").fetchall()
-    # Dedupe nach normalisiertem sec-Ticker: Vendor-Varianten desselben
-    # Filers (BRK.B vs. BRK_B) kollabieren -> ein Job statt zwei. Rows sind
-    # nach Symbol sortiert ('.' < '_'), daher gewinnt die Punkt-Variante —
-    # dieselbe, die das Dashboard via resolve() bevorzugt.
-    from modules.sec_filings.client import _sec_ticker
-    seen_rid, seen_norm, out = set(), set(), []
-    for rid, sym in rows:
-        norm = _sec_ticker(sym)
-        if rid in seen_rid or norm in seen_norm:
-            continue
-        seen_rid.add(rid)
-        seen_norm.add(norm)
-        out.append((rid, sym))
-    return out
-
-
-def cmd_enqueue_filings(args) -> int:
-    """Neue Filings je Universums-Wert erkennen -> Jobs nach Form routen:
-    10-K/10-Q -> 'filing_change' (GuV-Diff), 8-K -> 'filing_8k' (Text-Summary,
-    da 8-K keine GuV hat). --seed: aktuelle Filings nur als 'gesehen' markieren
-    (Baseline, keine Jobs) — einmalig vor der ersten echten Ueberwachung."""
-    from datetime import datetime, timezone
-    from modules.sec_filings import client as sec
-
-    forms = tuple(f.strip() for f in args.forms.split(",") if f.strip())
-    # Universum + bisher gesehener Stand: kurzer Lock-Block, dann lockfrei
-    # die (langsamen) sec-api-Calls.
-    with dblock.rw_connection() as con:
-        q.apply_schema(con)
-        uni = _universe(con, args.all)
-        seen = {(rid, form): acc for rid, form, acc in con.execute(
-            "SELECT ref_instrument_id, form, last_accession "
-            "FROM ref_filing_seen").fetchall()}
-    if args.limit:
-        uni = uni[:args.limit]
-
-    n_new = n_seed = n_skip = 0
-    for rid, sym in uni:
-        for form in forms:
-            try:
-                # 8-K hat keine GuV -> Text-Summary-Pfad (find_8k_filings
-                # liefert items + text_url). 10-K/10-Q -> GuV-Diff.
-                if form == "8-K":
-                    fil = sec.find_8k_filings(sym, n=2)
-                else:
-                    fil = sec.find_filings(sym, n=2, forms=(form,))
-            except Exception:  # noqa: BLE001
-                continue
-            if not fil:
-                continue
-            latest = fil[0]
-            acc = latest.get("accession_no")
-            if seen.get((rid, form)) == acc:
-                n_skip += 1
-                continue
-            first_time = (rid, form) not in seen
-            now = datetime.now(timezone.utc)
-            with dblock.rw_connection() as con:
-                con.execute(
-                    "DELETE FROM ref_filing_seen WHERE ref_instrument_id=? "
-                    "AND form=?", [rid, form])
-                con.execute(
-                    "INSERT INTO ref_filing_seen (ref_instrument_id, form, "
-                    "last_accession, last_period, seen_at) VALUES (?,?,?,?,?)",
-                    [rid, form, acc, latest.get("period_of_report"), now])
-                if first_time and args.seed:
-                    n_seed += 1
-                elif form == "8-K":
-                    q.enqueue(con, "filing_8k", ref_instrument_id=rid,
-                              payload={"symbol": sym, "accession": acc,
-                                       "period": latest.get(
-                                           "period_of_report"),
-                                       "filed_at": latest.get("filed_at"),
-                                       "items": latest.get("items") or [],
-                                       "text_url": latest.get("text_url")},
-                              priority=80, dedupe=False)
-                    n_new += 1
-                else:
-                    prior = fil[1] if len(fil) > 1 else None
-                    q.enqueue(con, "filing_change", ref_instrument_id=rid,
-                              payload={"symbol": sym, "form": form,
-                                       "accession": acc,
-                                       "period": latest.get(
-                                           "period_of_report"),
-                                       "new_filing": latest,
-                                       "prior_filing": prior,
-                                       "prior_period": (prior or {}).get(
-                                           "period_of_report")},
-                              priority=80, dedupe=False)
-                    n_new += 1
-        if args.sleep:
-            time.sleep(args.sleep)
-    print(f"filing watcher: {n_new} Jobs, {n_seed} geseedet, {n_skip} "
-          "unveraendert.")
-    return 0
 
 
 def _has(con, name: str) -> bool:
@@ -506,23 +350,6 @@ def cmd_reset(args) -> int:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m modules.llm.jobs")
     sub = p.add_subparsers(dest="cmd", required=True)
-
-    pe = sub.add_parser("enqueue-quality",
-                        help="Q-Score-Narrativ-Jobs aus ref_quality_score")
-    pe.add_argument("--limit", type=int, default=0)
-    pe.set_defaults(func=cmd_enqueue_quality)
-
-    pf = sub.add_parser("enqueue-filings",
-                        help="neue Filings -> filing_change (K/Q) / "
-                             "filing_8k (8-K)")
-    pf.add_argument("--all", action="store_true")
-    pf.add_argument("--limit", type=int, default=0)
-    pf.add_argument("--forms", type=str, default="10-K,10-Q,8-K")
-    pf.add_argument("--seed", action="store_true",
-                    help="aktuelle Filings nur als gesehen markieren "
-                         "(Baseline, keine Jobs)")
-    pf.add_argument("--sleep", type=float, default=0.0)
-    pf.set_defaults(func=cmd_enqueue_filings)
 
     pd_ = sub.add_parser("enqueue-digest",
                          help="portfolio_digest-Jobs je offener Position")
