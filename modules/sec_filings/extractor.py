@@ -94,6 +94,8 @@ def find_filing_url(accession_no: str) -> str | None:
     Query-API-Call kostet wenig (1 API-Hit). Returns None, wenn das Filing
     nicht gefunden wird.
     """
+    if not _api_key():           # Pfad A: sec-api stillgelegt
+        return None
     payload = {
         "query": f'accessionNo:"{accession_no}"',
         "from":  "0",

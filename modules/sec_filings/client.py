@@ -111,14 +111,17 @@ class IncomeStatement:
 
 
 def _api_key() -> str:
-    key = os.environ.get("NOVA_SEC_API_KEY", "").strip()
-    if not key:
-        raise SecApiError(
-            "NOVA_SEC_API_KEY nicht gesetzt. "
-            "Key anlegen unter https://sec-api.io/signup und in ~/.nova_env "
-            "ablegen (export NOVA_SEC_API_KEY=...)."
-        )
-    return key
+    # Pfad A: kein Key -> sec-api ist stillgelegt. Wir werfen NICHT mehr,
+    # sondern liefern "" zurueck; die oeffentlichen Funktionen kurzschliessen
+    # dann auf leere Ergebnisse (kein HTTP, keine Exception). So bricht das
+    # Kuendigen des sec-api-Abos nirgends — betroffene Widgets zeigen nur
+    # "keine Daten".
+    return os.environ.get("NOVA_SEC_API_KEY", "").strip()
+
+
+def have_sec_api() -> bool:
+    """True, wenn ein sec-api-Key konfiguriert ist (sonst: sec-api stillgelegt)."""
+    return bool(_api_key())
 
 
 # ---------- Filing-Suche ----------
@@ -146,6 +149,8 @@ def find_filings(
     nicht US-gelistete Werte).
     """
     ticker = _sec_ticker(ticker)
+    if not _api_key():           # Pfad A: sec-api stillgelegt
+        return []
     form_q = " OR ".join(f'formType:"{f}"' for f in forms)
     payload = {
         "query": f"ticker:{ticker} AND ({form_q})",
@@ -191,6 +196,8 @@ def fetch_xbrl(accession_no: str) -> dict:
     ab; die aufrufenden Schleifen ueberspringen leere Filings. Andere
     HTTP-Fehler (5xx/429/Auth) werfen weiterhin.
     """
+    if not _api_key():
+        return {}
     try:
         resp = requests.get(
             XBRL_URL,
@@ -627,6 +634,8 @@ _EPS_RE = re.compile(r"\$\s?\d{1,3}(?:[.,]\d{1,2})")
 
 def _query_raw(query: str, n: int = 5) -> list[dict]:
     """Roh-Filings der Query-API (komplette Records inkl. Dokumente)."""
+    if not _api_key():
+        return []
     payload = {"query": query, "from": "0", "size": str(max(1, int(n))),
                "sort": [{"filedAt": {"order": "desc"}}]}
     try:
@@ -739,7 +748,7 @@ def fetch_exhibit_text(url: str) -> str:
     Primaerpfad: sec-api.io-Download-Proxy (authentifiziert, kein SEC-UA-
     Blocking). Fallback: direkter SEC-Abruf mit konformem User-Agent.
     """
-    if not url:
+    if not url or not _api_key():
         return ""
     url = _unwrap_ix(url)
     proxy = _to_archive_proxy(url)
@@ -1436,6 +1445,8 @@ def fetch_institutional_holdings(ticker: str, *, n: int = 50) -> dict:
     Hinweis: keine Vollaggregation aller Filer (Kosten/Pagination) — eine
     Stichprobe der zuletzt gemeldeten Positionen.
     """
+    if not _api_key():           # Pfad A: sec-api stillgelegt
+        return {"holdings": [], "error": "sec-api stillgelegt (kein Key)"}
     # Sortfeld unsicher (Endpoint kann Filings liefern); daher mehrere
     # probieren — groesste Positionen bevorzugt, filedAt als Fallback.
     auth = {"Authorization": _api_key()}
